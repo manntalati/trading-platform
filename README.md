@@ -33,6 +33,22 @@ make check           # ruff lint + format check, mypy --strict, pytest (what CI 
 make sync-research   # optional: jupyterlab, jupytext, yfinance, matplotlib, statsmodels
 ```
 
+## Market data
+
+Daily bars for the 50-symbol universe in `config/universes.toml` come from Alpaca into a local
+Parquet lake (`data/`, git-ignored), with explicit split/dividend adjustment and validation on
+every load. Details: [docs/data.md](docs/data.md).
+
+```bash
+cp .env.example .env                      # add Alpaca *paper* keys
+uv run tp-data check                      # verify keys + connectivity
+uv run tp-data bars backfill --years 5    # one-off history
+uv run tp-data bars daily                 # what the scheduler runs each weekday evening
+uv run tp-data bars backfill --source fake --years 1   # try it all without keys
+```
+
+Scheduling (systemd timers or cron) is in [infra/](infra/README.md).
+
 ## Branches
 
 Work lands on feature branches named `step<phase>/<feature>`, one feature per branch, e.g.

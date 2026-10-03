@@ -1,0 +1,26 @@
+# Symbol universes used by the ingest jobs. Alpaca symbols (class shares use a dot: BRK.B).
+#
+# Survivorship warning: these are today's large, liquid names chosen with hindsight. Backtests on
+# this list overstate what a strategy would have earned picking from the universe as it looked at
+# the time (delisted and shrunken companies are missing). Fine for learning and plumbing; not
+# fine for cross-sectional research claims.
+
+[bars]
+# 12 ETFs: broad US equity, international, bonds, real estate, commodities, gold, credit.
+# SPY/EFA/IEF/VNQ/DBC are Faber's 5-asset GTAA portfolio.
+etfs = [
+    "SPY", "QQQ", "IWM", "DIA",
+    "EFA", "EEM",
+    "IEF", "TLT", "HYG",
+    "VNQ", "DBC", "GLD",
+]
+# 38 large-cap stocks across sectors.
+stocks = [
+    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AVGO", "AMD", "INTC",
+    "ORCL", "CRM", "ADBE", "CSCO", "NFLX",
+    "BRK.B", "JPM", "BAC", "V", "MA",
+    "UNH", "LLY", "JNJ", "MRK", "ABBV",
+    "XOM", "CVX",
+    "PG", "KO", "PEP", "COST", "WMT", "HD", "MCD", "NKE", "DIS",
+    "CAT", "BA",
+]

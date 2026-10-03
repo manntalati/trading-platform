@@ -1,0 +1,11 @@
+# Alternative to the systemd timers (prefer those: DST-aware, logs in the journal, failure hook).
+#
+# Debian/Ubuntu cron has no per-job time zone, so times here are UTC and chosen to land after
+# the US close in both EST and EDT: 23:30 UTC = 18:30 EST / 19:30 EDT.
+#
+# Install: crontab -e, paste, and fix the path. Output is appended to a log file.
+
+REPO=/home/YOU/trading-platform
+
+# m  h  dom mon dow  command
+30 23 *   *   1-5    cd $REPO && .venv/bin/tp-data bars daily >> $REPO/data/logs/bars-daily.log 2>&1
