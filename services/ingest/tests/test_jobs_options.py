@@ -75,3 +75,19 @@ def test_two_runs_same_day_both_kept(lake: Lake) -> None:
     run_snapshot(lake, source, ["SPY"], now=NOW + pd.Timedelta(minutes=5), max_dte=10)
     chain = load_chain_snapshots(lake, "SPY")
     assert chain["snapshot_at"].nunique() == 2
+
+
+def test_underlying_quote_failure_still_stores_chains(
+    lake: Lake, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = FakeSource(as_of=date(2024, 7, 12))
+
+    def broken(symbols: object) -> pd.DataFrame:
+        raise ConnectionError("quotes endpoint down")
+
+    monkeypatch.setattr(source, "underlying_snapshots", broken)
+    result = run_snapshot(lake, source, ["SPY"], now=NOW, max_dte=10)
+    assert result.ok
+    chain = load_chain_snapshots(lake, "SPY")
+    assert len(chain) > 0
+    assert chain["underlying_price"].isna().all()

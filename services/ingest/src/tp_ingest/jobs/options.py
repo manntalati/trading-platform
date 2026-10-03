@@ -90,7 +90,11 @@ def run_snapshot(
         return result
 
     expiration_lte = snapshot_date + timedelta(days=max_dte)
-    spots = source.underlying_snapshots(underlyings).set_index("symbol")
+    try:
+        spots = source.underlying_snapshots(underlyings).set_index("symbol")
+    except Exception:  # chains without the underlying's quote still beat no chains at all
+        log.exception("underlying quotes failed; storing chains without them")
+        spots = pd.DataFrame(columns=["price", "bid", "ask"])
 
     for underlying in underlyings:
         snap = UnderlyingSnapshot(underlying)
