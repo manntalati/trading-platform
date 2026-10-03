@@ -50,6 +50,15 @@ uv run tp-data options snapshot           # today's option chains for the [optio
 
 Scheduling (systemd timers or cron) is in [infra/](infra/README.md).
 
+## Research and strategies
+
+Strategies live in `strategies/` with a written spec in [`docs/strategies/`](docs/strategies/)
+before any code; notebooks in [`research/`](research/README.md) run them against the lake.
+
+| # | Strategy | Spec | Status |
+|---|---|---|---|
+| 1 | 10-month MA timing (Faber) | [01-ma-timing.md](docs/strategies/01-ma-timing.md) | backtest |
+
 ## Branches
 
 Work lands on feature branches named `step<phase>/<feature>`, one feature per branch, e.g.

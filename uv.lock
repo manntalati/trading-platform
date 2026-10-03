@@ -3315,6 +3315,18 @@ requires-dist = [{ name = "tp-core", editable = "libs/core" }]
 name = "tp-strategies"
 version = "0.1.0"
 source = { editable = "strategies" }
+dependencies = [
+    { name = "numpy" },
+    { name = "pandas" },
+    { name = "tp-core" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "numpy", specifier = ">=2.0" },
+    { name = "pandas", specifier = ">=2.2" },
+    { name = "tp-core", editable = "libs/core" },
+]
 
 [[package]]
 name = "trading-platform"
