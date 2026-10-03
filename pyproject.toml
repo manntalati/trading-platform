@@ -1,0 +1,103 @@
+[project]
+name = "trading-platform"
+version = "0.1.0"
+description = "Personal trading research and execution platform (monorepo root)."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "tp-core",
+    "tp-ingest",
+    "tp-strategies",
+    "tp-research",
+]
+
+[tool.uv]
+# The root is a virtual workspace project: it only ties the members together.
+package = false
+
+[tool.uv.workspace]
+members = ["libs/*", "services/*", "strategies", "research"]
+
+[tool.uv.sources]
+tp-core = { workspace = true }
+tp-ingest = { workspace = true }
+tp-strategies = { workspace = true }
+tp-research = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.140",
+    "mypy>=1.18",
+    "pandas-stubs>=2.3",
+    "pytest>=8.4",
+    "responses>=0.25",
+    "ruff>=0.13",
+]
+# Notebook / exploration tooling. Not installed in CI: `uv sync --group research`.
+research = [
+    "jupyterlab>=4.4",
+    "jupytext>=1.17",
+    "matplotlib>=3.10",
+    "statsmodels>=0.14",
+    "yfinance>=0.2.60",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # bugbear
+    "UP",  # pyupgrade
+    "SIM", # simplify
+    "C4",  # comprehensions
+    "N",   # naming
+    "PT",  # pytest style
+    "NPY", # numpy
+    "PD",  # pandas-vet
+    "DTZ", # naive datetimes are a classic market-data bug
+    "RUF",
+]
+ignore = [
+    "PD010", # .pivot is wanted: unlike .pivot_table it raises on duplicates instead of averaging
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Notebooks are top-to-bottom scripts: late imports and bare expressions are expected.
+"research/notebooks/**" = ["E402", "B018"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["tp_core", "tp_ingest", "tp_strategies", "tp_research"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+files = [
+    "libs/core/src",
+    "services/ingest/src",
+    "strategies/src",
+    "research/src",
+]
+
+[[tool.mypy.overrides]]
+# Third-party packages that ship without type information.
+module = ["pyarrow.*", "exchange_calendars.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = [
+    "libs/core/tests",
+    "services/ingest/tests",
+    "strategies/tests",
+    "research/tests",
+]
+# importlib mode lets every package keep a plain `tests/` dir without name clashes.
+addopts = ["--import-mode=importlib", "-ra", "--strict-markers", "--strict-config"]
+xfail_strict = true
+filterwarnings = ["error"]

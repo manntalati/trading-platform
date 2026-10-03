@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+
+# Tool caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.hypothesis/
+.ipynb_checkpoints/
+
+# Secrets: never commit API keys. Use .env (git-ignored) or a secret manager.
+.env
+.env.*
+!.env.example
+
+# Local data lake and experiment tracking (kept out of git; see docs/data.md)
+data/
+mlruns/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
