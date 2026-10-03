@@ -31,6 +31,7 @@ _CA_TYPES: dict[str, str] = {
 }
 # Keep each corporate-actions request to one year so no single call gets huge.
 _CA_WINDOW = timedelta(days=365)
+_SIP_DELAY = timedelta(minutes=16)
 
 
 class AlpacaSource:
@@ -66,12 +67,18 @@ class AlpacaSource:
     # -- bars ---------------------------------------------------------------------------------
 
     def daily_bars(self, symbols: Sequence[str], start: date, end: date) -> pd.DataFrame:
+        # Daily bars are stamped at midnight New York; query the whole local days, but never
+        # closer to "now" than the free plan's 15-minute SIP delay allows (Alpaca rejects
+        # requests for recent SIP data on the Basic plan).
+        end_at = min(
+            datetime.combine(end, time.max, tzinfo=NEW_YORK),
+            datetime.now(UTC) - _SIP_DELAY,
+        )
         request = StockBarsRequest(
             symbol_or_symbols=list(symbols),
             timeframe=TimeFrame.Day,
-            # Daily bars are stamped at midnight New York; query the whole local days.
             start=datetime.combine(start, time.min, tzinfo=NEW_YORK),
-            end=datetime.combine(end, time.max, tzinfo=NEW_YORK),
+            end=end_at,
             adjustment=Adjustment.RAW,
             feed=DataFeed(self.feed),
         )

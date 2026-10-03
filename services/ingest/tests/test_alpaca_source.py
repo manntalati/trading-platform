@@ -1,7 +1,7 @@
 """Exercise the real alpaca-py code path against recorded-shape HTTP responses (no network)."""
 
 import json
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 
 import pandas as pd
@@ -59,6 +59,7 @@ def test_daily_bars_paginates_and_maps(source: AlpacaSource) -> None:
     assert query["adjustment"] == ["raw"]
     assert query["feed"] == ["sip"]
     assert query["start"][0].startswith("2024-06-03T04:00:00")  # midnight New York in UTC
+    assert query["end"][0].startswith("2024-06-05T03:59:59")  # end of the last New York day
     second = parse_qs(urlparse(responses.calls[1].request.url).query)
     assert second["page_token"] == ["page2"]
     assert responses.calls[0].request.headers["APCA-API-KEY-ID"] == "key"
@@ -145,3 +146,13 @@ def test_corporate_actions_requested_in_yearly_windows(source: AlpacaSource) -> 
         ("2022-01-02", "2022-06-30"),
     ]
     assert json.dumps(df.columns.tolist())  # schema columns present even when empty
+
+
+@responses.activate
+def test_daily_bars_end_respects_sip_delay(source: AlpacaSource) -> None:
+    responses.get(BARS_URL, json={"bars": {}, "next_page_token": None})
+    today = datetime.now(UTC).date()
+    source.daily_bars(["SPY"], today - timedelta(days=5), today + timedelta(days=1))
+    end = parse_qs(urlparse(responses.calls[0].request.url).query)["end"][0]
+    requested = datetime.fromisoformat(end.removesuffix("Z")).replace(tzinfo=UTC)
+    assert requested <= datetime.now(UTC) - timedelta(minutes=15)
