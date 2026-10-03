@@ -38,7 +38,7 @@ research = [
     "jupyterlab>=4.4",
     "jupytext>=1.17",
     "matplotlib>=3.10",
-    "statsmodels>=0.14",
+    "statsmodels>=0.15",
     "yfinance>=0.2.60",
 ]
 
@@ -87,7 +87,7 @@ files = [
 
 [[tool.mypy.overrides]]
 # Third-party packages that ship without type information.
-module = ["pyarrow.*", "exchange_calendars.*"]
+module = ["pyarrow.*", "exchange_calendars.*", "matplotlib.*", "cycler.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
