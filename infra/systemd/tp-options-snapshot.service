@@ -1,0 +1,13 @@
+# Daily option chain snapshot for the [options] universe. Exit 1 = some underlyings failed.
+[Unit]
+Description=trading-platform: option chain snapshot
+Wants=network-online.target
+After=network-online.target
+OnFailure=tp-notify-failure@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/trading-platform
+ExecStart=%h/trading-platform/.venv/bin/tp-data options snapshot
+TimeoutStartSec=30min
+Nice=10

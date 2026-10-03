@@ -45,6 +45,7 @@ uv run tp-data check                      # verify keys + connectivity
 uv run tp-data bars backfill --years 5    # one-off history
 uv run tp-data bars daily                 # what the scheduler runs each weekday evening
 uv run tp-data bars backfill --source fake --years 1   # try it all without keys
+uv run tp-data options snapshot           # today's option chains for the [options] universe
 ```
 
 Scheduling (systemd timers or cron) is in [infra/](infra/README.md).

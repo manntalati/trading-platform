@@ -1,0 +1,11 @@
+# 15:45 New York on weekdays: markets still open, so quotes are live (the free indicative feed is
+# delayed), and the job finishes before the 16:00 close. Non-session days exit early with 0.
+[Unit]
+Description=trading-platform: option chain snapshot (weekdays 15:45 ET)
+
+[Timer]
+OnCalendar=Mon..Fri 15:45 America/New_York
+Persistent=false
+
+[Install]
+WantedBy=timers.target

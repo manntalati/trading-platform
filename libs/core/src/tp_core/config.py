@@ -16,6 +16,7 @@ from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BarsFeed = Literal["sip", "iex", "delayed_sip"]
+OptionsFeed = Literal["indicative", "opra"]
 
 
 class Settings(BaseSettings):
@@ -39,6 +40,10 @@ class Settings(BaseSettings):
     # Historical SIP (all US venues) is free on Alpaca's Basic plan once it is >15 min old,
     # which is always true for completed daily bars. IEX alone is a small slice of volume.
     bars_feed: BarsFeed = Field(default="sip", validation_alias="TP_BARS_FEED")
+    # Free plan: options come from the `indicative` feed (derived, not OPRA) and real-time stock
+    # quotes from IEX only. Paid plans can switch to `opra` / `sip`.
+    options_feed: OptionsFeed = Field(default="indicative", validation_alias="TP_OPTIONS_FEED")
+    quotes_feed: BarsFeed = Field(default="iex", validation_alias="TP_QUOTES_FEED")
     universes_file: Path = Field(
         default=Path("config/universes.toml"), validation_alias="TP_UNIVERSES_FILE"
     )
@@ -61,6 +66,8 @@ class Universes:
     """Named symbol lists from ``config/universes.toml``."""
 
     bars: tuple[str, ...]
+    options_underlyings: tuple[str, ...] = ()
+    options_max_dte: int = 365
 
 
 def load_universes(path: Path) -> Universes:
@@ -71,4 +78,12 @@ def load_universes(path: Path) -> Universes:
     if len(set(bars)) != len(bars):
         dupes = sorted({s for s in bars if bars.count(s) > 1})
         raise ValueError(f"duplicate symbols in [bars] of {path}: {dupes}")
-    return Universes(bars=tuple(bars))
+    options = raw.get("options", {})
+    underlyings = list(options.get("underlyings", []))
+    if len(set(underlyings)) != len(underlyings):
+        raise ValueError(f"duplicate symbols in [options] of {path}")
+    return Universes(
+        bars=tuple(bars),
+        options_underlyings=tuple(underlyings),
+        options_max_dte=int(options.get("max_dte", 365)),
+    )

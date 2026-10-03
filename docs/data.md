@@ -11,6 +11,7 @@ uv run tp-data bars backfill --years 5     # one-off: 5y of bars + corporate act
 uv run tp-data bars daily                  # scheduled: latest sessions (+ new symbols)
 uv run tp-data bars rebuild                # re-derive clean/ from raw/ (no network)
 uv run tp-data bars backfill --source fake # the whole pipeline on synthetic data, no keys
+uv run tp-data options snapshot            # today's chains for the [options] universe
 ```
 
 ```python
@@ -28,10 +29,12 @@ data/
   raw/                                  immutable: written once per run, never modified
     alpaca/stock_bars_1d/ingest_date=YYYY-MM-DD/run-<run id>.parquet
     alpaca/corporate_actions/ingest_date=YYYY-MM-DD/run-<run id>.parquet
+    alpaca/option_chain_snapshots/snapshot_date=YYYY-MM-DD/underlying=<SYM>/run-<run id>.parquet
   clean/                                derived: rebuilt from raw/ on every run
     stock_bars_1d/symbol=<SYM>/part.parquet
     stock_bars_1d_quarantine/part.parquet
   reports/validation/stock_bars_1d-<UTC time>.json
+  reports/options_snapshot/<date>-<run id>.json
 ```
 
 - **Raw is append-only.** Each run writes new files stamped with `ingested_at` and `run_id`.
@@ -103,6 +106,32 @@ which is exactly the case the jump check exists for.
    get corrected; the next run re-fetches the last 5 sessions and supersedes the bad row.
 4. Never hand-edit files under `raw/`. If a correction is needed, fix the code (or add an
    override mechanism) and `tp-data bars rebuild`.
+
+## Option chain snapshots
+
+Free historical options chains are scarce, so we build our own: every trading day at 15:45 ET
+`tp-data options snapshot` stores the full chain (expirations up to `max_dte`, default 365 days)
+for each underlying in the `[options]` section of `config/universes.toml`.
+
+Each row is one contract at one moment (`RAW_OPTION_CHAIN_SCHEMA`): OCC symbol plus parsed
+`expiration`/`right`/`strike`/`dte`; the underlying's last trade and quote; the option's bid/ask
+and sizes, last trade, implied volatility and greeks from the chain snapshot; and open interest
+and the previous close from the contracts endpoint (both as of the prior day).
+
+```python
+from tp_core.chains import load_chain_snapshots
+
+spy = load_chain_snapshots(Lake(Path("data")), "SPY")
+```
+
+Caveats:
+
+- **Free plan = indicative feed.** Alpaca's free options data is an indicative (derived, delayed)
+  feed, not OPRA. Good for IV levels, skew and term structure; don't treat quotes as fills.
+  `TP_OPTIONS_FEED=opra` switches once on a paid plan.
+- Snapshots are stored as-is, without a clean layer yet: a crossed quote (bid > ask) is counted
+  in the job report, not removed.
+- A missed day can't be backfilled from Alpaca later; that's the point of running it daily.
 
 ## Known limitations
 

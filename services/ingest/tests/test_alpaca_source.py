@@ -156,3 +156,118 @@ def test_daily_bars_end_respects_sip_delay(source: AlpacaSource) -> None:
     end = parse_qs(urlparse(responses.calls[0].request.url).query)["end"][0]
     requested = datetime.fromisoformat(end.removesuffix("Z")).replace(tzinfo=UTC)
     assert requested <= datetime.now(UTC) - timedelta(minutes=15)
+
+
+CHAIN_URL = "https://data.alpaca.markets/v1beta1/options/snapshots/SPY"
+CONTRACTS_URL = "https://paper-api.alpaca.markets/v2/options/contracts"
+STOCK_SNAPSHOTS_URL = "https://data.alpaca.markets/v2/stocks/snapshots"
+
+
+@responses.activate
+def test_option_chain_maps_quotes_and_greeks(source: AlpacaSource) -> None:
+    responses.get(
+        CHAIN_URL,
+        json={
+            "snapshots": {
+                "SPY240719C00550000": {
+                    "latestQuote": {
+                        "ap": 6.2,
+                        "as": 10,
+                        "bp": 6.1,
+                        "bs": 5,
+                        "t": "2024-07-12T19:44:59.123456789Z",
+                    },
+                    "latestTrade": {"p": 6.15, "s": 2, "t": "2024-07-12T19:40:00Z"},
+                    "impliedVolatility": 0.12,
+                    "greeks": {
+                        "delta": 0.55,
+                        "gamma": 0.04,
+                        "rho": 0.05,
+                        "theta": -0.3,
+                        "vega": 0.2,
+                    },
+                }
+            },
+            "next_page_token": "p2",
+        },
+    )
+    responses.get(
+        CHAIN_URL,
+        json={"snapshots": {"SPY240719P00500000": {"latestQuote": {"ap": 0.05, "bp": 0.0}}}},
+    )
+
+    df = source.option_chain("SPY", expiration_lte=date(2024, 8, 1)).set_index("contract")
+
+    call = df.loc["SPY240719C00550000"]
+    assert (call["bid"], call["ask"], call["bid_size"], call["ask_size"]) == (6.1, 6.2, 5.0, 10.0)
+    assert (call["implied_volatility"], call["delta"], call["theta"]) == (0.12, 0.55, -0.3)
+    assert call["quote_at"] == pd.Timestamp("2024-07-12T19:44:59.123456789Z")
+    put = df.loc["SPY240719P00500000"]
+    assert put["bid"] == 0.0
+    assert pd.isna(put["implied_volatility"])
+    assert pd.isna(put["last_price"])
+    query = parse_qs(urlparse(responses.calls[0].request.url).query)
+    assert query["feed"] == ["indicative"]
+    assert query["expiration_date_lte"] == ["2024-08-01"]
+
+
+@responses.activate
+def test_option_contracts_paginates_manually(source: AlpacaSource) -> None:
+    def contract(symbol: str, oi: str | None) -> dict[str, object]:
+        return {
+            "id": "00000000-0000-0000-0000-000000000000",
+            "symbol": symbol,
+            "name": symbol,
+            "status": "active",
+            "tradable": True,
+            "expiration_date": "2024-07-19",
+            "root_symbol": "SPY",
+            "underlying_symbol": "SPY",
+            "underlying_asset_id": "00000000-0000-0000-0000-000000000001",
+            "type": "call",
+            "style": "american",
+            "strike_price": "550",
+            "size": "100",
+            "open_interest": oi,
+            "open_interest_date": "2024-07-11" if oi else None,
+            "close_price": "6.00",
+            "close_price_date": "2024-07-11",
+        }
+
+    responses.get(
+        CONTRACTS_URL,
+        json={
+            "option_contracts": [contract("SPY240719C00550000", "1234")],
+            "next_page_token": "n2",
+        },
+    )
+    responses.get(
+        CONTRACTS_URL,
+        json={"option_contracts": [contract("SPY240719C00555000", None)], "next_page_token": None},
+    )
+
+    df = source.option_contracts("SPY", expiration_lte=date(2024, 8, 1))
+
+    assert list(df["contract"]) == ["SPY240719C00550000", "SPY240719C00555000"]
+    assert df["open_interest"].iloc[0] == 1234.0
+    assert pd.isna(df["open_interest"].iloc[1])
+    assert df["open_interest_date"].iloc[0] == date(2024, 7, 11)
+    second = parse_qs(urlparse(responses.calls[1].request.url).query)
+    assert second["page_token"] == ["n2"]
+    assert second["underlying_symbols"] == ["SPY"]
+
+
+@responses.activate
+def test_underlying_snapshots(source: AlpacaSource) -> None:
+    responses.get(
+        STOCK_SNAPSHOTS_URL,
+        json={
+            "SPY": {
+                "latestTrade": {"p": 559.9, "t": "2024-07-12T19:44:58Z"},
+                "latestQuote": {"bp": 559.88, "ap": 559.91, "t": "2024-07-12T19:44:59Z"},
+            }
+        },
+    )
+    df = source.underlying_snapshots(["SPY"])
+    assert df.iloc[0][["symbol", "price", "bid", "ask"]].tolist() == ["SPY", 559.9, 559.88, 559.91]
+    assert parse_qs(urlparse(responses.calls[0].request.url).query)["feed"] == ["iex"]

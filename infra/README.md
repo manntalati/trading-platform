@@ -7,6 +7,7 @@ are plain CLI commands so they move into containers unchanged.
 | Unit | Schedule | Command |
 |---|---|---|
 | `tp-bars-daily` | Mon–Fri 18:30 America/New_York | `tp-data bars daily` |
+| `tp-options-snapshot` | Mon–Fri 15:45 America/New_York | `tp-data options snapshot` |
 | `tp-notify-failure@` | on failure of any unit above | journal + optional Discord webhook |
 
 ## Set up a box (Ubuntu Server)
@@ -32,7 +33,7 @@ timedatectl status                  # expect "System clock synchronized: yes"
 mkdir -p ~/.config/systemd/user
 cp infra/systemd/*.service infra/systemd/*.timer ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now tp-bars-daily.timer
+systemctl --user enable --now tp-bars-daily.timer tp-options-snapshot.timer
 sudo loginctl enable-linger "$USER"
 ```
 
@@ -49,7 +50,11 @@ systemctl --user status tp-bars-daily.service       # last exit code
 ```
 
 Exit codes: `0` ok (warnings allowed), `1` validation errors (rows quarantined; see
-[docs/data.md](../docs/data.md#when-the-daily-job-fails)), `2` configuration problem.
+[docs/data.md](../docs/data.md#when-the-daily-job-fails)) or, for the options snapshot, at least
+one underlying failed; `2` configuration problem.
+
+The options timer deliberately has `Persistent=false`: a snapshot taken hours late (e.g. at boot
+the next morning) would be stamped with the wrong day's market, so a missed day stays missed.
 
 ## Without systemd
 

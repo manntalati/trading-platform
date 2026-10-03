@@ -439,8 +439,8 @@ Each item is delivered on its own `step0/<feature>` branch (see the README).
   into Parquet — `step0/market-data-ingest` (code done; the account and keys are yours to create)
 - [x] Write the data validation checks and a daily ingest script; run it as a cron job on a Linux
   box or VM — `step0/market-data-ingest`
-- [ ] Start the daily options chain snapshot job for 20 liquid underlyings —
-  `step0/options-chain-snapshot`
+- [x] Start the daily options chain snapshot job for 20 liquid underlyings —
+  `step0/options-chain-snapshot` (25 underlyings; enable the timer to start collecting)
 - [ ] Finish Phase 0 modules 1 to 4, including the toy matching engine — `step0/matching-engine`,
   `step0/return-metrics` (notes are written by hand in `docs/phase0/`)
 - [ ] Implement strategy 1 (10-month MA timing) in a notebook and reproduce Faber's headline
