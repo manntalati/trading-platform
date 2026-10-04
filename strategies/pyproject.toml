@@ -1,0 +1,13 @@
+[project]
+name = "tp-strategies"
+version = "0.1.0"
+description = "Strategy library: published strategies implemented against tp_core data."
+requires-python = ">=3.12"
+dependencies = []
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tp_strategies"]
