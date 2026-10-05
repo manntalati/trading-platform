@@ -15,6 +15,7 @@ libs/core/         tp_core        shared library: config, data storage + validat
 services/ingest/   tp_ingest      data jobs and vendor adapters
 services/broker/   tp_broker      read-only brokerage sync (Fidelity via SnapTrade, Alpaca, demo)
 services/api/      tp_api         dashboard API: REST + live WebSocket
+apps/dashboard/                   dashboard web app (React + TypeScript + Vite)
 strategies/        tp_strategies  strategy library
 research/          tp_research    Phase 0 exercises; notebooks/ holds jupytext .py notebooks
 infra/                            deployment (systemd/cron now; Docker, k3s, Terraform later)
@@ -73,8 +74,11 @@ A FastAPI service with live prices over WebSocket, serving a React dashboard: po
 benchmarks, ideas, strategies, options and system health. Details: [docs/dashboard.md](docs/dashboard.md).
 
 ```bash
+make web-install web-build                # once: build the UI (needs Node 22+)
 uv run tp-api --quotes fake               # http://127.0.0.1:8000 (API docs at /docs)
 ```
+
+UI development (hot reload): [apps/dashboard/README.md](apps/dashboard/README.md).
 
 ## Research and strategies
 
