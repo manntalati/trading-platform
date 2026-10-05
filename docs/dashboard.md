@@ -15,13 +15,22 @@ A web dashboard over everything the platform collects, live while the market is 
 ## Run it
 
 ```bash
-uv run tp-api --quotes fake          # API on http://127.0.0.1:8000 with simulated live prices
+make web-install web-build           # once, and after UI changes: bundle apps/dashboard (Node 22+)
+uv run tp-api --quotes fake          # http://127.0.0.1:8000 with simulated live prices
 uv run tp-api --quotes alpaca        # real-time IEX trades from Alpaca (needs ALPACA_* keys)
 ```
 
-The React app lives in `apps/dashboard` (see its README). `tp-api` serves its production build at
-`/` once `npm run build` has been run; during development, `npm run dev` proxies `/api` and `/ws`
-to `tp-api`.
+`tp-api` serves the built app at `/`. For UI work, `npm run dev` in `apps/dashboard` gives hot
+reload on http://localhost:5173 and proxies `/api` and `/ws` to `tp-api`
+([apps/dashboard/README.md](../apps/dashboard/README.md)).
+
+A complete demo with synthetic data needs no keys:
+
+```bash
+uv run tp-data bars backfill --source fake
+uv run tp-data options snapshot --source fake
+uv run tp-broker sync --source fake
+```
 
 On the Linux box, `infra/systemd/tp-api.service` keeps it running (user unit, `Restart=on-failure`).
 
