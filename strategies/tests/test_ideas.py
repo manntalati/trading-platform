@@ -157,3 +157,26 @@ def test_empty_portfolio_still_gets_candidates(prices: pd.DataFrame) -> None:
 def test_limits_are_configurable(prices: pd.DataFrame, holdings: pd.DataFrame) -> None:
     report = generate_ideas(holdings, prices, CLASSIFIER, limits=Limits(max_position=0.7))
     assert not any(t.startswith("BIG is") for t in titles(report, "portfolio"))
+
+
+def test_options_premium_cap() -> None:
+    idx = pd.bdate_range("2026-01-02", periods=300)
+    prices = pd.DataFrame({"SPY": np.linspace(100, 120, len(idx))}, index=idx)  # ends 2027-02-25
+    holdings = table(
+        [
+            ("SPY", "etf", 10, 8_000),
+            ("XYZ270319C00050000", "option", 2, 1_200),  # expires in ~3 weeks
+            ("ABC280121C00010000", "option", 1, 800),
+        ]
+    )
+    report = generate_ideas(holdings, prices, CLASSIFIER)
+    idea = next(i for i in report.ideas if i.title == "Options are 20% of the portfolio")
+    assert idea.severity == "attention"
+    assert idea.symbols == ["ABC", "XYZ"]
+    assert any("XYZ 50C 2027-03-19" in r for r in idea.rationale)
+    assert not any("ABC 10C" in r for r in idea.rationale)
+
+    small = table([("SPY", "etf", 10, 9_700), ("ABC280121C00010000", "option", 1, 300)])
+    assert not any(
+        i.title.startswith("Options are") for i in generate_ideas(small, prices, CLASSIFIER).ideas
+    )

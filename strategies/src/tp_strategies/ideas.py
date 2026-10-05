@@ -16,6 +16,8 @@ Portfolio
 - **Position over cap**: any single stock above 10% of the portfolio (the plan's risk limit;
   diversified funds are exempt).
 - **Sector over cap**: any sector above 30%.
+- **Options premium over cap**: long options worth more than 5% of the portfolio (the plan's
+  options-premium-at-risk limit), with contracts expiring within 60 days called out.
 - **Narrow asset mix**: more than 80% in US equity, nothing in bonds or international.
 - **High beta**: current holdings move more than 1.2x the S&P 500.
 - **Analytics coverage**: share of the portfolio we cannot price (mutual funds, options).
@@ -34,13 +36,14 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass, field
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any, Literal
 
 import pandas as pd
 
 from tp_core import metrics
 from tp_core.bars import close_matrix, load_bars
+from tp_core.occ import parse_occ
 from tp_core.portfolio import (
     CASH_KIND,
     Classifier,
@@ -69,6 +72,8 @@ class Limits:
     max_position: float = 0.10
     max_sector: float = 0.30
     max_us_equity: float = 0.80
+    max_options_premium: float = 0.05
+    option_expiry_warning_days: int = 60
     high_beta: float = 1.2
     deep_drawdown: float = 0.25
     overlay_min_dd_improvement: float = 0.05  # 5 percentage points of max drawdown
@@ -251,6 +256,7 @@ def _holding_ideas(table: pd.DataFrame, signals: pd.DataFrame, limits: Limits) -
 
 def _portfolio_ideas(table: pd.DataFrame, prices: pd.DataFrame, limits: Limits) -> list[Idea]:
     ideas: list[Idea] = []
+    as_of = prices.index[-1].date() if len(prices) else datetime.now(UTC).date()
     risky = table[table["kind"] != CASH_KIND]
     # The cap is about single-company risk: diversified funds (an S&P 500 index fund) are exempt.
     single_names = risky[risky["kind"].isin(SINGLE_NAME_KINDS)]
@@ -270,6 +276,7 @@ def _portfolio_ideas(table: pd.DataFrame, prices: pd.DataFrame, limits: Limits) 
                 metrics={"weight": float(row["weight"])},
             )
         )
+    ideas += _options_ideas(table, limits, as_of)
     sectors = risky.groupby("sector")["weight"].sum()
     for sector, weight in sectors[sectors > limits.max_sector].items():
         names = risky[risky["sector"] == sector].sort_values("weight", ascending=False)
@@ -351,6 +358,54 @@ def _portfolio_ideas(table: pd.DataFrame, prices: pd.DataFrame, limits: Limits) 
                 )
             )
     return ideas
+
+
+def _options_ideas(table: pd.DataFrame, limits: Limits, as_of: date) -> list[Idea]:
+    options = table[table["kind"] == "option"]
+    premium = float(options["weight"].sum())
+    if options.empty or premium <= limits.max_options_premium:
+        return []
+    contracts = []
+    for symbol, weight in zip(options["symbol"], options["weight"], strict=True):
+        try:
+            occ = parse_occ(str(symbol))
+        except ValueError:
+            continue
+        contracts.append((occ, float(weight)))
+    by_underlying: dict[str, float] = {}
+    for occ, weight in contracts:
+        by_underlying[occ.root] = by_underlying.get(occ.root, 0.0) + weight
+    horizon = limits.option_expiry_warning_days
+    soon = sorted(
+        (occ for occ, _ in contracts if (occ.expiration - as_of).days <= horizon),
+        key=lambda o: o.expiration,
+    )
+    largest = sorted(by_underlying.items(), key=lambda x: -x[1])[:5]
+    rationale = [
+        f"{len(options)} contract line(s); largest: "
+        + ", ".join(f"{u} {w:.1%}" for u, w in largest)
+    ]
+    if soon:
+        rationale.append(
+            "Expiring within "
+            f"{limits.option_expiry_warning_days} days: "
+            + ", ".join(f"{o.root} {o.strike:g}{o.right} {o.expiration}" for o in soon[:5])
+        )
+    return [
+        Idea(
+            kind="portfolio",
+            severity="attention",
+            title=f"Options are {premium:.0%} of the portfolio",
+            summary=(
+                f"Above the {limits.max_options_premium:.0%} options-premium cap in the risk plan. "
+                "Long options can expire worthless, so this is money that can go to zero."
+            ),
+            rationale=rationale,
+            symbols=sorted(by_underlying),
+            score=premium,
+            metrics={"options_weight": premium, "expiring_soon": float(len(soon))},
+        )
+    ]
 
 
 def _strategy_ideas(table: pd.DataFrame, prices: pd.DataFrame, limits: Limits) -> list[Idea]:

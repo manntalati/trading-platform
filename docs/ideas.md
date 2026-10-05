@@ -22,6 +22,7 @@ uv run tp-ideas --kind candidate  # holding | portfolio | strategy | candidate
 | holding | 100+ shares of an optionable name (covered-call eligible) | info |
 | portfolio | A single stock above 10% of the portfolio (funds exempt) | attention |
 | portfolio | A sector above 30% | consider |
+| portfolio | Long options above 5% of the portfolio (the plan's options-premium cap); contracts expiring within 60 days listed | attention |
 | portfolio | More than 80% US equity with no bonds, international or real assets | consider |
 | portfolio | Beta to the S&P 500 above 1.2 over the last year | consider |
 | portfolio | More than 5% of the portfolio not priceable (mutual funds, options) | info |
