@@ -51,6 +51,10 @@ class Settings(BaseSettings):
         default=Path("config/classifications.toml"), validation_alias="TP_CLASSIFICATIONS_FILE"
     )
 
+    # If set, the dashboard API requires it (Authorization: Bearer <token>; ?token= on the
+    # WebSocket). The API binds to localhost by default; set this before exposing it anywhere.
+    dashboard_token: SecretStr | None = Field(default=None, validation_alias="TP_DASHBOARD_TOKEN")
+
     # SnapTrade personal API key (read-only link to Fidelity): https://dashboard.snaptrade.com
     snaptrade_client_id: str | None = Field(default=None, validation_alias="SNAPTRADE_CLIENT_ID")
     snaptrade_consumer_key: SecretStr | None = Field(
@@ -85,6 +89,7 @@ class Universes:
     bars: tuple[str, ...]
     options_underlyings: tuple[str, ...] = ()
     options_max_dte: int = 365
+    watchlist: tuple[str, ...] = ()
 
 
 def load_universes(path: Path) -> Universes:
@@ -103,4 +108,5 @@ def load_universes(path: Path) -> Universes:
         bars=tuple(bars),
         options_underlyings=tuple(underlyings),
         options_max_dte=int(options.get("max_dte", 365)),
+        watchlist=tuple(raw.get("dashboard", {}).get("watchlist", [])),
     )

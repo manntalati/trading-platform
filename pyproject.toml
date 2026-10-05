@@ -5,6 +5,7 @@ description = "Personal trading research and execution platform (monorepo root).
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "tp-api",
     "tp-broker",
     "tp-core",
     "tp-ingest",
@@ -20,6 +21,7 @@ package = false
 members = ["libs/*", "services/*", "strategies", "research"]
 
 [tool.uv.sources]
+tp-api = { workspace = true }
 tp-broker = { workspace = true }
 tp-core = { workspace = true }
 tp-ingest = { workspace = true }
@@ -28,6 +30,7 @@ tp-research = { workspace = true }
 
 [dependency-groups]
 dev = [
+    "httpx2>=0.1",
     "hypothesis>=6.140",
     "mypy>=1.18",
     "pandas-stubs>=2.3",
@@ -74,7 +77,7 @@ ignore = [
 "research/notebooks/**" = ["E402", "B018"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["tp_broker", "tp_core", "tp_ingest", "tp_strategies", "tp_research"]
+known-first-party = ["tp_api", "tp_broker", "tp_core", "tp_ingest", "tp_strategies", "tp_research"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -84,6 +87,7 @@ files = [
     "libs/core/src",
     "services/ingest/src",
     "services/broker/src",
+    "services/api/src",
     "strategies/src",
     "research/src",
 ]
@@ -98,6 +102,7 @@ testpaths = [
     "libs/core/tests",
     "services/ingest/tests",
     "services/broker/tests",
+    "services/api/tests",
     "strategies/tests",
     "research/tests",
 ]

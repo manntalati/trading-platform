@@ -1,0 +1,16 @@
+# Dashboard API + UI, always on. Binds to localhost: reach it through an SSH tunnel
+# (ssh -L 8000:localhost:8000 box) or a private network like Tailscale. Set TP_DASHBOARD_TOKEN in
+# .env before binding to anything else; the dashboard shows your brokerage holdings.
+[Unit]
+Description=trading-platform: dashboard API
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/trading-platform
+ExecStart=%h/trading-platform/.venv/bin/tp-api --host 127.0.0.1 --port 8000 --quotes alpaca
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
