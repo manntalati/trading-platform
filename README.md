@@ -14,6 +14,7 @@ live outside strategy code; backtests are hypotheses, not evidence.
 libs/core/         tp_core        shared library: config, data storage + validation, metrics, portfolio
 services/ingest/   tp_ingest      data jobs and vendor adapters
 services/broker/   tp_broker      read-only brokerage sync (Fidelity via SnapTrade, Alpaca, demo)
+services/api/      tp_api         dashboard API: REST + live WebSocket
 strategies/        tp_strategies  strategy library
 research/          tp_research    Phase 0 exercises; notebooks/ holds jupytext .py notebooks
 infra/                            deployment (systemd/cron now; Docker, k3s, Terraform later)
@@ -65,6 +66,15 @@ uv run tp-ideas                           # rules-based research ideas, with the
 ```
 
 How the ideas are generated: [docs/ideas.md](docs/ideas.md).
+
+## Dashboard
+
+A FastAPI service with live prices over WebSocket, serving a React dashboard: portfolio vs
+benchmarks, ideas, strategies, options and system health. Details: [docs/dashboard.md](docs/dashboard.md).
+
+```bash
+uv run tp-api --quotes fake               # http://127.0.0.1:8000 (API docs at /docs)
+```
 
 ## Research and strategies
 

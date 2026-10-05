@@ -35,3 +35,8 @@ underlyings = [
 ]
 # Expirations further out than this are skipped (bounds file size; LEAPS rarely matter here).
 max_dte = 365
+
+[dashboard]
+# Always streamed live on the dashboard, alongside your market-priced holdings. Alpaca's free
+# IEX stream allows 30 symbols in total.
+watchlist = ["SPY", "QQQ", "IWM", "TLT", "GLD"]
