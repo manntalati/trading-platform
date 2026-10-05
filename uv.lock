@@ -3931,6 +3931,7 @@ dependencies = [
     { name = "numpy" },
     { name = "pandas" },
     { name = "tp-core" },
+    { name = "typer" },
 ]
 
 [package.metadata]
@@ -3938,6 +3939,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.0" },
     { name = "pandas", specifier = ">=2.2" },
     { name = "tp-core", editable = "libs/core" },
+    { name = "typer", specifier = ">=0.12" },
 ]
 
 [[package]]

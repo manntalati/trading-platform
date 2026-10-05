@@ -61,7 +61,10 @@ uv run tp-broker link                     # one-time: connect Fidelity (read-onl
 uv run tp-broker sync                     # snapshot holdings + transactions
 uv run tp-broker show                     # print the latest portfolio
 uv run tp-broker sync --source fake       # demo portfolio, no keys needed
+uv run tp-ideas                           # rules-based research ideas, with the numbers behind each
 ```
+
+How the ideas are generated: [docs/ideas.md](docs/ideas.md).
 
 ## Research and strategies
 

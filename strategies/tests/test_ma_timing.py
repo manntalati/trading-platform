@@ -133,3 +133,16 @@ def test_equal_weight_benchmark_single_asset_is_buy_and_hold() -> None:
     asset = prices.pct_change().loc[bench.returns.index[1:]]
     np.testing.assert_allclose(bench.returns.iloc[1:], asset)
     assert bench.exposure.min() == 1.0
+
+
+def test_fixed_weights_overlay() -> None:
+    a = monthly_steps(LEVELS)
+    b = monthly_steps([10.0] * 13).rename("B")  # never invested
+    weights = pd.Series({"A": 0.7, "B": 0.2})
+    timing = ma_timing(pd.concat([a, b], axis=1), cost_bps=0, weights=weights)
+    entry = DAYS[DAYS.get_loc(month_end(11)) + 1]
+    assert timing.weights.loc[entry, ["A", "B", CASH]].tolist() == pytest.approx([0.7, 0.0, 0.3])
+    bench = equal_weight_monthly(pd.concat([a, b], axis=1), cost_bps=0, weights=weights)
+    assert bench.weights.iloc[0][["A", "B", CASH]].tolist() == pytest.approx([0.7, 0.2, 0.1])
+    with pytest.raises(ValueError, match="sum to at most 1"):
+        ma_timing(pd.concat([a, b], axis=1), weights=pd.Series({"A": 0.9, "B": 0.2}))

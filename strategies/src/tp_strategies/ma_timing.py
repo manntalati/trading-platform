@@ -92,16 +92,19 @@ def ma_timing(
     lag_days: int = 1,
     cost_bps: float = 5.0,
     cash_returns: pd.Series | None = None,
+    weights: pd.Series | None = None,
 ) -> BacktestResult:
     """Backtest MA timing on daily (adjusted) closes; one column per asset.
 
     ``cost_bps`` is charged on traded notional (each 100% of the portfolio bought or sold costs
     ``cost_bps`` basis points; it approximates half-spread plus impact for liquid ETFs).
     ``cash_returns`` are daily returns earned on the uninvested part (e.g. T-bills); 0 if omitted.
+    ``weights`` gives each asset a fixed slice instead of ``1/N`` (e.g. an existing portfolio's
+    weights, to test timing as an overlay); an asset that is out leaves its slice in cash.
     """
     signals = ma_signals(prices, months)
     warm = signals.index[months - 1 :] if len(signals) >= months else signals.index[:0]
-    targets = _equal_weight_targets(signals.loc[warm], invested=signals.loc[warm])
+    targets = _targets(signals.loc[warm], invested=signals.loc[warm], weights=weights)
     return _simulate(prices, targets, signals, lag_days, cost_bps, cash_returns)
 
 
@@ -111,23 +114,34 @@ def equal_weight_monthly(
     start_after: pd.Timestamp | None = None,
     lag_days: int = 1,
     cost_bps: float = 5.0,
+    weights: pd.Series | None = None,
 ) -> BacktestResult:
-    """Benchmark: always invested, equal weights, rebalanced at month ends (buy and hold for a
-    single asset). ``start_after`` aligns the first rebalance with a strategy's first signal."""
+    """Benchmark: always invested, equal (or fixed ``weights``) slices, rebalanced at month ends
+    (buy and hold for a single asset). ``start_after`` aligns the first rebalance with a
+    strategy's first signal."""
     month_end = month_end_closes(prices)
     if start_after is not None:
         month_end = month_end[month_end.index >= start_after]
     invested = month_end.notna()
-    targets = _equal_weight_targets(month_end, invested=invested)
+    targets = _targets(month_end, invested=invested, weights=weights)
     return _simulate(prices, targets, invested, lag_days, cost_bps, None)
 
 
-def _equal_weight_targets(month_end: pd.DataFrame, *, invested: pd.DataFrame) -> pd.DataFrame:
-    """Target weights at each signal date: 1/N per invested asset, N = assets with data."""
-    available = month_end.notna().sum(axis=1).replace(0, np.nan)
-    weights = invested.astype(float).div(available, axis=0).fillna(0.0)
-    weights[CASH] = (1.0 - weights.sum(axis=1)).clip(lower=0.0)  # no -2e-16 cash from rounding
-    return weights
+def _targets(
+    month_end: pd.DataFrame, *, invested: pd.DataFrame, weights: pd.Series | None
+) -> pd.DataFrame:
+    """Target weights at each signal date: ``weights`` (or 1/N over assets with data) for each
+    invested asset, the rest in cash."""
+    if weights is None:
+        available = month_end.notna().sum(axis=1).replace(0, np.nan)
+        targets = invested.astype(float).div(available, axis=0).fillna(0.0)
+    else:
+        fixed = weights.reindex(month_end.columns).fillna(0.0)
+        if fixed.sum() > 1.0 + 1e-9 or (fixed < 0).any():
+            raise ValueError("weights must be non-negative and sum to at most 1")
+        targets = invested.astype(float).mul(fixed, axis=1)
+    targets[CASH] = (1.0 - targets.sum(axis=1)).clip(lower=0.0)  # no -2e-16 cash from rounding
+    return targets
 
 
 def _simulate(
