@@ -14,6 +14,7 @@ RAW_STOCK_BARS_1D = "alpaca/stock_bars_1d"
 RAW_CORPORATE_ACTIONS = "alpaca/corporate_actions"
 CLEAN_STOCK_BARS_1D = "stock_bars_1d"
 QUARANTINE_STOCK_BARS_1D = "stock_bars_1d_quarantine"
+RAW_OPTION_CHAIN_SNAPSHOTS = "alpaca/option_chain_snapshots"
 
 _TS = pa.timestamp("ns", tz="UTC")
 
@@ -78,6 +79,46 @@ CLEAN_BARS_SCHEMA = pa.schema(
         ("adj_low", pa.float64()),
         ("adj_close", pa.float64()),
         ("adj_volume", pa.float64()),
+        ("feed", pa.string()),
+        ("ingested_at", _TS),
+        ("run_id", pa.string()),
+    ]
+)
+
+
+# One row per option contract per snapshot. Quote/trade/greeks come from the chain snapshot;
+# open interest and the previous close from the contracts endpoint (both as of the prior day).
+RAW_OPTION_CHAIN_SCHEMA = pa.schema(
+    [
+        ("snapshot_at", _TS),
+        ("underlying", pa.string()),
+        ("contract", pa.string()),  # OCC symbol
+        ("expiration", pa.date32()),
+        ("right", pa.string()),  # "C" or "P"
+        ("strike", pa.float64()),
+        ("dte", pa.int32()),  # calendar days from snapshot date to expiration
+        ("underlying_price", pa.float64()),  # last trade
+        ("underlying_bid", pa.float64()),
+        ("underlying_ask", pa.float64()),
+        ("bid", pa.float64()),
+        ("ask", pa.float64()),
+        ("bid_size", pa.float64()),
+        ("ask_size", pa.float64()),
+        ("quote_at", _TS),
+        ("last_price", pa.float64()),
+        ("last_size", pa.float64()),
+        ("trade_at", _TS),
+        ("implied_volatility", pa.float64()),
+        ("delta", pa.float64()),
+        ("gamma", pa.float64()),
+        ("theta", pa.float64()),
+        ("vega", pa.float64()),
+        ("rho", pa.float64()),
+        ("open_interest", pa.float64()),
+        ("open_interest_date", pa.date32()),
+        ("close_price", pa.float64()),
+        ("close_price_date", pa.date32()),
+        ("style", pa.string()),  # american / european
         ("feed", pa.string()),
         ("ingested_at", _TS),
         ("run_id", pa.string()),

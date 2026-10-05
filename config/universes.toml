@@ -24,3 +24,14 @@ stocks = [
     "PG", "KO", "PEP", "COST", "WMT", "HD", "MCD", "NKE", "DIS",
     "CAT", "BA",
 ]
+
+[options]
+# Daily chain snapshots: build our own options history from day one. Liquid, tight markets,
+# mix of index ETFs, mega caps, and a few vol/sector names.
+underlyings = [
+    "SPY", "QQQ", "IWM", "DIA", "TLT", "GLD", "EEM", "XLF", "XLE", "SMH",
+    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AMD", "AVGO", "NFLX",
+    "JPM", "BAC", "XOM", "COIN", "UBER",
+]
+# Expirations further out than this are skipped (bounds file size; LEAPS rarely matter here).
+max_dte = 365

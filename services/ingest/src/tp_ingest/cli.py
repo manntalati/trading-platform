@@ -22,13 +22,16 @@ from tp_core.config import MissingCredentialsError, Settings, load_universes
 from tp_core.storage import Lake
 from tp_core.validate import ValidationReport
 from tp_ingest.jobs import bars as bars_jobs
-from tp_ingest.sources.base import MarketDataSource
+from tp_ingest.jobs import options as options_jobs
+from tp_ingest.sources.base import FullSource
 
 log = logging.getLogger("tp_ingest")
 
 app = typer.Typer(help="Market data ingest jobs.", no_args_is_help=True, add_completion=False)
 bars_app = typer.Typer(help="Daily stock/ETF bars.", no_args_is_help=True)
 app.add_typer(bars_app, name="bars")
+options_app = typer.Typer(help="Option chain snapshots.", no_args_is_help=True)
+app.add_typer(options_app, name="options")
 
 
 class SourceName(StrEnum):
@@ -51,7 +54,7 @@ def now_utc() -> datetime:
     return datetime.now(UTC)
 
 
-def make_source(name: SourceName, settings: Settings) -> MarketDataSource:
+def make_source(name: SourceName, settings: Settings) -> FullSource:
     if name is SourceName.fake:
         from tp_ingest.sources.fake import FakeSource
 
@@ -154,6 +157,42 @@ def bars_daily(symbols: SymbolsOpt = None, source: SourceOpt = SourceName.alpaca
     )
     typer.echo(f"run {result.run_id}: {result.bars_fetched} bars {result.start}..{result.end}")
     _finish(result.report)
+
+
+@options_app.command("snapshot")
+def options_snapshot(
+    underlyings: Annotated[
+        str | None,
+        typer.Option(help="Comma-separated underlyings. Defaults to the [options] universe."),
+    ] = None,
+    max_dte: Annotated[
+        int | None, typer.Option(min=0, help="Skip expirations further out than this.")
+    ] = None,
+    source: SourceOpt = SourceName.alpaca,
+) -> None:
+    """Store today's full chain (quotes, IV, greeks, open interest) for each underlying."""
+    settings = Settings()
+    try:
+        universes = load_universes(settings.universes_file)
+    except (OSError, ValueError) as exc:
+        _config_error(exc)
+    symbols = (
+        [s.strip().upper() for s in underlyings.split(",") if s.strip()]
+        if underlyings
+        else list(universes.options_underlyings)
+    )
+    result = options_jobs.run_snapshot(
+        Lake(settings.data_root),
+        make_source(source, settings),
+        symbols,
+        now=now_utc(),
+        max_dte=universes.options_max_dte if max_dte is None else max_dte,
+    )
+    typer.echo(result.summary())
+    for failure in result.failures:
+        typer.echo(f"  FAILED {failure.underlying}: {failure.error}")
+    if not result.ok:
+        raise typer.Exit(code=1)
 
 
 @bars_app.command("rebuild")

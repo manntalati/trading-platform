@@ -73,3 +73,27 @@ def test_check_with_fake_source() -> None:
     result = runner.invoke(cli.app, ["check", "--source", "fake"])
     assert result.exit_code == 0
     assert "no network" in result.output
+
+
+def test_options_snapshot_with_fake_source(env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (env / "universes.toml").write_text(
+        '[bars]\netfs = ["SPY"]\n[options]\nunderlyings = ["SPY", "QQQ"]\nmax_dte = 30\n'
+    )
+    monkeypatch.setattr(cli, "now_utc", lambda: datetime(2024, 7, 12, 19, 45, tzinfo=UTC))
+    result = runner.invoke(cli.app, ["options", "snapshot", "--source", "fake"])
+    assert result.exit_code == 0, result.output
+    assert "2/2 underlyings stored" in result.output
+    stored = sorted(p.name for p in (env / "lake/raw/alpaca/option_chain_snapshots").glob("*/*"))
+    assert stored == ["underlying=QQQ", "underlying=SPY"]
+
+
+def test_options_snapshot_failure_exit_1(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "now_utc", lambda: datetime(2024, 7, 12, 19, 45, tzinfo=UTC))
+
+    def make_source(name: cli.SourceName, settings: Settings) -> FakeSource:
+        return FakeSource(failing_underlyings=frozenset({"SPY"}))
+
+    monkeypatch.setattr(cli, "make_source", make_source)
+    result = runner.invoke(cli.app, ["options", "snapshot", "--underlyings", "spy,qqq"])
+    assert result.exit_code == 1
+    assert "FAILED SPY" in result.output

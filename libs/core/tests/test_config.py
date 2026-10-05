@@ -33,6 +33,12 @@ def test_repo_universe_has_50_unique_symbols() -> None:
     assert {"SPY", "EFA", "IEF", "VNQ", "DBC"} <= set(universes.bars)
 
 
+def test_repo_universe_has_options_underlyings() -> None:
+    universes = load_universes(REPO_ROOT / "config" / "universes.toml")
+    assert 20 <= len(universes.options_underlyings) <= 30
+    assert universes.options_max_dte == 365
+
+
 def test_duplicate_symbols_rejected(tmp_path: Path) -> None:
     path = tmp_path / "u.toml"
     path.write_text('[bars]\netfs = ["SPY"]\nstocks = ["SPY"]\n')
