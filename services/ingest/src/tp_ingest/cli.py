@@ -19,6 +19,7 @@ from typing import Annotated, NoReturn
 import typer
 
 from tp_core.config import MissingCredentialsError, Settings, load_universes
+from tp_core.portfolio import held_symbols
 from tp_core.storage import Lake
 from tp_core.validate import ValidationReport
 from tp_ingest.jobs import bars as bars_jobs
@@ -82,12 +83,18 @@ def _setup_logging(verbose: bool) -> None:
 
 
 def _symbols(settings: Settings, symbols: str | None) -> list[str]:
+    """Explicit ``--symbols``, else the [bars] universe plus everything in the synced portfolio
+    (so holdings outside the universe get price history for the portfolio analytics)."""
     if symbols:
         return [s.strip().upper() for s in symbols.split(",") if s.strip()]
     try:
-        return list(load_universes(settings.universes_file).bars)
+        universe = list(load_universes(settings.universes_file).bars)
     except (OSError, ValueError) as exc:
         _config_error(exc)
+    extra = [s for s in held_symbols(Lake(settings.data_root)) if s not in universe]
+    if extra:
+        log.info("adding %d portfolio holding(s) to the bars universe: %s", len(extra), extra)
+    return universe + extra
 
 
 def _finish(report: ValidationReport) -> None:

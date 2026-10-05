@@ -1,0 +1,14 @@
+# Read-only portfolio sync (Fidelity via SnapTrade by default). Runs before the bars job so new
+# holdings get price history the same evening.
+[Unit]
+Description=trading-platform: brokerage portfolio sync
+Wants=network-online.target
+After=network-online.target
+OnFailure=tp-notify-failure@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/trading-platform
+ExecStart=%h/trading-platform/.venv/bin/tp-broker sync --source snaptrade
+TimeoutStartSec=10min
+Nice=10

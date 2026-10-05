@@ -97,3 +97,18 @@ def test_options_snapshot_failure_exit_1(monkeypatch: pytest.MonkeyPatch) -> Non
     result = runner.invoke(cli.app, ["options", "snapshot", "--underlyings", "spy,qqq"])
     assert result.exit_code == 1
     assert "FAILED SPY" in result.output
+
+
+def test_daily_adds_portfolio_holdings_to_universe(env: Path) -> None:
+    from tp_broker.fake import FakeBroker
+    from tp_broker.jobs import run_sync
+    from tp_core.storage import Lake
+
+    run_sync(Lake(env / "lake"), FakeBroker(as_of=NOW.date()), now=NOW)
+    result = runner.invoke(cli.app, ["bars", "backfill", "--source", "fake", "--years", "1"])
+    assert result.exit_code == 0, result.output
+    names = {p.name for p in (env / "lake/clean/stock_bars_1d").iterdir()}
+    # Universe (SPY, AAPL) plus the demo portfolio's market-priced holdings; never mutual funds.
+    assert {"symbol=SPY", "symbol=AAPL", "symbol=NVDA", "symbol=XOM", "symbol=QQQ"} <= names
+    assert "symbol=FXAIX" not in names
+    assert "symbol=SPAXX" not in names

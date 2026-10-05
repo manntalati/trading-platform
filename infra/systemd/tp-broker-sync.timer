@@ -1,0 +1,10 @@
+# 17:45 New York on weekdays, ahead of tp-bars-daily at 18:30.
+[Unit]
+Description=trading-platform: brokerage portfolio sync (weekdays 17:45 ET)
+
+[Timer]
+OnCalendar=Mon..Fri 17:45 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target
