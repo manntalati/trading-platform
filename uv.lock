@@ -3304,6 +3304,12 @@ requires-dist = [
 name = "tp-research"
 version = "0.1.0"
 source = { editable = "research" }
+dependencies = [
+    { name = "tp-core" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "tp-core", editable = "libs/core" }]
 
 [[package]]
 name = "tp-strategies"
@@ -3359,7 +3365,7 @@ research = [
     { name = "jupyterlab", specifier = ">=4.4" },
     { name = "jupytext", specifier = ">=1.17" },
     { name = "matplotlib", specifier = ">=3.10" },
-    { name = "statsmodels", specifier = ">=0.14" },
+    { name = "statsmodels", specifier = ">=0.15" },
     { name = "yfinance", specifier = ">=0.2.60" },
 ]
 
