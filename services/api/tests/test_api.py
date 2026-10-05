@@ -90,6 +90,7 @@ def test_options_summary(client: TestClient) -> None:
     assert first["atm_iv"] > 0
     assert first["expected_move"] > 0
     assert {p["right"] for p in body["smile"]} == {"C", "P"}
+    assert all((p["strike"] >= body["spot"]) == (p["right"] == "C") for p in body["smile"])
     assert client.get("/api/options/QQQ").json()["term"] == []
 
 
@@ -132,6 +133,8 @@ def test_ma_timing(client: TestClient, universe: str) -> None:
     assert body["available"] is True
     assert set(body["stats"]) >= {"10-month MA timing", "Buy and hold"}
     assert body["growth"]
+    for t in body["trades"]:  # entries and exits, not drift rebalances
+        assert min(t["weight_before"], t["weight_after"]) == 0
 
 
 def test_ma_timing_rejects_unknown_universe(client: TestClient) -> None:

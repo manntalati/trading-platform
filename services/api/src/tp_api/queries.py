@@ -34,6 +34,7 @@ from tp_strategies.ideas import ideas_from_lake
 from tp_strategies.ma_timing import equal_weight_monthly, ma_timing
 
 GTAA = ["SPY", "EFA", "IEF", "VNQ", "DBC"]
+WEIGHT_EPS = 1e-9
 
 
 # -- JSON helpers -------------------------------------------------------------------------------
@@ -207,11 +208,13 @@ def option_summary(ctx: Context, underlying: str) -> dict[str, Any]:
         )
     monthly = [t for t in term if t["dte"] >= 20] or term
     smile: list[dict[str, Any]] = []
-    if monthly:
+    if monthly and not math.isnan(spot):
         target = date.fromisoformat(monthly[0]["expiration"])
         g = latest[latest["expiration"] == target]
+        # out-of-the-money side only: the liquid quotes, and the usual way a smile is drawn
+        otm = {"C": g["strike"] >= spot, "P": g["strike"] < spot}
         for right in ("C", "P"):
-            side = g[(g["right"] == right) & g["implied_volatility"].notna()]
+            side = g[(g["right"] == right) & otm[right] & g["implied_volatility"].notna()]
             smile += [
                 {"strike": float(k), "iv": clean(float(v)), "right": right}
                 for k, v in zip(side["strike"], side["implied_volatility"], strict=True)
@@ -314,7 +317,10 @@ def ma_timing_view(ctx: Context, universe: str) -> dict[str, Any]:
         [timing.returns.rename("10-month MA timing"), bench.returns.rename("Buy and hold")], axis=1
     ).dropna()
     weekly = (1 + frame).cumprod().resample("W-FRI").last()
-    trades = timing.trades.tail(20).assign(date=lambda d: d["date"].dt.date.astype(str))
+    # entries and exits only; the monthly drift rebalances in between are noise on a dashboard
+    t = timing.trades
+    switches = t[(t["weight_before"] < WEIGHT_EPS) | (t["weight_after"] < WEIGHT_EPS)]
+    trades = switches.tail(12).assign(date=lambda d: d["date"].dt.date.astype(str))
     return {
         "universe": universe,
         "available": True,
