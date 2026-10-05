@@ -19,7 +19,6 @@ DEMO_HOLDINGS: tuple[tuple[str, str, str, str, float, float, float], ...] = (
     ("indiv", "AMZN", "Amazon.com Inc", "stock", 30, 140.0, 200.0),
     ("indiv", "JPM", "JPMorgan Chase & Co", "stock", 15, 150.0, 240.0),
     ("indiv", "QQQ", "Invesco QQQ Trust", "etf", 10, 380.0, 500.0),
-    ("indiv", "SPAXX", "Fidelity Government Money Market", "cash", 2500, 1.0, 1.0),
     ("roth", "FXAIX", "Fidelity 500 Index Fund", "mutualfund", 45, 160.0, 210.0),
     ("roth", "XOM", "Exxon Mobil Corp", "stock", 20, 100.0, 115.0),
 )
@@ -35,7 +34,8 @@ class FakeBroker:
     returns None, so the demo works on an empty lake too."""
 
     price_of: Callable[[str], float | None] = lambda symbol: None
-    cash: Mapping[str, float] = field(default_factory=lambda: {"indiv": 500.0, "roth": 120.0})
+    # Includes the money-market sweep (SPAXX): brokers count it as cash, not as a holding.
+    cash: Mapping[str, float] = field(default_factory=lambda: {"indiv": 3000.0, "roth": 120.0})
     as_of: date = date(2024, 7, 12)
     name: str = "fake"
 
@@ -48,6 +48,7 @@ class FakeBroker:
                 {
                     "account_id": ACCOUNTS[acct][0],
                     "symbol": symbol,
+                    "underlying": symbol,
                     "description": desc,
                     "kind": kind,
                     "quantity": float(qty),

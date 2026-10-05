@@ -61,9 +61,18 @@ class Classifier:
 
     @classmethod
     def load(cls, path: Path) -> Classifier:
-        with path.open("rb") as f:
-            raw = tomllib.load(f)
-        return cls(sectors=dict(raw.get("sectors", {})), funds=dict(raw.get("funds", {})))
+        """Load ``path`` plus, if present, ``<name>.local.toml`` next to it (git-ignored), whose
+        entries win. Put your own holdings there so they never land in the public repo."""
+        sectors: dict[str, str] = {}
+        funds: dict[str, str] = {}
+        for candidate in (path, path.with_name(f"{path.stem}.local.toml")):
+            if not candidate.exists():
+                continue
+            with candidate.open("rb") as f:
+                raw = tomllib.load(f)
+            sectors.update(raw.get("sectors", {}))
+            funds.update(raw.get("funds", {}))
+        return cls(sectors=sectors, funds=funds)
 
     def classify(self, symbol: str, kind: str) -> Classification:
         if kind == CASH_KIND or self.funds.get(symbol) == "Cash":

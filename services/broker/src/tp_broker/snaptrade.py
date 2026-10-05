@@ -121,9 +121,15 @@ class SnapTradeSource:
         for account in self.api.list_accounts():
             account_id = str(account["id"])
             balances = self.api.account_balances(account_id)
-            positions = self.api.account_positions(account_id).get("results") or []
+            body = self.api.account_positions(account_id)
+            # The live API returns "positions"; older SDK type stubs call it "results".
+            positions = body.get("positions") or body.get("results") or []
             accounts.append(_account_row(account, balances))
-            holdings.extend(_holding_row(account_id, p) for p in positions)
+            # Cash-equivalent positions (the money-market sweep) are already inside the cash
+            # balance; keeping them as holdings would count that money twice.
+            holdings.extend(
+                _holding_row(account_id, p) for p in positions if not p.get("cash_equivalent")
+            )
         return BrokerSnapshot(
             accounts=pd.DataFrame(accounts, columns=list(ACCOUNT_COLUMNS)),
             holdings=pd.DataFrame(holdings, columns=list(HOLDING_COLUMNS)),
@@ -164,7 +170,10 @@ def _account_row(account: Mapping[str, Any], balances: list[dict[str, Any]]) -> 
     return {
         "account_id": str(account["id"]),
         "account_name": account.get("name"),
-        "account_number_masked": mask_account_number(account.get("number")),
+        # Fidelity connections carry the brokerage account number in meta.account_id.
+        "account_number_masked": mask_account_number(
+            account.get("number") or (account.get("meta") or {}).get("account_id")
+        ),
         "institution": account.get("institution_name"),
         "cash": cash,
         "total_value": _num(total),
@@ -173,34 +182,50 @@ def _account_row(account: Mapping[str, Any], balances: list[dict[str, Any]]) -> 
 
 
 def _holding_row(account_id: str, position: Mapping[str, Any]) -> dict[str, Any]:
+    """One position. Options are stored per contract (price and cost basis x multiplier) so that
+    ``quantity x price = market value`` holds for every kind."""
     instrument = position.get("instrument") or {}
-    raw_kind = str(instrument.get("kind") or "")
-    kind = "cash" if position.get("cash_equivalent") else _KINDS.get(raw_kind, "other")
+    kind = _KINDS.get(str(instrument.get("kind") or ""), "other")
     units = _num(position.get("units")) or 0.0
     price = _num(position.get("price"))
-    multiplier = _num(instrument.get("multiplier")) if kind == "option" else 1.0
-    market_value = units * price * (multiplier or 1.0) if price is not None else None
+    cost = _num(position.get("cost_basis"))  # per share (per underlying share for options)
+    symbol = _compact(instrument.get("symbol"))
+    underlying = symbol
+    if kind == "option":
+        multiplier = _num(instrument.get("multiplier")) or 100.0
+        price = price * multiplier if price is not None else None
+        cost = cost * multiplier if cost is not None else None
+        underlying = _compact((instrument.get("underlying") or {}).get("symbol"))
     return {
         "account_id": account_id,
-        "symbol": (instrument.get("symbol") or "").upper() or None,
+        "symbol": symbol,
+        "underlying": underlying,
         "description": instrument.get("description"),
         "kind": kind,
         "quantity": units,
         "price": price,
-        "market_value": market_value,
-        "cost_basis_per_unit": _num(position.get("cost_basis")),
+        "market_value": units * price if price is not None else None,
+        "cost_basis_per_unit": cost,
         "currency": position.get("currency") or instrument.get("currency") or "USD",
     }
 
 
+def _compact(symbol: object) -> str | None:
+    """Upper-case and drop OCC padding spaces ("XYZ   281215C00050000" -> "XYZ281215C00050000")."""
+    text = str(symbol or "").replace(" ", "").upper()
+    return text or None
+
+
 def _activity_row(account_id: str, activity: Mapping[str, Any]) -> dict[str, Any]:
     symbol = activity.get("symbol") or {}
+    option = activity.get("option_symbol") or {}
     currency = activity.get("currency") or {}
     return {
         "activity_id": str(activity.get("id")),
         "account_id": account_id,
         "type": (activity.get("type") or "").upper(),
-        "symbol": (symbol.get("symbol") or "").upper() or None,
+        # Option trades have no "symbol"; their contract is in option_symbol.ticker.
+        "symbol": _compact(symbol.get("symbol") or option.get("ticker")),
         "trade_date": activity.get("trade_date"),
         "settlement_date": activity.get("settlement_date"),
         "units": _num(activity.get("units")),

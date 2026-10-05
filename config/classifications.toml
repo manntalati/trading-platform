@@ -2,7 +2,8 @@
 #
 # [sectors]: single stocks -> GICS sector (asset class "US Equity").
 # [funds]:   ETFs / mutual funds / money-market funds -> asset class.
-# Anything not listed shows up as "Unclassified": add it here.
+# Anything not listed shows up as "Unclassified": add it here, or, for your own holdings, in
+# config/classifications.local.toml (same format, git-ignored, wins over this file).
 
 [sectors]
 AAPL = "Information Technology"

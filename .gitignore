@@ -18,6 +18,9 @@ dist/
 .env.*
 !.env.example
 
+# Personal config overrides (e.g. classifications for your own holdings)
+config/*.local.toml
+
 # Local data lake and experiment tracking (kept out of git; see docs/data.md)
 data/
 mlruns/

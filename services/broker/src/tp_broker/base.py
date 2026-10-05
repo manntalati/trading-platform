@@ -20,6 +20,7 @@ ACCOUNT_COLUMNS = (
 HOLDING_COLUMNS = (
     "account_id",
     "symbol",
+    "underlying",  # the symbol itself, or an option's underlying
     "description",
     "kind",
     "quantity",

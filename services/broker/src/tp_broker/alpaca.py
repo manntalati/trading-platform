@@ -61,6 +61,7 @@ class AlpacaAccountSource:
                 {
                     "account_id": account_id,
                     "symbol": p.get("symbol"),
+                    "underlying": p.get("symbol"),
                     "description": None,
                     "kind": _KINDS.get(str(p.get("asset_class")), "other"),
                     "quantity": sign * abs(qty),

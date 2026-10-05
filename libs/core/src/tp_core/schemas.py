@@ -155,13 +155,14 @@ RAW_BROKER_HOLDINGS_SCHEMA = pa.schema(
         ("snapshot_date", pa.date32()),
         ("source", pa.string()),
         ("account_id", pa.string()),
-        ("symbol", pa.string()),
+        ("symbol", pa.string()),  # options: compact OCC symbol
+        ("underlying", pa.string()),  # the symbol itself, or an option's underlying
         ("description", pa.string()),
         ("kind", pa.string()),
         ("quantity", pa.float64()),
-        ("price", pa.float64()),  # broker's last price
+        ("price", pa.float64()),  # broker's last price (options: per contract)
         ("market_value", pa.float64()),
-        ("cost_basis_per_unit", pa.float64()),  # as reported by the broker
+        ("cost_basis_per_unit", pa.float64()),  # average cost per unit (options: per contract)
         ("currency", pa.string()),
         ("ingested_at", _TS),
         ("run_id", pa.string()),
