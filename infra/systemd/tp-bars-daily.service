@@ -1,0 +1,14 @@
+# Daily bars ingest: fetch the latest sessions + corporate actions, rebuild the clean table.
+# User unit: install with infra/README.md. Exit 1 = validation errors, 2 = config problem.
+[Unit]
+Description=trading-platform: daily bars ingest
+Wants=network-online.target
+After=network-online.target
+OnFailure=tp-notify-failure@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/trading-platform
+ExecStart=%h/trading-platform/.venv/bin/tp-data bars daily
+TimeoutStartSec=30min
+Nice=10

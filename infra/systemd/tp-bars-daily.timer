@@ -1,0 +1,13 @@
+# 18:30 New York time on weekdays: well after the 16:00 close and the 15-minute SIP delay.
+# The time zone in OnCalendar makes DST transitions a non-issue. Holidays are fine: the job
+# simply re-fetches the overlap window and finds nothing new.
+[Unit]
+Description=trading-platform: daily bars ingest (weekdays 18:30 ET)
+
+[Timer]
+OnCalendar=Mon..Fri 18:30 America/New_York
+# Run at next boot if the machine was off at the scheduled time.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

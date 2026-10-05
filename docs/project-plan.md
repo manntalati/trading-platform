@@ -436,8 +436,8 @@ Each item is delivered on its own `step0/<feature>` branch (see the README).
 - [ ] Create the monorepo: `research/`, `services/`, `strategies/`, `infra/`, `docs/`; set up uv,
   ruff, mypy, pytest and GitHub Actions — `step0/monorepo-scaffold`
 - [ ] Open an Alpaca account, generate paper API keys, pull 5 years of daily bars for 50 tickers
-  into Parquet — `step0/market-data-ingest`
-- [ ] Write the data validation checks and a daily ingest script; run it as a cron job on a Linux
+  into Parquet — `step0/market-data-ingest` (code done; the account and keys are yours to create)
+- [x] Write the data validation checks and a daily ingest script; run it as a cron job on a Linux
   box or VM — `step0/market-data-ingest`
 - [ ] Start the daily options chain snapshot job for 20 liquid underlyings —
   `step0/options-chain-snapshot`

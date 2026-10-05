@@ -1,0 +1,14 @@
+# Failure hook for any tp-* unit (OnFailure=tp-notify-failure@%n.service).
+# Always logs to the journal; also posts to Discord if TP_DISCORD_WEBHOOK_URL is set in .env.
+[Unit]
+Description=trading-platform: notify that %i failed
+
+[Service]
+Type=oneshot
+EnvironmentFile=-%h/trading-platform/.env
+ExecStart=/bin/sh -c 'echo "%i failed on %H" >&2; \
+  if [ -n "$TP_DISCORD_WEBHOOK_URL" ]; then \
+    curl -fsS -m 10 -H "Content-Type: application/json" \
+      -d "{\"content\": \"%i failed on %H, see journalctl --user -u %i\"}" \
+      "$TP_DISCORD_WEBHOOK_URL"; \
+  fi'

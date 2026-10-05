@@ -3,7 +3,13 @@ name = "tp-core"
 version = "0.1.0"
 description = "Shared library: configuration, market data storage and validation, metrics."
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "exchange-calendars>=4.5",
+    "numpy>=2.0",
+    "pandas>=2.2",
+    "pyarrow>=17",
+    "pydantic-settings>=2.5",
+]
 
 [build-system]
 requires = ["hatchling>=1.27"]

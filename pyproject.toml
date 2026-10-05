@@ -100,4 +100,8 @@ testpaths = [
 # importlib mode lets every package keep a plain `tests/` dir without name clashes.
 addopts = ["--import-mode=importlib", "-ra", "--strict-markers", "--strict-config"]
 xfail_strict = true
-filterwarnings = ["error"]
+filterwarnings = [
+    "error",
+    # alpaca-py imports websockets' legacy client at import time; not our code.
+    "ignore:websockets.legacy is deprecated:DeprecationWarning",
+]

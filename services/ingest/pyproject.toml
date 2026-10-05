@@ -3,7 +3,17 @@ name = "tp-ingest"
 version = "0.1.0"
 description = "Market data ingest jobs: vendor adapters, daily bars, option chain snapshots."
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "alpaca-py>=0.40",
+    "tp-core",
+    "typer>=0.12",
+]
+
+[project.scripts]
+tp-data = "tp_ingest.cli:main"
+
+[tool.uv.sources]
+tp-core = { workspace = true }
 
 [build-system]
 requires = ["hatchling>=1.27"]
