@@ -8,6 +8,7 @@ are plain CLI commands so they move into containers unchanged.
 |---|---|---|
 | `tp-bars-daily` | Mon–Fri 18:30 America/New_York | `tp-data bars daily` |
 | `tp-options-snapshot` | Mon–Fri 15:45 America/New_York | `tp-data options snapshot` |
+| `tp-broker-sync` | Mon–Fri 17:45 America/New_York | `tp-broker sync --source snaptrade` |
 | `tp-notify-failure@` | on failure of any unit above | journal + optional Discord webhook |
 
 ## Set up a box (Ubuntu Server)
@@ -33,7 +34,7 @@ timedatectl status                  # expect "System clock synchronized: yes"
 mkdir -p ~/.config/systemd/user
 cp infra/systemd/*.service infra/systemd/*.timer ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now tp-bars-daily.timer tp-options-snapshot.timer
+systemctl --user enable --now tp-bars-daily.timer tp-options-snapshot.timer tp-broker-sync.timer
 sudo loginctl enable-linger "$USER"
 ```
 

@@ -11,8 +11,9 @@ live outside strategy code; backtests are hypotheses, not evidence.
 ## Layout
 
 ```
-libs/core/         tp_core        shared library: config, data storage + validation, metrics
+libs/core/         tp_core        shared library: config, data storage + validation, metrics, portfolio
 services/ingest/   tp_ingest      data jobs and vendor adapters
+services/broker/   tp_broker      read-only brokerage sync (Fidelity via SnapTrade, Alpaca, demo)
 strategies/        tp_strategies  strategy library
 research/          tp_research    Phase 0 exercises; notebooks/ holds jupytext .py notebooks
 infra/                            deployment (systemd/cron now; Docker, k3s, Terraform later)
@@ -49,6 +50,18 @@ uv run tp-data options snapshot           # today's option chains for the [optio
 ```
 
 Scheduling (systemd timers or cron) is in [infra/](infra/README.md).
+
+## Portfolio
+
+Your Fidelity account, read-only through SnapTrade, measured against SPY, QQQ and 60/40.
+Setup and caveats: [docs/portfolio.md](docs/portfolio.md).
+
+```bash
+uv run tp-broker link                     # one-time: connect Fidelity (read-only)
+uv run tp-broker sync                     # snapshot holdings + transactions
+uv run tp-broker show                     # print the latest portfolio
+uv run tp-broker sync --source fake       # demo portfolio, no keys needed
+```
 
 ## Research and strategies
 

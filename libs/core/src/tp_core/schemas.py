@@ -15,6 +15,9 @@ RAW_CORPORATE_ACTIONS = "alpaca/corporate_actions"
 CLEAN_STOCK_BARS_1D = "stock_bars_1d"
 QUARANTINE_STOCK_BARS_1D = "stock_bars_1d_quarantine"
 RAW_OPTION_CHAIN_SNAPSHOTS = "alpaca/option_chain_snapshots"
+RAW_BROKER_ACCOUNTS = "broker/accounts"
+RAW_BROKER_HOLDINGS = "broker/holdings"
+RAW_BROKER_ACTIVITIES = "broker/activities"
 
 _TS = pa.timestamp("ns", tz="UTC")
 
@@ -120,6 +123,67 @@ RAW_OPTION_CHAIN_SCHEMA = pa.schema(
         ("close_price_date", pa.date32()),
         ("style", pa.string()),  # american / european
         ("feed", pa.string()),
+        ("ingested_at", _TS),
+        ("run_id", pa.string()),
+    ]
+)
+
+
+# Brokerage data (read-only). One row per account / holding per sync; activities are the
+# broker's transaction history (buys, sells, dividends, contributions, ...).
+RAW_BROKER_ACCOUNTS_SCHEMA = pa.schema(
+    [
+        ("taken_at", _TS),
+        ("snapshot_date", pa.date32()),  # New York date of the sync
+        ("source", pa.string()),  # snaptrade / alpaca / fake
+        ("account_id", pa.string()),
+        ("account_name", pa.string()),
+        ("account_number_masked", pa.string()),  # last 4 digits only
+        ("institution", pa.string()),
+        ("cash", pa.float64()),
+        ("total_value", pa.float64()),  # as reported by the broker, if it reports one
+        ("currency", pa.string()),
+        ("ingested_at", _TS),
+        ("run_id", pa.string()),
+    ]
+)
+
+# kind: stock, etf, adr, mutualfund, cef, option, crypto, cash, other
+RAW_BROKER_HOLDINGS_SCHEMA = pa.schema(
+    [
+        ("taken_at", _TS),
+        ("snapshot_date", pa.date32()),
+        ("source", pa.string()),
+        ("account_id", pa.string()),
+        ("symbol", pa.string()),  # options: compact OCC symbol
+        ("underlying", pa.string()),  # the symbol itself, or an option's underlying
+        ("description", pa.string()),
+        ("kind", pa.string()),
+        ("quantity", pa.float64()),
+        ("price", pa.float64()),  # broker's last price (options: per contract)
+        ("market_value", pa.float64()),
+        ("cost_basis_per_unit", pa.float64()),  # average cost per unit (options: per contract)
+        ("currency", pa.string()),
+        ("ingested_at", _TS),
+        ("run_id", pa.string()),
+    ]
+)
+
+RAW_BROKER_ACTIVITIES_SCHEMA = pa.schema(
+    [
+        ("activity_id", pa.string()),
+        ("source", pa.string()),
+        ("account_id", pa.string()),
+        ("type", pa.string()),  # BUY, SELL, DIVIDEND, CONTRIBUTION, WITHDRAWAL, FEE, ...
+        ("symbol", pa.string()),
+        ("trade_date", pa.date32()),
+        ("settlement_date", pa.date32()),
+        ("units", pa.float64()),
+        ("price", pa.float64()),
+        ("amount", pa.float64()),
+        ("fee", pa.float64()),
+        ("currency", pa.string()),
+        ("description", pa.string()),
         ("ingested_at", _TS),
         ("run_id", pa.string()),
     ]

@@ -47,6 +47,15 @@ class Settings(BaseSettings):
     universes_file: Path = Field(
         default=Path("config/universes.toml"), validation_alias="TP_UNIVERSES_FILE"
     )
+    classifications_file: Path = Field(
+        default=Path("config/classifications.toml"), validation_alias="TP_CLASSIFICATIONS_FILE"
+    )
+
+    # SnapTrade personal API key (read-only link to Fidelity): https://dashboard.snaptrade.com
+    snaptrade_client_id: str | None = Field(default=None, validation_alias="SNAPTRADE_CLIENT_ID")
+    snaptrade_consumer_key: SecretStr | None = Field(
+        default=None, validation_alias="SNAPTRADE_CONSUMER_KEY"
+    )
 
     def require_alpaca_keys(self) -> tuple[str, str]:
         if self.alpaca_api_key is None or self.alpaca_secret_key is None:
@@ -55,6 +64,14 @@ class Settings(BaseSettings):
                 "(see .env.example) or the environment."
             )
         return self.alpaca_api_key.get_secret_value(), self.alpaca_secret_key.get_secret_value()
+
+    def require_snaptrade_keys(self) -> tuple[str, str]:
+        if self.snaptrade_client_id is None or self.snaptrade_consumer_key is None:
+            raise MissingCredentialsError(
+                "SnapTrade keys not set: put SNAPTRADE_CLIENT_ID and SNAPTRADE_CONSUMER_KEY in "
+                ".env (personal API key from https://dashboard.snaptrade.com)."
+            )
+        return self.snaptrade_client_id, self.snaptrade_consumer_key.get_secret_value()
 
 
 class MissingCredentialsError(RuntimeError):

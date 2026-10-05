@@ -167,7 +167,10 @@ def autocorrelation(returns: pd.Series, lag: int = 1) -> float:
     Near 0 for liquid assets' daily returns; clearly positive suggests momentum or stale prices,
     clearly negative suggests mean reversion or bid-ask bounce.
     """
-    return float(_clean(returns).autocorr(lag=lag))
+    r = _clean(returns)
+    if len(r) < lag + 3:  # too few pairs for a meaningful (or warning-free) correlation
+        return math.nan
+    return float(r.autocorr(lag=lag))
 
 
 def skewness(returns: pd.Series) -> float:
@@ -194,7 +197,7 @@ def tail_ratio_vs_normal(returns: pd.Series, sigmas: float = 3.0) -> float:
 def beta(returns: pd.Series, benchmark: pd.Series) -> float:
     """Sensitivity to the benchmark: cov(r, b) / var(b) over overlapping periods."""
     joined = pd.concat([returns, benchmark], axis=1, join="inner").dropna()
-    if len(joined) < 2:
+    if len(joined) < 3:
         return math.nan
     b = joined.iloc[:, 1]
     var = float(b.var(ddof=1))
