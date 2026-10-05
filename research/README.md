@@ -19,3 +19,4 @@ uv run --group research python research/notebooks/phase0_03_return_stats.py   # 
 | Notebook | What it covers |
 |---|---|
 | `phase0_03_return_stats.py` | Phase 0 module 3: return/risk metrics and stylized facts for SPY, QQQ and 5 stocks |
+| `s01_faber_10m_ma.py` | Strategy 1, Faber's 10-month MA timing: SPY, long S&P 500 history, 5-asset GTAA, sensitivity |

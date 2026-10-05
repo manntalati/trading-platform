@@ -444,7 +444,8 @@ Each item is delivered on its own `step0/<feature>` branch (see the README).
 - [ ] Finish Phase 0 modules 1 to 4, including the toy matching engine — `step0/matching-engine`,
   `step0/return-metrics` (notes are written by hand in `docs/phase0/`)
 - [ ] Implement strategy 1 (10-month MA timing) in a notebook and reproduce Faber's headline
-  result — `step0/ma-timing-strategy`
+  result — `step0/ma-timing-strategy` (strategy, spec and notebook done; run it on real data and
+  fill in the paper's numbers)
 
 ## How this maps to trading-platform engineering
 
