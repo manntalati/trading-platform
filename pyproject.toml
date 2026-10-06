@@ -9,6 +9,7 @@ dependencies = [
     "tp-broker",
     "tp-core",
     "tp-ingest",
+    "tp-paper",
     "tp-strategies",
     "tp-research",
     "tp-risk",
@@ -27,6 +28,7 @@ tp-api = { workspace = true }
 tp-broker = { workspace = true }
 tp-core = { workspace = true }
 tp-ingest = { workspace = true }
+tp-paper = { workspace = true }
 tp-strategies = { workspace = true }
 tp-research = { workspace = true }
 tp-risk = { workspace = true }
@@ -82,8 +84,8 @@ ignore = [
 
 [tool.ruff.lint.isort]
 known-first-party = [
-    "tp_api", "tp_broker", "tp_core", "tp_ingest", "tp_strategies", "tp_research", "tp_risk",
-    "tp_trading",
+    "tp_api", "tp_broker", "tp_core", "tp_ingest", "tp_paper", "tp_strategies", "tp_research",
+    "tp_risk", "tp_trading",
 ]
 
 [tool.mypy]
@@ -96,6 +98,7 @@ files = [
     "services/ingest/src",
     "services/broker/src",
     "services/api/src",
+    "services/paper/src",
     "services/risk/src",
     "strategies/src",
     "research/src",
@@ -113,6 +116,7 @@ testpaths = [
     "services/ingest/tests",
     "services/broker/tests",
     "services/api/tests",
+    "services/paper/tests",
     "services/risk/tests",
     "strategies/tests",
     "research/tests",

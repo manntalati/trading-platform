@@ -13,3 +13,11 @@ REPO=/home/YOU/trading-platform
 # Options snapshot must run while the market is open: 19:45 UTC = 15:45 EDT / 14:45 EST, inside
 # regular hours either way (the systemd timer keeps it at 15:45 New York all year).
 45 19 *   *   1-5    cd $REPO && .venv/bin/tp-data options snapshot >> $REPO/data/logs/options.log 2>&1
+
+# Paper trading. Propose after the bars job: 23:50 UTC = 19:50 EDT / 18:50 EST.
+50 23 *   *   1-5    cd $REPO && .venv/bin/tp-paper propose >> $REPO/data/logs/paper.log 2>&1
+# Submit inside the market-on-open window (before 9:28 New York): 13:10 UTC = 09:10 EDT / 08:10 EST.
+10 13 *   *   1-5    cd $REPO && .venv/bin/tp-paper submit >> $REPO/data/logs/paper.log 2>&1
+# Sync after the open and after the close: 15:00 UTC = 11:00 EDT / 10:00 EST; 21:30 UTC = 17:30 EDT / 16:30 EST.
+0  15 *   *   1-5    cd $REPO && .venv/bin/tp-paper sync >> $REPO/data/logs/paper.log 2>&1
+30 21 *   *   1-5    cd $REPO && .venv/bin/tp-paper sync >> $REPO/data/logs/paper.log 2>&1

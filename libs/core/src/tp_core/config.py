@@ -51,6 +51,7 @@ class Settings(BaseSettings):
         default=Path("config/classifications.toml"), validation_alias="TP_CLASSIFICATIONS_FILE"
     )
     risk_file: Path = Field(default=Path("config/risk.toml"), validation_alias="TP_RISK_FILE")
+    paper_file: Path = Field(default=Path("config/paper.toml"), validation_alias="TP_PAPER_FILE")
 
     # If set, the dashboard API requires it (Authorization: Bearer <token>; ?token= on the
     # WebSocket). The API binds to localhost by default; set this before exposing it anywhere.

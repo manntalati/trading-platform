@@ -17,6 +17,7 @@ services/ingest/   tp_ingest      data jobs and vendor adapters
 services/broker/   tp_broker      read-only brokerage sync (Fidelity via SnapTrade, Alpaca, demo)
 services/api/      tp_api         dashboard API: REST + live WebSocket
 services/risk/     tp_risk        pre-trade risk limits, kill switch, drawdown monitor (tp-risk)
+services/paper/    tp_paper       paper trading on Alpaca's paper account (tp-paper)
 apps/dashboard/                   dashboard web app (React + TypeScript + Vite)
 strategies/        tp_strategies  strategy library (tp-backtest), research versions, ideas
 research/          tp_research    Phase 0 exercises; notebooks/ holds jupytext .py notebooks
@@ -105,6 +106,21 @@ plus a kill switch and a per-strategy drawdown limit. See [docs/risk.md](docs/ri
 | 3 | Cross-sectional momentum 12-1 (Jegadeesh, Titman) | [03-xs-momentum.md](docs/strategies/03-xs-momentum.md) | backtest |
 | 4 | Dual momentum (Antonacci) | [04-dual-momentum.md](docs/strategies/04-dual-momentum.md) | backtest |
 | 5 | RSI(2) mean reversion (Connors, Alvarez) | [05-rsi2.md](docs/strategies/05-rsi2.md) | backtest |
+
+## Paper trading
+
+The library strategies trade Alpaca's **paper** account, one capital sleeve each
+(`config/paper.toml`), through the same code and risk checks as the backtests. Each evening they
+propose orders with their reasons; you approve them (or set `approval = "auto"`), and approved
+orders go out as market-on-open orders the next morning. Fills are reconciled with the broker
+and every sleeve's progress toward the plan's paper gate (60 trading days, 30 trades) is tracked.
+Nothing can trade a live account. See [docs/paper-trading.md](docs/paper-trading.md).
+
+```bash
+uv run tp-paper propose && uv run tp-paper proposals    # after the close
+uv run tp-paper approve --all && uv run tp-paper submit # before 9:28am ET
+uv run tp-paper status                                   # add --broker fake to try it offline
+```
 
 ## Branches
 
