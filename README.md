@@ -16,6 +16,7 @@ libs/trading/      tp_trading     strategy contract, event-driven backtester, si
 services/ingest/   tp_ingest      data jobs and vendor adapters
 services/broker/   tp_broker      read-only brokerage sync (Fidelity via SnapTrade, Alpaca, demo)
 services/api/      tp_api         dashboard API: REST + live WebSocket
+services/risk/     tp_risk        pre-trade risk limits, kill switch, drawdown monitor (tp-risk)
 apps/dashboard/                   dashboard web app (React + TypeScript + Vite)
 strategies/        tp_strategies  strategy library (tp-backtest), research versions, ideas
 research/          tp_research    Phase 0 exercises; notebooks/ holds jupytext .py notebooks
@@ -92,6 +93,10 @@ Library strategies implement one contract that both backtests and paper-trades
 uv run tp-backtest list
 uv run tp-backtest run ma-timing --start 2018-01-01      # tear sheet vs SPY; saved under data/reports/backtests
 ```
+
+Every order passes the plan's pre-trade limits (`config/risk.toml`), which strategies cannot see
+or change: position, sector and gross caps, daily loss limit, stale data, liquidity, no shorts,
+plus a kill switch and a per-strategy drawdown limit. See [docs/risk.md](docs/risk.md).
 
 | # | Strategy | Spec | Status |
 |---|---|---|---|

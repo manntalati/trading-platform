@@ -15,7 +15,11 @@ from typing import Annotated, Any
 import typer
 
 from tp_core.config import Settings
+from tp_core.portfolio import Classifier
 from tp_core.storage import Lake
+from tp_risk.limits import Limits
+from tp_risk.manager import RiskManager
+from tp_risk.state import MemoryRiskState
 from tp_strategies.backtest import run_backtest
 from tp_strategies.library import REGISTRY, build, parameters
 from tp_trading.costs import CostModel
@@ -66,6 +70,13 @@ def run(
     slippage_bps: Annotated[float, typer.Option(help="Per-fill slippage, basis points.")] = 5.0,
     fractional: Annotated[bool, typer.Option(help="Allow fractional shares.")] = False,
     benchmark: Annotated[str, typer.Option(help="Buy-and-hold comparison symbol.")] = "SPY",
+    risk: Annotated[
+        bool, typer.Option(help="Apply the pre-trade limits in config/risk.toml.")
+    ] = True,
+    enforce_drawdown: Annotated[
+        bool,
+        typer.Option(help="Stop opening trades after a drawdown-limit breach, as paper would."),
+    ] = False,
     save: Annotated[bool, typer.Option(help="Write the run under reports/backtests/.")] = True,
 ) -> None:
     """Backtest one strategy and print its tear sheet next to buy-and-hold."""
@@ -91,9 +102,24 @@ def run(
         ),
     )
     settings = Settings()
+    gate = None
+    if risk:
+        if not settings.risk_file.exists():
+            typer.echo(
+                f"risk limits file {settings.risk_file} not found: run from the repo root, set "
+                "TP_RISK_FILE, or pass --no-risk",
+                err=True,
+            )
+            raise typer.Exit(2)
+        gate = RiskManager(
+            Limits.load(settings.risk_file),
+            Classifier.load(settings.classifications_file),
+            MemoryRiskState(),
+            enforce_drawdown=enforce_drawdown,
+        )
     try:
         outcome = run_backtest(
-            Lake(settings.data_root), built, config, benchmark=benchmark,
+            Lake(settings.data_root), built, config, risk=gate, benchmark=benchmark,
             now=datetime.now(UTC), save=save,
         )  # fmt: skip
     except KeyError as exc:
@@ -104,7 +130,10 @@ def run(
     bench = outcome.summary.get("benchmark", {})
     typer.echo(f"\n{built.title} ({built.name})  {stats['start']} to {stats['end']}")
     typer.echo(f"params: {built.params()}")
-    typer.echo(f"fills at {fill}, {slippage_bps:g} bps slippage, start {capital:,.0f}\n")
+    typer.echo(
+        f"fills at {fill}, {slippage_bps:g} bps slippage, start {capital:,.0f}, "
+        f"risk limits {'on' if risk else 'OFF'}\n"
+    )
     typer.echo(f"{'':30}{'strategy':>12}{benchmark + ' hold':>12}")
     for key, label, kind in ROWS:
         typer.echo(f"{label:30}{_fmt(stats.get(key), kind):>12}{_fmt(bench.get(key), kind):>12}")
@@ -120,6 +149,13 @@ def run(
         typer.echo("top rejection reasons:")
         for note, count in rejected["note"].value_counts().head(5).items():
             typer.echo(f"  {count:5d}  {note}")
+    breaches = outcome.summary["risk"].get("drawdown_breaches", [])
+    for b in breaches:
+        action = "strategy disabled" if b["enforced"] else "recorded only"
+        typer.echo(
+            f"drawdown limit breached {b['session']}: {b['drawdown']:.1%} vs "
+            f"-{b['limit']:.0%} ({action})"
+        )
     if outcome.path:
         typer.echo(f"\nsaved to {outcome.path}")
 
