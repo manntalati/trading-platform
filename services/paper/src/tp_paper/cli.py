@@ -16,24 +16,15 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
-import pandas as pd
 import typer
 
-from tp_core.bars import load_bars
 from tp_core.config import MissingCredentialsError, Settings
-from tp_core.portfolio import Classifier
-from tp_core.storage import Lake
 from tp_paper import jobs
-from tp_paper.broker import AlpacaPaperBroker, FakePaperBroker, PaperBroker, PriceSource
-from tp_paper.config import PaperBook
 from tp_paper.jobs import Paper, PaperError
-from tp_paper.store import PaperStore
-from tp_risk.limits import Limits
-from tp_risk.manager import RiskManager
-from tp_risk.state import FileRiskState
+from tp_paper.runtime import open_paper
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 STATE: dict[str, Any] = {"broker": "alpaca"}
@@ -56,54 +47,6 @@ def main_options(
 
 def _now() -> datetime:
     return datetime.now(UTC)
-
-
-def open_paper(settings: Settings, broker_kind: str, *, time_in_force: str = "opg") -> Paper:
-    lake = Lake(settings.data_root)
-    store = PaperStore.under(settings.data_root)
-    broker: PaperBroker
-    if broker_kind == "fake":
-        broker = FakePaperBroker(
-            settings.data_root / "state" / "fake_broker.json", _lake_prices(lake)
-        )
-    else:
-        key, secret = settings.require_alpaca_keys()
-        broker = AlpacaPaperBroker(key, secret)
-    classifier = Classifier.load(settings.classifications_file)
-    risk = RiskManager(
-        Limits.load(settings.risk_file),
-        classifier,
-        FileRiskState.under(settings.data_root),
-        enforce_drawdown=True,
-    )
-    return Paper(
-        store=store,
-        broker=broker,
-        book=PaperBook.load(settings.paper_file),
-        lake=lake,
-        risk=risk,
-        classifier=classifier,
-        time_in_force="day" if time_in_force == "day" else "opg",
-    )
-
-
-def _lake_prices(lake: Lake) -> PriceSource:
-    """Raw open and close per (symbol, session) from the lake, for the simulated broker."""
-    cache: dict[str, dict[date, tuple[float, float]]] = {}
-
-    def prices(symbol: str, day: date) -> tuple[float, float] | None:
-        if symbol not in cache:
-            try:
-                bars = load_bars(lake, [symbol])
-            except KeyError:
-                bars = pd.DataFrame(columns=["session", "open", "close"])
-            cache[symbol] = {
-                s: (float(o), float(c))
-                for s, o, c in zip(bars["session"], bars["open"], bars["close"], strict=True)
-            }
-        return cache[symbol].get(day)
-
-    return prices
 
 
 def _paper(time_in_force: str = "opg") -> Paper:
@@ -130,10 +73,13 @@ def status(as_json: Annotated[bool, typer.Option("--json")] = False) -> None:
         typer.echo(json.dumps(report, indent=2, default=str))
         return
     a = report["account"]
-    typer.echo(
-        f"{report['broker']} {a['number']} {a['status']}: equity {a['equity']:,.2f}, "
-        f"cash {a['cash']:,.2f}; book capital {report['book_capital']:,.0f}"
-    )
+    if a is None:
+        typer.echo(f"{report['broker']}: account unavailable ({report['broker_error']})")
+    else:
+        typer.echo(
+            f"{report['broker']} {a['number']} {a['status']}: equity {a['equity']:,.2f}, "
+            f"cash {a['cash']:,.2f}; book capital {report['book_capital']:,.0f}"
+        )
     kill = report["kill_switch"]
     typer.echo(f"kill switch: {'ENGAGED ' + kill['reason'] if kill else 'off'}")
     rec = report["reconciliation"]
@@ -286,7 +232,10 @@ def sync() -> None:
 @app.command()
 def kill(reason: Annotated[str, typer.Option(help="Why; shown on every refused order.")]) -> None:
     """Engage the kill switch: no new orders, open broker orders canceled."""
-    canceled = jobs.kill(_paper(), reason, _now())
+    try:
+        canceled = jobs.kill(_paper(), reason, _now())
+    except PaperError as exc:
+        raise _fail(exc) from exc
     typer.echo(
         f"kill switch ENGAGED; {canceled} open order(s) canceled. `tp-risk resume` lifts it."
     )

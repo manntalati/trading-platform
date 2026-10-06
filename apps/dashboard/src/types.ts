@@ -133,3 +133,75 @@ export interface OptionSummary {
   term: { expiration: string; dte: number; atm_strike: number; atm_iv: Num; expected_move: Num; expected_move_pct: Num; contracts: number }[];
   smile: { strike: number; iv: Num; right: "C" | "P" }[];
 }
+
+export interface PaperCheck {
+  check: string;
+  passed: boolean;
+  detail: string;
+}
+
+export interface PaperProposal {
+  id: string;
+  strategy: string;
+  session: string;
+  symbol: string;
+  side: "buy" | "sell";
+  quantity: number;
+  approved_quantity: number | null;
+  order_quantity: number;
+  notional: number;
+  reference_price: number;
+  order_type: string;
+  limit_price: number | null;
+  reason: string;
+  checks: PaperCheck[];
+  status: string;
+  note: string;
+  decided_by: string | null;
+  decided_at: string | null;
+  filled_quantity: number;
+  avg_fill_price: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PaperSleeve {
+  strategy: string;
+  approval: string;
+  capital: number;
+  equity: number;
+  return: number | null;
+  max_drawdown: number;
+  sharpe: number | null;
+  positions: Record<string, number>;
+  trading_days: number;
+  trades: number;
+  slippage_bps: number | null;
+  modeled_slippage_bps: number;
+  gate: { days: [number, number]; trades: [number, number] };
+  disabled: string | null;
+  pending: number;
+  since: string | null;
+}
+
+export interface PaperStatus {
+  as_of: string;
+  broker: string;
+  broker_error: string | null;
+  account: { number: string; status: string; equity: number; last_equity: number; cash: number } | null;
+  book_capital: number;
+  kill_switch: { reason: string; at: string } | null;
+  reconciliation: { at: string; ok: boolean; breaks: Record<string, { ledger: number; broker: number }> } | null;
+  sleeves: PaperSleeve[];
+  pending: number;
+  gate: { days: number; trades: number };
+}
+
+export type PaperHistory = Record<string, { session: string; equity: number }[]>;
+
+export interface PaperEvent {
+  id: number;
+  at: string;
+  kind: string;
+  message: string;
+}

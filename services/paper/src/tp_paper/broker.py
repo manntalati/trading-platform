@@ -97,6 +97,38 @@ class OrderRejectedError(RuntimeError):
     """The broker refused an order (insufficient buying power, halted symbol, bad window...)."""
 
 
+class BrokerUnavailableError(RuntimeError):
+    """The broker can't be reached (no keys, network down)."""
+
+
+class UnavailableBroker:
+    """Stands in when there is no broker (e.g. no keys), so proposals can still be read and
+    decided; anything that needs the broker fails with the reason."""
+
+    name = "unavailable"
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+
+    def account(self) -> BrokerAccount:
+        raise BrokerUnavailableError(self.reason)
+
+    def positions(self) -> dict[str, float]:
+        raise BrokerUnavailableError(self.reason)
+
+    def submit(self, request: OrderRequest) -> BrokerOrder:
+        raise BrokerUnavailableError(self.reason)
+
+    def order_by_client_id(self, client_order_id: str) -> BrokerOrder | None:
+        raise BrokerUnavailableError(self.reason)
+
+    def orders_since(self, after: datetime) -> list[BrokerOrder]:
+        raise BrokerUnavailableError(self.reason)
+
+    def cancel_all(self) -> int:
+        raise BrokerUnavailableError(self.reason)
+
+
 # -- Alpaca -----------------------------------------------------------------------------------
 
 

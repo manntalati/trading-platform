@@ -21,7 +21,13 @@ export function useThemeColors() {
     const css = getComputedStyle(document.documentElement);
     const v = (name: string, fallback: string) => css.getPropertyValue(name).trim() || fallback;
     return {
-      series: [v("--series-1", "#2a78d6"), v("--series-2", "#eb6834"), v("--series-3", "#1baf7a"), v("--series-4", "#eda100")],
+      series: [
+        v("--series-1", "#2a78d6"),
+        v("--series-2", "#eb6834"),
+        v("--series-3", "#1baf7a"),
+        v("--series-4", "#eda100"),
+        v("--series-5", "#e87ba4"),
+      ],
       reference: v("--reference", "#898781"),
       grid: v("--grid", "#e1e0d9"),
       axis: v("--axis", "#c3c2b7"),
@@ -80,9 +86,18 @@ export function Legend(props: { names: string[]; colors: string[] }) {
 }
 
 /** Growth of $1 for up to four series on one axis (never a second y-axis). */
+/** Decimals that keep neighbouring ticks distinct: a 1% range needs more than a 50% one. */
+function tickDigits(data: GrowthPoint[], series: string[]): number {
+  const values = data.flatMap((row) => series.map((s) => row[s]).filter((v): v is number => typeof v === "number"));
+  if (values.length === 0) return 2;
+  const span = Math.max(...values) - Math.min(...values);
+  return span < 0.02 ? 4 : span < 0.2 ? 3 : 2;
+}
+
 export function GrowthChart(props: { data: GrowthPoint[]; series: string[]; height?: number; colors?: string[] }) {
   const theme = useThemeColors();
   const colors = props.colors ?? theme.series;
+  const digits = tickDigits(props.data, props.series);
   return (
     <div>
       <Legend names={props.series} colors={colors} />
@@ -94,11 +109,11 @@ export function GrowthChart(props: { data: GrowthPoint[]; series: string[]; heig
             tick={{ fill: theme.muted, fontSize: 11 }}
             tickLine={false}
             axisLine={false}
-            width={52}
+            width={digits > 2 ? 64 : 52}
             domain={["auto", "auto"]}
-            tickFormatter={(v: number) => `$${v.toFixed(2)}`}
+            tickFormatter={(v: number) => `$${v.toFixed(digits)}`}
           />
-          <Tooltip content={<TooltipBox format={(v) => `$${v.toFixed(3)}`} />} cursor={{ stroke: theme.axis }} />
+          <Tooltip content={<TooltipBox format={(v) => `$${v.toFixed(Math.max(3, digits))}`} />} cursor={{ stroke: theme.axis }} />
           {props.series.map((name, i) => (
             <Line
               key={name}

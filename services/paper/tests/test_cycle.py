@@ -150,3 +150,18 @@ def test_forced_rerun_replaces_pending_proposals_with_new_ids(env: Any) -> None:
 def test_stale_bars_stop_proposals(env: Any) -> None:
     with pytest.raises(PaperError, match="run `tp-data bars daily`"):
         jobs.propose(env.paper, env.at(datetime(2024, 8, 7, 23, tzinfo=UTC)))
+
+
+def test_status_and_decisions_work_without_a_broker(env: Any) -> None:
+    from tp_paper.broker import UnavailableBroker
+
+    jobs.propose(env.paper, env.at(env.month_end_evening))
+    env.paper.broker = UnavailableBroker("no keys")
+    status = jobs.status(env.paper, env.month_end_evening)
+    assert status["account"] is None
+    assert "no keys" in status["broker_error"]
+    first = env.paper.store.proposals(status="pending")[0]
+    assert jobs.decide(env.paper.store, first.id, approve=True).status == "approved"
+    with pytest.raises(PaperError, match="canceling open orders failed"):
+        jobs.kill(env.paper, "drill", env.month_end_evening)
+    assert env.paper.risk.state.kill_switch() is not None  # engaged anyway

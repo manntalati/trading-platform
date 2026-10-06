@@ -44,6 +44,7 @@ def settings_for(root: Path, token: str | None = None) -> Settings:
         universes_file=REPO / "config" / "universes.toml",
         classifications_file=REPO / "config" / "classifications.toml",
         dashboard_token=SecretStr(token) if token else None,
+        dashboard_hosts="localhost,127.0.0.1,testserver",
     )
 
 
@@ -184,3 +185,9 @@ def test_empty_lake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
             "holdings_backtest": None,
             "account": None,
         }
+
+
+def test_requests_for_other_host_names_are_refused(client: TestClient) -> None:
+    """A page on evil.example whose DNS points at 127.0.0.1 can't use the API (DNS rebinding)."""
+    assert client.get("/api/health", headers={"host": "evil.example:8000"}).status_code == 400
+    assert client.get("/api/health", headers={"host": "localhost:8000"}).status_code == 200

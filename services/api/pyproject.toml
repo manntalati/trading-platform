@@ -1,13 +1,14 @@
 [project]
 name = "tp-api"
 version = "0.1.0"
-description = "Dashboard API: REST over the lake, portfolio and ideas, plus a live WebSocket feed."
+description = "Dashboard API: REST over the lake, portfolio, ideas and paper trading, plus a live WebSocket feed."
 requires-python = ">=3.12"
 dependencies = [
     "alpaca-py>=0.40",
     "fastapi>=0.115",
     "tp-broker",
     "tp-core",
+    "tp-paper",
     "tp-strategies",
     "typer>=0.12",
     "uvicorn[standard]>=0.30",
@@ -19,6 +20,7 @@ tp-api = "tp_api.cli:main"
 [tool.uv.sources]
 tp-broker = { workspace = true }
 tp-core = { workspace = true }
+tp-paper = { workspace = true }
 tp-strategies = { workspace = true }
 
 [build-system]

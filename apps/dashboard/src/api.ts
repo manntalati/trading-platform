@@ -30,11 +30,33 @@ export async function getJson<T>(path: string, signal?: AbortSignal): Promise<T>
     signal,
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
   });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new ApiError(res.status, text || res.statusText);
-  }
+  if (!res.ok) throw new ApiError(res.status, detail(await res.text()) || res.statusText);
   return (await res.json()) as T;
+}
+
+/** POST JSON for actions that change state. The X-TP-Client header is how the API tells the
+ * dashboard apart from a cross-site request (see tp_api/deps.py). */
+export async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const token = dashboardToken();
+  const headers: Record<string, string> = { "Content-Type": "application/json", "X-TP-Client": "dashboard" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(path, { method: "POST", headers, body: JSON.stringify(body) });
+  if (!res.ok) throw new ApiError(res.status, detail(await res.text()) || res.statusText);
+  return (await res.json()) as T;
+}
+
+/** FastAPI errors arrive as {"detail": "..."} (or a list of validation problems). */
+function detail(text: string): string {
+  try {
+    const parsed = JSON.parse(text) as { detail?: unknown };
+    if (typeof parsed.detail === "string") return parsed.detail;
+    if (Array.isArray(parsed.detail)) {
+      return parsed.detail.map((d: { msg?: string }) => d.msg ?? JSON.stringify(d)).join("; ");
+    }
+  } catch {
+    /* not JSON: use the text as is */
+  }
+  return text;
 }
 
 export interface Resource<T> {

@@ -15,7 +15,7 @@ account is read-only (portfolio tracking only); nothing here can trade it.
 18:30 ET  tp-data bars daily          today's bars into the lake
 18:50 ET  tp-paper propose            sync fills, mark sleeves at the close, run strategies,
                                       risk-check every intent, store proposals
-evening   you approve / reject        dashboard, or tp-paper approve / reject
+evening   you approve / reject        dashboard Paper tab, or tp-paper approve / reject
 09:10 ET  tp-paper submit             approved -> market-on-open orders; undecided -> expired
 09:30 ET  opening auction             orders fill at the official open
 09:45 ET  tp-paper sync               fills recorded, positions reconciled with the broker

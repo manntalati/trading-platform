@@ -20,6 +20,7 @@ from tp_core.calendar import NEW_YORK, is_session, last_completed_session
 from tp_core.portfolio import Classifier
 from tp_core.storage import Lake
 from tp_paper.broker import (
+    BrokerAccount,
     BrokerOrder,
     FakePaperBroker,
     OrderRejectedError,
@@ -301,12 +302,23 @@ def propose(paper: Paper, now: datetime, *, force: bool = False) -> ProposeRepor
                 cash -= signed * d.intent.reference_price
         report.proposed[name] = sum(r.status != "blocked" for r in rows)
         report.blocked[name] = sum(r.status == "blocked" for r in rows)
-    store.log(
-        "propose",
-        f"{session}: proposed {report.proposed}, blocked {report.blocked}, "
-        f"skipped {report.skipped}",
-    )
+    store.log("propose", _propose_summary(report))
     return report
+
+
+def _propose_summary(report: ProposeReport) -> str:
+    """One readable line: only the strategies that did something."""
+    parts = []
+    for name in sorted(set(report.proposed) | set(report.skipped)):
+        if name in report.skipped:
+            parts.append(f"{name} skipped ({report.skipped[name]})")
+            continue
+        made, blocked = report.proposed[name], report.blocked[name]
+        if made or blocked:
+            parts.append(
+                f"{name} {made} order(s)" + (f", {blocked} blocked by risk" if blocked else "")
+            )
+    return f"{report.session} close: " + ("; ".join(parts) if parts else "no trades proposed")
 
 
 def _unfold(p: Proposal, positions: dict[str, float]) -> None:
@@ -456,11 +468,12 @@ def submit(paper: Paper, now: datetime) -> SubmitReport:
             submitted_at=order.submitted_at or now.isoformat(),
         )
         report.submitted.append(p.id)
-    store.log(
-        "submit",
-        f"submitted {len(report.submitted)}, failed {len(report.failed)}, "
-        f"expired {len(report.expired)}",
-    )
+    summary = f"{len(report.submitted)} order(s) sent"
+    if report.failed:
+        summary += f", {len(report.failed)} refused by the broker"
+    if report.expired:
+        summary += f", {len(report.expired)} expired"
+    store.log("submit", summary)
     return report
 
 
@@ -469,12 +482,19 @@ def submit(paper: Paper, now: datetime) -> SubmitReport:
 
 def kill(paper: Paper, reason: str, now: datetime) -> int:
     """Engage the kill switch, cancel every open broker order, and expire unsent proposals."""
-    paper.risk.state.set_kill_switch(reason)
-    canceled = paper.broker.cancel_all()
+    paper.risk.state.set_kill_switch(reason)  # first: blocks new orders even if the rest fails
     for p in paper.store.proposals(status=("pending", "approved")):
         paper.store.update(
             p.id, expect=("pending", "approved"), status="expired", note=f"kill switch: {reason}"
         )
+    try:
+        canceled = paper.broker.cancel_all()
+    except Exception as exc:
+        paper.store.log("kill", f"kill switch engaged ({reason}); canceling orders FAILED: {exc}")
+        raise PaperError(
+            f"kill switch engaged, but canceling open orders failed: {exc}; cancel them in "
+            "Alpaca's dashboard"
+        ) from exc
     paper.store.log("kill", f"kill switch engaged ({reason}); {canceled} open order(s) canceled")
     sync(paper, now)
     return canceled
@@ -486,7 +506,11 @@ def kill(paper: Paper, reason: str, now: datetime) -> int:
 def status(paper: Paper, now: datetime) -> dict[str, Any]:
     """Account, switches, reconciliation, and each sleeve's progress toward the paper gate."""
     store = paper.store
-    account = paper.broker.account()
+    account: BrokerAccount | None
+    try:
+        account, broker_error = paper.broker.account(), None
+    except Exception as exc:  # status must still work when the broker doesn't
+        account, broker_error = None, f"{type(exc).__name__}: {exc}"
     fills = store.fills()
     days = store.sleeve_days()
     try:
@@ -542,13 +566,16 @@ def status(paper: Paper, now: datetime) -> dict[str, Any]:
     return {
         "as_of": now.isoformat(),
         "broker": paper.broker.name,
+        "broker_error": broker_error,
         "account": {
             "number": _mask(account.account_number),
             "status": account.status,
             "equity": account.equity,
             "last_equity": account.last_equity,
             "cash": account.cash,
-        },
+        }
+        if account
+        else None,
         "book_capital": paper.book.capital,
         "kill_switch": {"reason": kill_switch.reason, "at": kill_switch.at}
         if kill_switch
