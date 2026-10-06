@@ -23,7 +23,9 @@ uv run tp-backtest run ma-timing --fill next_close        # research timing
 ```
 
 The command prints the plan's tear sheet next to buy-and-hold of the benchmark (`--benchmark`,
-SPY by default), plus trade count, turnover, exposure and costs. Each run is saved under
+SPY by default), plus trade count, turnover, exposure and costs. The pre-trade risk limits apply
+by default ([risk.md](risk.md)); rejected orders are listed with their reasons, and `--no-risk`
+runs without them for comparison. Each run is saved under
 `data/reports/backtests/<strategy>/<run id>/`:
 
 | File | What |

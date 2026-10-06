@@ -19,6 +19,7 @@ import pandas as pd
 from tp_core import metrics
 from tp_core.bars import load_bars
 from tp_core.storage import Lake, new_run_id, write_json, write_parquet
+from tp_risk.manager import RiskManager
 from tp_trading.data import MarketData
 from tp_trading.engine import BacktestEngine, BacktestResult, EngineConfig
 from tp_trading.risk import RiskGate
@@ -65,7 +66,7 @@ def run_backtest(
         "spec": strategy.spec,
         "params": _jsonable(strategy.params()),
         "config": _jsonable(asdict(config)),
-        "risk": type(risk).__name__ if risk is not None else "AllowAll",
+        "risk": _risk_summary(risk),
         "data": data_version(bars),
         "code": git_version(),
         "stats": result.summary(benchmark=bench),
@@ -86,6 +87,17 @@ def run_backtest(
         write_parquet(result.orders.astype({"session": "string"}), path / "orders.parquet")
         write_parquet(result.fills.astype({"session": "string"}), path / "fills.parquet")
     return BacktestRun(result, bench, summary, run_id, path)
+
+
+def _risk_summary(risk: RiskGate | None) -> dict[str, Any]:
+    if isinstance(risk, RiskManager):
+        return {
+            "gate": "RiskManager",
+            "limits": risk.limits.describe(),
+            "enforce_drawdown": risk.enforce_drawdown,
+            "drawdown_breaches": risk.events,
+        }
+    return {"gate": type(risk).__name__ if risk is not None else "AllowAll"}
 
 
 def data_version(bars: pd.DataFrame) -> dict[str, Any]:

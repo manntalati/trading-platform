@@ -1,0 +1,26 @@
+# Pre-trade risk limits: the project plan's starting values. Every order from every strategy
+# passes these checks (tp_risk), in backtests and in paper trading. Strategies cannot see or
+# change them. Tune with evidence, in a reviewed commit, never to get one trade through.
+#
+# Fractions are of the book's equity: the strategy's capital in a backtest, the whole broker
+# account in paper trading.
+
+[pre_trade]
+risk_per_trade = 0.01        # (entry - stop) x shares, for orders that carry a stop
+max_position = 0.10          # one single-name position (stocks, ADRs; funds are exempt)
+max_sector = 0.30            # single names in one GICS sector
+max_gross_exposure = 1.00    # sum of |positions|: no leverage
+daily_loss_limit = 0.02      # equity down this much since the prior close: no new risk today
+max_price_deviation = 0.05   # limit price within 5% of the last close
+max_adv_fraction = 0.02      # order size vs 20-session average daily volume
+require_current_bar = true   # the symbol's newest bar must be the signal session (stale data)
+
+[strategy_drawdown]
+# From the strategy's peak equity. In paper trading a breach disables the strategy until you
+# re-enable it (tp-risk enable <name>). Backtests record breaches without stopping, unless run
+# with --enforce-drawdown.
+default = 0.10
+
+[strategy_drawdown.overrides]
+# Per-strategy limits, each with the reason in a comment. Example:
+# "some-strategy" = 0.20  # why: what its backtest drawdowns look like, and who agreed
