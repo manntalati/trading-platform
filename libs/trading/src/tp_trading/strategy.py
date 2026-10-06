@@ -58,9 +58,16 @@ class Context(ABC):
     and paper size orders identically.
     """
 
-    def __init__(self, strategy: str, *, fractional: bool = False) -> None:
+    def __init__(
+        self,
+        strategy: str,
+        *,
+        fractional: bool = False,
+        sectors: Mapping[str, str] | None = None,
+    ) -> None:
         self.strategy = strategy
         self.fractional = fractional
+        self._sectors = dict(sectors or {})
         self._intents: list[OrderIntent] = []
 
     # -- provided by the runtime -------------------------------------------------------------------
@@ -105,6 +112,11 @@ class Context(ABC):
 
     def is_last_session_of_month(self) -> bool:
         return is_last_session_of_month(self.now)
+
+    def sector(self, symbol: str) -> str | None:
+        """GICS sector of a single name (reference data from config/classifications.toml), or
+        None for funds and unclassified symbols."""
+        return self._sectors.get(symbol)
 
     # -- ordering ---------------------------------------------------------------------------------
 
@@ -151,9 +163,10 @@ class Context(ABC):
         """Rebalance to ``targets`` (fraction of this strategy's equity per symbol).
 
         Held symbols missing from ``targets`` are sold. Changes smaller than ``min_change`` (in
-        weight) are skipped, except closing a position entirely. Sells come first so a broker
-        that executes in order frees cash before buying. ``reason`` is one explanation for the
-        whole rebalance, or one per symbol.
+        weight) are skipped, except closing a position entirely. If skipping small trims would
+        leave the book above 100% of equity after the buys, the buys are scaled down: a
+        rebalance never borrows. Sells come first so a broker that executes in order frees cash
+        before buying. ``reason`` is one explanation for the whole rebalance, or one per symbol.
         """
         if any(w < 0 for w in targets.values()):
             raise ValueError("target weights must be >= 0 (no shorting)")
@@ -175,15 +188,38 @@ class Context(ABC):
                 continue  # no price, no order (e.g. not listed yet)
             if abs(target - held * price / equity) < min_change:
                 continue
-            delta = target * equity / price - held
-            if not self.fractional:
-                delta = float(math.trunc(delta))  # toward zero: never overshoot cash or target
-            orders.append((symbol, delta, target))
+            orders.append((symbol, target * equity / price - held, target))
+        orders = self._within_equity(orders, equity)
+        if not self.fractional:
+            # Whole shares, rounded down after the trade: buys never overshoot the cash or the
+            # target, and trims never leave a position above it (which would breach a cap).
+            orders = [(s, _whole(self.quantity(s), d), t) for s, d, t in orders]
         for symbol, delta, target in sorted(orders, key=lambda o: o[1] > 0):
             why = reason if isinstance(reason, str) else reason.get(symbol, "")
             self.order(symbol, delta, reason=why, target_weight=target)
+
+    def _within_equity(
+        self, orders: list[tuple[str, float, float]], equity: float
+    ) -> list[tuple[str, float, float]]:
+        after = {symbol: self.quantity(symbol) for symbol in self.positions}
+        for symbol, delta, _ in orders:
+            after[symbol] = after.get(symbol, 0.0) + delta
+        gross = 0.0
+        for symbol, quantity in after.items():
+            price = self.price(symbol)
+            gross += abs(quantity) * (price if math.isfinite(price) else 0.0)
+        buys = sum(d * self.price(s) for s, d, _ in orders if d > 0)
+        if gross <= equity * (1 + 1e-12) or buys <= 0:
+            return orders
+        scale = max(0.0, 1.0 - (gross - equity) / buys)
+        return [(s, d * scale if d > 0 else d, t) for s, d, t in orders]
 
     def drain(self) -> list[OrderIntent]:
         """Hand the collected intents to the runtime (and forget them)."""
         intents, self._intents = self._intents, []
         return intents
+
+
+def _whole(held: float, delta: float) -> float:
+    """The change that leaves a whole number of shares at or below ``held + delta``."""
+    return float(math.floor(held + delta + EPSILON) - held)

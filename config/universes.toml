@@ -6,12 +6,13 @@
 # fine for cross-sectional research claims.
 
 [bars]
-# 12 ETFs: broad US equity, international, bonds, real estate, commodities, gold, credit.
-# SPY/EFA/IEF/VNQ/DBC are Faber's 5-asset GTAA portfolio.
+# 14 ETFs: broad US equity, international, bonds, T-bills, real estate, commodities, gold, credit.
+# SPY/EFA/IEF/VNQ/DBC are Faber's 5-asset GTAA portfolio; AGG and BIL (T-bills, the cash hurdle)
+# are for dual momentum and time-series momentum.
 etfs = [
     "SPY", "QQQ", "IWM", "DIA",
     "EFA", "EEM",
-    "IEF", "TLT", "HYG",
+    "IEF", "TLT", "HYG", "AGG", "BIL",
     "VNQ", "DBC", "GLD",
 ]
 # 38 large-cap stocks across sectors.

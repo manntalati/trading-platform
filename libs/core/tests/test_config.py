@@ -27,10 +27,10 @@ def test_missing_keys(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         Settings().require_alpaca_keys()
 
 
-def test_repo_universe_has_50_unique_symbols() -> None:
+def test_repo_universe_has_14_etfs_and_38_stocks() -> None:
     universes = load_universes(REPO_ROOT / "config" / "universes.toml")
-    assert len(universes.bars) == 50
-    assert {"SPY", "EFA", "IEF", "VNQ", "DBC"} <= set(universes.bars)
+    assert len(universes.bars) == 52
+    assert {"SPY", "EFA", "IEF", "VNQ", "DBC", "AGG", "BIL"} <= set(universes.bars)
 
 
 def test_repo_universe_has_options_underlyings() -> None:

@@ -50,9 +50,14 @@ class EngineConfig:
 
 class BacktestContext(Context):
     def __init__(
-        self, strategy: Strategy, data: MarketData, portfolio: Portfolio, fractional: bool
+        self,
+        strategy: Strategy,
+        data: MarketData,
+        portfolio: Portfolio,
+        fractional: bool,
+        sectors: Mapping[str, str] | None = None,
     ):
-        super().__init__(strategy.name, fractional=fractional)
+        super().__init__(strategy.name, fractional=fractional, sectors=sectors)
         self._data = data
         self._portfolio = portfolio
         self._symbols = strategy.symbols()
@@ -145,6 +150,8 @@ class BacktestEngine:
         data: MarketData,
         config: EngineConfig | None = None,
         risk: RiskGate | None = None,
+        *,
+        sectors: Mapping[str, str] | None = None,
     ) -> None:
         missing = sorted(set(strategy.symbols()) - set(data.symbols))
         if missing:
@@ -153,6 +160,7 @@ class BacktestEngine:
         self.data = data
         self.config = config or EngineConfig()
         self.risk: RiskGate = risk if risk is not None else AllowAll()
+        self.sectors = dict(sectors or {})
 
     def run(self) -> BacktestResult:
         data, cfg, strategy = self.data, self.config, self.strategy
@@ -162,7 +170,7 @@ class BacktestEngine:
             raise ValueError("no sessions between start and end")
 
         portfolio = Portfolio(cfg.initial_cash)
-        ctx = BacktestContext(strategy, data, portfolio, cfg.execution.fractional)
+        ctx = BacktestContext(strategy, data, portfolio, cfg.execution.fractional, self.sectors)
         execution = SimulatedExecution(data, cfg.execution)
         pending: list[Order] = []
         orders: list[Order] = []
