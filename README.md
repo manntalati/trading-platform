@@ -104,6 +104,7 @@ plus a kill switch and a per-strategy drawdown limit. See [docs/risk.md](docs/ri
 | 2 | Time-series momentum (Moskowitz, Ooi, Pedersen) | [02-ts-momentum.md](docs/strategies/02-ts-momentum.md) | backtest |
 | 3 | Cross-sectional momentum 12-1 (Jegadeesh, Titman) | [03-xs-momentum.md](docs/strategies/03-xs-momentum.md) | backtest |
 | 4 | Dual momentum (Antonacci) | [04-dual-momentum.md](docs/strategies/04-dual-momentum.md) | backtest |
+| 5 | RSI(2) mean reversion (Connors, Alvarez) | [05-rsi2.md](docs/strategies/05-rsi2.md) | backtest |
 
 ## Branches
 
