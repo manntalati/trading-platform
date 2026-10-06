@@ -1,18 +1,22 @@
 import { useEffect, useState } from "react";
+import { useApi } from "./api";
 import { useLive } from "./live";
 import Ideas from "./pages/Ideas";
 import Market from "./pages/Market";
 import Options from "./pages/Options";
 import Overview from "./pages/Overview";
+import Paper from "./pages/Paper";
 import Portfolio from "./pages/Portfolio";
 import Strategies from "./pages/Strategies";
 import System from "./pages/System";
+import type { PaperProposal } from "./types";
 
 const PAGES = [
   { path: "overview", label: "Overview" },
   { path: "portfolio", label: "Portfolio" },
   { path: "ideas", label: "Ideas" },
   { path: "strategies", label: "Strategies" },
+  { path: "paper", label: "Paper" },
   { path: "market", label: "Market" },
   { path: "options", label: "Options" },
   { path: "system", label: "System" },
@@ -51,6 +55,8 @@ export default function App() {
   const [page, setPage] = useState<Page>(currentPage);
   const [theme, setTheme] = useTheme();
   const live = useLive();
+  const waiting = useApi<PaperProposal[]>("/api/paper/proposals", 60_000);
+  const pendingCount = waiting.data?.length ?? 0;
 
   useEffect(() => {
     const onHash = () => setPage(currentPage());
@@ -80,6 +86,11 @@ export default function App() {
         {PAGES.map((p) => (
           <a key={p.path} href={`#/${p.path}`} aria-current={p.path === page ? "page" : undefined}>
             {p.label}
+            {p.path === "paper" && pendingCount > 0 && (
+              <span className="badge" aria-label={`${pendingCount} waiting for approval`}>
+                {pendingCount}
+              </span>
+            )}
           </a>
         ))}
       </nav>
@@ -88,12 +99,14 @@ export default function App() {
         {page === "portfolio" && <Portfolio live={live} />}
         {page === "ideas" && <Ideas />}
         {page === "strategies" && <Strategies />}
+        {page === "paper" && <Paper onChange={waiting.reload} />}
         {page === "market" && <Market live={live} />}
         {page === "options" && <Options />}
         {page === "system" && <System live={live} />}
       </main>
       <footer className="small muted" style={{ marginTop: 32 }}>
-        Read-only. Nothing here places orders. Ideas are research prompts, not advice.
+        Fidelity is read-only. Orders go only to Alpaca's paper account, and only ones you (or an
+        auto-approval you configured) approved. Ideas are research prompts, not advice.
       </footer>
     </div>
   );

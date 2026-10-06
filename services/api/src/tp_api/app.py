@@ -16,8 +16,10 @@ from typing import Annotated, Any
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from tp_api import __version__, queries
+from tp_api import __version__, paper, queries
+from tp_api.deps import Ctx, require_token
 from tp_api.live import (
     AlpacaQuoteSource,
     FakeQuoteSource,
@@ -81,22 +83,6 @@ def build_hub(settings: Settings, mode: QuoteMode, interval: float = 1.0) -> Liv
     )
 
 
-def require_token(request: Request) -> None:
-    token: str | None = request.app.state.token
-    if token is None:
-        return
-    header = request.headers.get("authorization", "")
-    if not secrets.compare_digest(header, f"Bearer {token}"):
-        raise HTTPException(status_code=401, detail="missing or wrong dashboard token")
-
-
-def get_context(request: Request) -> queries.Context:
-    return queries.Context(request.app.state.settings)
-
-
-Ctx = Annotated[queries.Context, Depends(get_context)]
-
-
 def create_app(
     settings: Settings | None = None,
     *,
@@ -121,6 +107,8 @@ def create_app(
             await hub.stop()
 
     app = FastAPI(title="trading-platform", version=__version__, lifespan=lifespan)
+    hosts = [h.strip() for h in settings.dashboard_hosts.split(",") if h.strip()]
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=hosts)  # DNS-rebinding guard
     app.state.settings = settings
     app.state.token = (
         settings.dashboard_token.get_secret_value() if settings.dashboard_token else None
@@ -168,6 +156,8 @@ def create_app(
     @app.get("/api/strategies/ma-timing", dependencies=auth)
     def ma_timing(c: Ctx, universe: Annotated[str, Query(pattern="^(spy|gtaa)$")] = "spy") -> Any:
         return queries.ma_timing_view(c, universe)
+
+    app.include_router(paper.router)
 
     @app.websocket("/ws/live")
     async def live(websocket: WebSocket) -> None:

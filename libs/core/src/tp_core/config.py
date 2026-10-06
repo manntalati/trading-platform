@@ -52,10 +52,19 @@ class Settings(BaseSettings):
     )
     risk_file: Path = Field(default=Path("config/risk.toml"), validation_alias="TP_RISK_FILE")
     paper_file: Path = Field(default=Path("config/paper.toml"), validation_alias="TP_PAPER_FILE")
+    # "alpaca": the Alpaca paper account (always the paper endpoint). "fake": simulated offline.
+    paper_broker: Literal["alpaca", "fake"] = Field(
+        default="alpaca", validation_alias="TP_PAPER_BROKER"
+    )
 
     # If set, the dashboard API requires it (Authorization: Bearer <token>; ?token= on the
     # WebSocket). The API binds to localhost by default; set this before exposing it anywhere.
     dashboard_token: SecretStr | None = Field(default=None, validation_alias="TP_DASHBOARD_TOKEN")
+    # Host names the dashboard answers to (DNS-rebinding protection). Add the name you reach it
+    # by (e.g. a Tailscale machine name) when serving beyond localhost. Comma-separated.
+    dashboard_hosts: str = Field(
+        default="localhost,127.0.0.1", validation_alias="TP_DASHBOARD_HOSTS"
+    )
 
     # SnapTrade personal API key (read-only link to Fidelity): https://dashboard.snaptrade.com
     snaptrade_client_id: str | None = Field(default=None, validation_alias="SNAPTRADE_CLIENT_ID")

@@ -9,9 +9,9 @@ from tp_core.storage import Lake
 from tp_ingest.jobs.bars import run_backfill
 from tp_ingest.sources.fake import FakeSource
 from tp_paper.broker import FakePaperBroker
-from tp_paper.cli import _lake_prices
 from tp_paper.config import PaperBook, Sleeve
 from tp_paper.jobs import Paper
+from tp_paper.runtime import lake_prices
 from tp_paper.store import PaperStore
 from tp_risk.limits import Limits
 from tp_risk.manager import RiskManager
@@ -79,7 +79,7 @@ def env(lake_template: Path, tmp_path: Path) -> Env:
     shutil.copytree(lake_template, root)
     lake = Lake(root)
     clock = Clock(MONTH_END_EVENING)
-    broker = FakePaperBroker(root / "state" / "fake_broker.json", _lake_prices(lake), now=clock)
+    broker = FakePaperBroker(root / "state" / "fake_broker.json", lake_prices(lake), now=clock)
     classifier = Classifier.load(REPO / "config" / "classifications.toml")
     risk = RiskManager(Limits(), classifier, FileRiskState.under(root))
     paper = Paper(PaperStore.under(root), broker, make_book(), lake, risk, classifier)

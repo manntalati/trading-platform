@@ -17,6 +17,7 @@
   --series-2: #eb6834;
   --series-3: #1baf7a;
   --series-4: #eda100;
+  --series-5: #e87ba4;
   --reference: #898781;
 
   /* status: always paired with an icon + label */
@@ -48,6 +49,7 @@
     --series-2: #d95926;
     --series-3: #199e70;
     --series-4: #c98500;
+    --series-5: #d55181;
     --good-text: #0ca30c;
     --critical-text: #e66767;
   }
@@ -69,6 +71,7 @@
   --series-2: #d95926;
   --series-3: #199e70;
   --series-4: #c98500;
+  --series-5: #d55181;
   --good-text: #0ca30c;
   --critical-text: #e66767;
 }
@@ -158,6 +161,10 @@ a {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 480px), 1fr));
 }
 
+.grid.top {
+  align-items: start;
+}
+
 .grid.cols-3 {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
 }
@@ -182,8 +189,9 @@ a {
   margin: 0 0 12px;
   color: var(--ink-2);
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 8px;
+  gap: 2px 8px;
 }
 
 .card h2 .hint {
@@ -518,4 +526,122 @@ button[aria-pressed="true"] {
   background: var(--surface-2);
   padding: 2px 6px;
   border-radius: 4px;
+}
+
+/* -- paper trading ----------------------------------------------------------------------------- */
+
+.toolbar .spacer {
+  flex: 1;
+}
+
+.badge {
+  display: inline-block;
+  min-width: 18px;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+button.danger {
+  border-color: var(--critical);
+  color: var(--critical-text);
+}
+
+button.link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font-size: 12px;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.proposal-groups {
+  display: grid;
+  gap: 16px;
+}
+
+.proposals {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.proposal {
+  background: var(--surface-2);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.proposal-head {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.proposal .side {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.proposal .reason {
+  margin: 4px 0 6px;
+  color: var(--ink-2);
+}
+
+.proposal .checks {
+  margin: 6px 0;
+  padding-left: 4px;
+  list-style: none;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.proposal .actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.proposal .actions input {
+  width: 90px;
+}
+
+.progress {
+  display: grid;
+  grid-template-columns: minmax(60px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-width: 120px;
+}
+
+.events {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
 }
