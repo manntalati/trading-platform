@@ -3,7 +3,8 @@
 Every trading session has four tasks, timed off the exchange calendar (New York time on a
 normal day):
 
-    09:10  submit      approved proposals -> market-on-open orders (window closes 09:28)
+    09:10  submit      approved proposals -> market-on-open orders (window closes 09:28;
+                       started later than that, it sends market orders instead)
     09:45  sync_open   fills from the opening auction, reconciliation
     16:30  sync_close  order updates after the close (30 min after an early close)
     18:45  propose     refresh bars if needed, mark sleeves, run strategies, risk-check;
@@ -62,12 +63,20 @@ class Task:
 
 
 def tasks_for(session: date) -> list[Task]:
-    """The four tasks of one session, from its real open and close (half days included)."""
+    """The four tasks of one session, from its real open and close (half days included).
+
+    ``submit`` normally runs at 09:10 and sends market-on-open orders. If the bot only gets to
+    it after the auction cutoff (it was started late, or was down), it still runs until 15
+    minutes before the close and sends plain market orders instead, so a late start trades the
+    same day. Likewise ``propose`` stays open until the next session's close, so a bot started
+    the morning after still turns the previous close into orders.
+    """
     open_, close = session_open(session), session_close(session)
-    next_open = session_open(next_session(session))
+    following = next_session(session)
+    next_open, next_close = session_open(following), session_close(following)
     evening = datetime.combine(session, PROPOSE_AT, tzinfo=NEW_YORK).astimezone(UTC)
     return [
-        Task("submit", session, open_ - timedelta(minutes=20), open_ - timedelta(minutes=2)),
+        Task("submit", session, open_ - timedelta(minutes=20), close - timedelta(minutes=15)),
         Task("sync_open", session, open_ + timedelta(minutes=15), close),
         Task(
             "sync_close", session, close + timedelta(minutes=30), next_open - timedelta(minutes=30)
@@ -76,7 +85,7 @@ def tasks_for(session: date) -> list[Task]:
             "propose",
             session,
             max(evening, close + timedelta(hours=1)),
-            next_open - timedelta(minutes=25),
+            next_close - timedelta(minutes=30),
         ),
     ]
 
@@ -115,7 +124,7 @@ class Bot:
                 if task.deadline > self.started_at:  # closed while we were running: say so
                     self._finish(task, "missed", "its window closed before it could run")
                 continue  # windows that closed before the bot started are simply past
-            if now < task.due:
+            if now < task.due or self._waiting_for_proposals(task, now):
                 upcoming = upcoming or task
                 continue
             retry = self.paper.store.get(f"bot:retry:{task.key}")
@@ -125,16 +134,47 @@ class Bot:
             self._run(task, now, retry)
             if self._record(task) is None:  # will retry later
                 upcoming = upcoming or task
+        self._follow_up_sync(now)
         self._heartbeat(now, upcoming)
         return upcoming
 
     def seconds_until_next(self, upcoming: Task | None) -> float:
         now = self.clock()
-        if upcoming is None:
+        wakes = []
+        if upcoming is not None:
+            wake = upcoming.due
+            retry = self.paper.store.get(f"bot:retry:{upcoming.key}")
+            if retry:
+                wake = max(wake, datetime.fromisoformat(retry["after"]))
+            wakes.append(wake)
+        follow_up = self.paper.store.get("bot:sync_after")
+        if follow_up:
+            wakes.append(datetime.fromisoformat(follow_up))
+        if not wakes:
             return self.max_sleep
-        retry = self.paper.store.get(f"bot:retry:{upcoming.key}")
-        wake = max(upcoming.due, datetime.fromisoformat(retry["after"]) if retry else upcoming.due)
-        return max(1.0, min(self.max_sleep, (wake - now).total_seconds()))
+        return max(1.0, min(self.max_sleep, (min(wakes) - now).total_seconds()))
+
+    def _waiting_for_proposals(self, task: Task, now: datetime) -> bool:
+        """``submit`` waits while the previous close's ``propose`` can still run, so a late or
+        retried propose isn't overtaken by an empty submission."""
+        if task.name != "submit":
+            return False
+        before = tasks_for(previous_session(task.session))[-1]  # its propose
+        return self._record(before) is None and now < before.deadline
+
+    def _follow_up_sync(self, now: datetime) -> None:
+        """A sync a couple of minutes after market orders went out, to record their fills."""
+        due = self.paper.store.get("bot:sync_after")
+        if not due or now < datetime.fromisoformat(due):
+            return
+        self.paper.store.put("bot:sync_after", None)
+        try:
+            result = jobs.sync(self.paper, now)
+        except Exception as exc:
+            self.paper.store.put("bot:sync_after", (now + timedelta(minutes=5)).isoformat())
+            self._log(f"follow-up sync failed, retrying in 5 minutes: {exc}")
+            return
+        self._log(f"follow-up sync: {result.fills} fill(s), {result.updated} update(s)")
 
     def run_forever(self, stop: threading.Event) -> None:
         while not stop.is_set():
@@ -166,11 +206,17 @@ class Bot:
         if task.name == "submit":
             if self.paper.risk.state.kill_switch() is not None:
                 return "skipped: kill switch engaged"
-            r = jobs.submit(self.paper, now)
-            return (
+            late = now >= session_open(task.session) - timedelta(minutes=2)
+            r = jobs.submit(self.paper, now, time_in_force="day" if late else "opg")
+            message = (
                 f"{len(r.submitted)} order(s) sent, {len(r.failed)} refused, "
                 f"{len(r.expired)} expired"
             )
+            if late:
+                if r.submitted:
+                    self.paper.store.put("bot:sync_after", (now + timedelta(minutes=2)).isoformat())
+                message = f"after the opening auction cutoff, sent as market orders: {message}"
+            return message
         if task.name in ("sync_open", "sync_close"):
             s = jobs.sync(self.paper, now)
             breaks = f", {len(s.breaks)} reconciliation break(s)" if s.breaks else ""

@@ -9,6 +9,7 @@ import pytest
 from tp_paper import jobs
 from tp_paper.broker import OrderRequest
 from tp_paper.jobs import PaperError
+from tp_paper.store import PaperStore
 
 
 def propose_and_approve(env: Any) -> list[str]:
@@ -167,3 +168,44 @@ def test_status_and_decisions_work_without_a_broker(env: Any) -> None:
     with pytest.raises(PaperError, match="canceling open orders failed"):
         jobs.kill(env.paper, "drill", env.month_end_evening)
     assert env.paper.risk.state.kill_switch() is not None  # engaged anyway
+
+
+def test_a_new_sleeve_catches_up_instead_of_waiting_for_month_end(env: Any) -> None:
+    # 1 August is mid-month: a sleeve that has traded waits for 30 August...
+    approved = propose_and_approve(env)
+    jobs.submit(env.paper, env.at(env.next_morning))
+    jobs.sync(env.paper, env.at(env.after_open))
+    assert env.paper.store.fills(strategy="ma-timing")
+    traded = jobs.propose(env.paper, env.at(env.next_evening))
+    assert traded.proposed["ma-timing"] == 0
+
+    # ... while one that never has takes the positions its last month-end signal calls for.
+    fresh = PaperStore.under(env.root / "fresh")
+    env.paper.store = fresh
+    env.paper.broker = type(env.broker)(env.root / "fresh" / "broker.json", env.broker.prices)
+    report = jobs.propose(env.paper, env.next_evening)
+    assert report.proposed["ma-timing"] == len(approved)
+    reasons = [p.reason for p in fresh.proposals(strategy="ma-timing")]
+    assert all("month-end close" in r for r in reasons)
+
+
+def test_older_databases_gain_the_new_columns(tmp_path: Any) -> None:
+    import sqlite3
+
+    from tp_paper.store import SCHEMA
+
+    path = tmp_path / "paper.sqlite"
+    with sqlite3.connect(path) as db:  # the schema before time_in_force existed
+        db.executescript(SCHEMA.replace(",\n    time_in_force TEXT", ""))
+        db.execute(
+            "INSERT INTO proposals (id, strategy, session, symbol, side, quantity, order_type, "
+            "reference_price, reason, checks, status, created_at, updated_at) "
+            "VALUES ('a', 'ma-timing', '2024-07-31', 'SPY', 'buy', 1, 'market', 500, '', '[]', "
+            "'approved', 'x', 'x')"
+        )
+        assert "time_in_force" not in {r[1] for r in db.execute("PRAGMA table_info(proposals)")}
+    store = PaperStore(path)
+    assert store.proposal("a").time_in_force is None
+    assert store.update("a", time_in_force="day")
+    assert store.proposal("a").time_in_force == "day"
+    PaperStore(path)  # opening again is a no-op

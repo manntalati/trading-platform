@@ -64,10 +64,14 @@ class Context(ABC):
         *,
         fractional: bool = False,
         sectors: Mapping[str, str] | None = None,
+        catch_up: bool = False,
     ) -> None:
         self.strategy = strategy
         self.fractional = fractional
         self._sectors = dict(sectors or {})
+        # True when a strategy starts trading part-way through its cycle (a new paper sleeve):
+        # it should take the positions its rules call for now, not wait for the next rebalance.
+        self.catch_up = catch_up
         self._intents: list[OrderIntent] = []
 
     # -- provided by the runtime -------------------------------------------------------------------
@@ -112,6 +116,11 @@ class Context(ABC):
 
     def is_last_session_of_month(self) -> bool:
         return is_last_session_of_month(self.now)
+
+    def is_rebalance_day(self) -> bool:
+        """For monthly strategies: the last session of the month, or any session while catching
+        up (a sleeve that has never traded shouldn't sit in cash until month end)."""
+        return self.catch_up or self.is_last_session_of_month()
 
     def sector(self, symbol: str) -> str | None:
         """GICS sector of a single name (reference data from config/classifications.toml), or

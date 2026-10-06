@@ -14,7 +14,8 @@ account is read-only (portfolio tracking only); nothing here can trade it.
 `tp-paper bot` runs the whole cycle by itself, every trading day, with nothing to approve:
 
 ```
-09:10 ET  submit       queued proposals -> market-on-open orders (window closes 09:28)
+09:10 ET  submit       queued proposals -> market-on-open orders (window closes 09:28;
+                       later in the day they go out as plain market orders instead)
 09:30 ET  open         orders fill in the opening auction
 09:45 ET  sync_open    fills recorded, sleeves updated, positions reconciled with the broker
 16:30 ET  sync_close   order updates after the close (30 minutes after an early close)
@@ -43,6 +44,22 @@ It is built to be left alone:
 Run it as a service (`infra/systemd/tp-paper-bot.service`, see
 [infra/README.md](../infra/README.md)), in a terminal (`uv run tp-paper bot`), or from cron
 with `tp-paper bot --once` every five minutes.
+
+### When will I see trades?
+
+- **Right after you start it, if it's a trading day.** The bot picks up from the most recent
+  close: it proposes from it if that hasn't been done (until 30 minutes before the next close),
+  and if the opening auction has already passed it sends the orders as plain market orders
+  (until 15 minutes before the close), then syncs a couple of minutes later to record the
+  fills. Started after 15:45 ET, or on a weekend, the orders go to the next opening auction.
+- **New sleeves take their positions at once.** MA timing, both momentum strategies and dual
+  momentum rebalance on the last session of the month. A sleeve that has never traded doesn't
+  wait for that: on its first run it takes the positions its latest signal calls for (MA timing
+  uses the last month-end), then follows the monthly schedule.
+- **Most days after that are quiet.** The monthly strategies trade once a month, and RSI(2)
+  only when one of its names gets oversold (it exits on strength), so a run that proposes
+  nothing is normal. The dashboard's activity log and `tp-paper status` show what every run
+  decided, including "no trades proposed" and anything the risk checks blocked.
 
 ## Set up
 
@@ -95,7 +112,8 @@ the broker's positions; any difference is a **reconciliation break**, logged and
 `tp-paper status` shows, per sleeve: equity, return and drawdown since it started, trading days
 and trades against the gate's 60 and 30, Sharpe once there are 20 days, and **slippage**: the
 average fill price against the session's official open, in basis points, next to the 5 bps the
-backtest assumes.
+backtest assumes. Only opening-auction fills count; market orders sent later in the day (after a
+late start) fill at intraday prices that the open says nothing about.
 
 Risk applies at two moments: when proposals are made (all checks, against the whole account,
 with earlier proposals counted), and at submission (kill switch; disabled strategies can't buy).

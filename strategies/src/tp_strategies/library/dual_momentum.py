@@ -62,7 +62,7 @@ class DualMomentum(Strategy):
         return list(dict.fromkeys([self.us, self.international, self.bonds, self.cash]))
 
     def on_bar(self, ctx: Context) -> None:
-        if not ctx.is_last_session_of_month():
+        if not ctx.is_rebalance_day():
             return
         closes = ctx.history("close", lookback=self.lookback + 1)
         if len(closes) < self.lookback + 1:

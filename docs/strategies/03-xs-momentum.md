@@ -28,7 +28,7 @@ and holders selling winners too early.
 | Signal | Last session of the month: return from 252 sessions ago to 21 sessions ago ("12-1") |
 | Selection | The top 10 by that score, at most 3 per GICS sector (from `config/classifications.toml`) |
 | Sizing | Equal weight, 10% each, the rest cash (so it stays inside the 10% position and 30% sector caps) |
-| Rebalance | Full monthly rebalance back to 10% each (trimming drift is what keeps sectors under 30%) |
+| Rebalance | Full monthly rebalance back to 10% each (trimming drift is what keeps sectors under 30%); a new paper sleeve takes its first positions at once |
 | Options | `require_positive=true` adds an absolute filter: only names with a positive score |
 | Execution | Next session's open, 5 bps slippage, whole shares |
 

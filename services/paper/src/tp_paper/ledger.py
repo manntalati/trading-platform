@@ -95,8 +95,10 @@ class PaperContext(Context):
         t: int,
         portfolio: Portfolio,
         sectors: Mapping[str, str] | None = None,
+        *,
+        catch_up: bool = False,
     ) -> None:
-        super().__init__(strategy.name, fractional=False, sectors=sectors)
+        super().__init__(strategy.name, fractional=False, sectors=sectors, catch_up=catch_up)
         self._data = data
         self._t = t
         self._portfolio = portfolio

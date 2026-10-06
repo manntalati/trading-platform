@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS proposals (
     submitted_at TEXT,
     filled_quantity REAL NOT NULL DEFAULT 0,
     avg_fill_price REAL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    time_in_force TEXT
 );
 CREATE INDEX IF NOT EXISTS proposals_by_status ON proposals (status);
 CREATE INDEX IF NOT EXISTS proposals_by_strategy ON proposals (strategy, session);
@@ -83,6 +84,9 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
+# Columns added after the first release, added to older databases when they are opened.
+ADDED_COLUMNS = {"proposals": {"time_in_force": "TEXT"}}
+
 OPEN_AT_BROKER = ("submitted", "partially_filled")
 TERMINAL = ("rejected", "blocked", "expired", "filled", "canceled", "failed")
 
@@ -113,6 +117,7 @@ class Proposal:
     submitted_at: str | None = None
     filled_quantity: float = 0.0
     avg_fill_price: float | None = None
+    time_in_force: str | None = None  # how it was sent: "opg" (the opening auction) or "day"
 
     @property
     def order_quantity(self) -> float:
@@ -156,6 +161,11 @@ class PaperStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as db:
             db.executescript(SCHEMA)
+            for table, added in ADDED_COLUMNS.items():
+                have = {row["name"] for row in db.execute(f"PRAGMA table_info({table})")}
+                for column, kind in added.items():
+                    if column not in have:
+                        db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
 
     @classmethod
     def under(cls, data_root: Path) -> PaperStore:
