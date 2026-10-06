@@ -270,8 +270,13 @@ def propose(paper: Paper, now: datetime, *, force: bool = False) -> ProposeRepor
         if store.proposals(strategy=name, status=OPEN_AT_BROKER):
             report.skipped[name] = "orders still open at the broker"
             continue
-        portfolio = sleeve_portfolio(sleeve.capital, [f for f in fills if f.strategy == name])
-        ctx = PaperContext(sleeve.strategy, data, t, portfolio, paper.classifier.sectors)
+        mine = [f for f in fills if f.strategy == name]
+        portfolio = sleeve_portfolio(sleeve.capital, mine)
+        # A sleeve that has never traded takes the positions its rules call for today instead
+        # of waiting for its next scheduled rebalance (month end, for most strategies).
+        ctx = PaperContext(
+            sleeve.strategy, data, t, portfolio, paper.classifier.sectors, catch_up=not mine
+        )
         try:
             sleeve.strategy.on_bar(ctx)
         except Exception as exc:  # one broken strategy must not stop the others
@@ -405,20 +410,20 @@ class SubmitReport:
     expired: list[str] = field(default_factory=list)
 
 
-def submit(paper: Paper, now: datetime) -> SubmitReport:
+def submit(
+    paper: Paper, now: datetime, *, time_in_force: TimeInForce | None = None
+) -> SubmitReport:
     """Send approved proposals from the latest session to the broker (sells first); proposals
-    still waiting for a decision expire."""
+    still waiting for a decision expire. ``time_in_force`` overrides the book's ("opg" for the
+    opening auction, "day" for market orders during the session)."""
+    tif: TimeInForce = time_in_force or paper.time_in_force
     risk_state = paper.risk.state
     kill = risk_state.kill_switch()
     if kill is not None:
         paper.store.log("submit", f"refused: kill switch engaged ({kill.reason})")
         raise PaperError(f"kill switch engaged ({kill.reason}); nothing submitted")
     local = now.astimezone(NEW_YORK)
-    if (
-        paper.time_in_force == "opg"
-        and is_session(local.date())
-        and time(9, 28) <= local.time() < time(19, 0)
-    ):
+    if tif == "opg" and is_session(local.date()) and time(9, 28) <= local.time() < time(19, 0):
         raise PaperError(
             "market-on-open orders are only accepted from 7:00pm to 9:28am ET; submit before "
             "9:28, or use --tif day to trade during market hours"
@@ -453,7 +458,7 @@ def submit(paper: Paper, now: datetime) -> SubmitReport:
             symbol=p.symbol,
             side="buy" if p.side == "buy" else "sell",
             quantity=p.order_quantity,
-            time_in_force=paper.time_in_force,
+            time_in_force=tif,
             limit_price=p.limit_price,
         )
         try:
@@ -471,6 +476,7 @@ def submit(paper: Paper, now: datetime) -> SubmitReport:
             status=order.status,
             broker_order_id=order.id,
             submitted_at=order.submitted_at or now.isoformat(),
+            time_in_force=tif,
         )
         report.submitted.append(p.id)
     summary = f"{len(report.submitted)} order(s) sent"
@@ -525,6 +531,9 @@ def status(paper: Paper, now: datetime) -> dict[str, Any]:
     except PaperError:
         data = None
     prices = data.closes(len(data.adjusted) - 1) if data else {}
+    # Slippage is measured against the official open, so only opening-auction fills count
+    # (market orders sent during the session, after a late start, fill at intraday prices).
+    intraday = {p.id for p in store.proposals() if p.time_in_force == "day"}
     sleeves = []
     names = [s.name for s in paper.book.sleeves] + sorted(
         {f.strategy for f in fills} - {s.name for s in paper.book.sleeves}
@@ -559,7 +568,9 @@ def status(paper: Paper, now: datetime) -> dict[str, Any]:
                 "positions": {s: p.quantity for s, p in portfolio.positions.items()},
                 "trading_days": len(history),
                 "trades": len(mine),
-                "slippage_bps": _slippage_bps(mine, data),
+                "slippage_bps": _slippage_bps(
+                    [f for f in mine if f.proposal_id not in intraday], data
+                ),
                 "modeled_slippage_bps": CostModel().slippage_bps,
                 "gate": {"days": [len(history), GATE_DAYS], "trades": [len(mine), GATE_TRADES]},
                 "disabled": disabled.reason if disabled else None,

@@ -28,7 +28,7 @@ buy-and-hold investors sitting through long declines.
 | Signal | Last session of the month: trailing 12-month (252-session) total return of each asset vs T-bills (BIL) over the same window; long if it beats T-bills, else flat |
 | Sizing | Inverse-volatility slices across the whole universe (63-session realized volatility), so each asset carries a similar share of risk; a flat asset's slice stays in cash |
 | Leverage and shorts | None. The paper is long/short and scales each futures position to a fixed volatility, which needs leverage; this is the unlevered long/flat translation |
-| Rebalance | Monthly; drift trims under 1% of the sleeve are skipped |
+| Rebalance | Monthly; drift trims under 1% of the sleeve are skipped; a new paper sleeve takes its first positions at once |
 | Execution | Next session's open (market-on-open), 5 bps slippage |
 
 ## What the paper reports (to check against)

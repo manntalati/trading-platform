@@ -26,7 +26,7 @@ investors who ride bear markets down.
 | Absolute momentum | Last session of the month: if SPY's trailing 12-month return beats BIL's, stay in equities; otherwise hold AGG |
 | Relative momentum | In equities, hold whichever of SPY and EFA had the higher 12-month return |
 | Sizing | 100% of the sleeve in the one chosen ETF |
-| Rebalance | Monthly; drift under 5% is ignored |
+| Rebalance | Monthly; drift under 5% is ignored; a new paper sleeve takes its first positions at once |
 | Execution | Next session's open, 5 bps slippage |
 
 Proxies: Antonacci used the S&P 500, MSCI ACWI ex-US (developed and emerging) and the Barclays

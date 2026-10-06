@@ -82,7 +82,7 @@ class MyStrategy(Strategy):
         return list(self.assets)
 
     def on_bar(self, ctx: Context) -> None:
-        if not ctx.is_last_session_of_month():
+        if not ctx.is_rebalance_day():
             return
         closes = ctx.history("close", lookback=self.lookback + 1)
         momentum = closes.iloc[-1] / closes.iloc[0] - 1
@@ -101,6 +101,11 @@ Rules:
   produce intents; whether they become orders is decided outside the strategy.
 - Give every order a `reason`. In paper trading it is what you read before approving it.
 - Keep no state between bars: paper trading starts a fresh process each day.
+- A monthly strategy checks `ctx.is_rebalance_day()` rather than `is_last_session_of_month()`:
+  it is the month's last session in a backtest, and also any session on which a new paper
+  sleeve hasn't traded yet, so the sleeve takes its positions straight away instead of sitting
+  in cash until month end. The signal must still make sense on that day (MA timing, for one,
+  uses the latest completed month).
 - Reference data comes through the context too: `ctx.sector(symbol)` gives the GICS sector from
   `config/classifications.toml`.
 - Size inside the risk limits rather than relying on rejections: `order_target_weights` already

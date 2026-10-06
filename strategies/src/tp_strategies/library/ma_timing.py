@@ -32,7 +32,7 @@ class MaTiming(Strategy):
         return list(self.assets)
 
     def on_bar(self, ctx: Context) -> None:
-        if not ctx.is_last_session_of_month():
+        if not ctx.is_rebalance_day():
             return
         month_end = month_end_closes(ctx.history("close"))
         if len(month_end) < self.months:

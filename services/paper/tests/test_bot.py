@@ -19,7 +19,7 @@ def ny(d: date, hour: int, minute: int = 0) -> datetime:
     return datetime(d.year, d.month, d.day, hour, minute, tzinfo=NEW_YORK).astimezone(UTC)
 
 
-JUL31, AUG1 = date(2024, 7, 31), date(2024, 8, 1)
+JUL31, AUG1, AUG2 = date(2024, 7, 31), date(2024, 8, 1), date(2024, 8, 2)
 
 
 @pytest.fixture
@@ -37,12 +37,13 @@ def outcome(env: Any, key: str) -> str | None:
 def test_each_session_has_four_tasks_on_exchange_hours() -> None:
     names = {t.name: t for t in tasks_for(AUG1)}
     assert names["submit"].due == ny(AUG1, 9, 10)
-    assert names["submit"].deadline == ny(AUG1, 9, 28)
+    assert names["submit"].deadline == ny(AUG1, 15, 45)  # late: market orders until then
     assert names["sync_open"].due == ny(AUG1, 9, 45)
     assert names["sync_close"].due == ny(AUG1, 16, 30)
     assert names["propose"].due == ny(AUG1, 18, 45)
-    assert names["propose"].deadline == ny(date(2024, 8, 2), 9, 5)  # before the next submit
+    assert names["propose"].deadline == ny(AUG2, 15, 30)  # a morning start still proposes
     half_day = {t.name: t for t in tasks_for(date(2024, 7, 3))}
+    assert half_day["submit"].deadline == ny(date(2024, 7, 3), 12, 45)
     assert half_day["sync_close"].due == ny(date(2024, 7, 3), 13, 30)
     upcoming = schedule(ny(AUG1, 12))
     assert [t.due for t in upcoming] == sorted(t.due for t in upcoming)
@@ -69,6 +70,8 @@ def test_a_day_runs_itself_without_any_approval(auto: Any) -> None:
     auto.at(ny(AUG1, 9, 12))
     bot.step()
     assert outcome(auto, "submit:2024-08-01") == "done"
+    assert {p.time_in_force for p in store.proposals(status="submitted")} == {"opg"}
+    assert store.get("bot:sync_after") is None
     auto.at(ny(AUG1, 10))
     bot.step()
     assert outcome(auto, "sync_open:2024-08-01") == "done"
@@ -98,10 +101,85 @@ def test_a_window_that_closes_while_running_is_recorded_as_missed(auto: Any) -> 
     bot = Bot(auto.paper, clock=auto.clock)
     auto.at(ny(JUL31, 19))
     bot.step()
-    auto.at(ny(AUG1, 10))  # slept through 09:10-09:28 (laptop asleep, say)
+    auto.at(ny(AUG1, 16, 5))  # slept through the whole session (laptop asleep, say)
     bot.step()
     assert outcome(auto, "submit:2024-08-01") == "missed"
+    assert outcome(auto, "sync_open:2024-08-01") == "missed"
     assert any("submit:2024-08-01 missed" in e["message"] for e in auto.paper.store.events())
+
+
+def test_a_bot_started_mid_session_trades_the_same_day(auto: Any) -> None:
+    """Started at 10am on a quiet mid-month Friday with nothing traded yet: it proposes from
+    the previous close (sleeves that never traded take their positions now instead of waiting
+    for month end) and sends market orders, since the opening auction has passed."""
+    store = auto.paper.store
+    bot = Bot(auto.paper, clock=auto.clock)
+    start = auto.at(ny(AUG2, 10))
+    nxt = bot.step()
+    assert outcome(auto, "propose:2024-08-01") == "done"
+    submit = store.get("bot:task:submit:2024-08-02")
+    assert submit["outcome"] == "done"
+    assert submit["message"].startswith("after the opening auction cutoff, sent as market orders")
+    ma = store.proposals(strategy="ma-timing", session="2024-08-01")
+    assert ma  # 1 August is not a month end: this is the catch-up
+    assert {(p.status, p.time_in_force, p.decided_by) for p in ma} == {("submitted", "day", "auto")}
+    assert not any("missed" in e["message"] for e in store.events())  # old windows are past
+
+    # A follow-up sync shortly after, to record the market orders' fills.
+    assert store.get("bot:sync_after") == (start + timedelta(minutes=2)).isoformat()
+    assert bot.seconds_until_next(nxt) == pytest.approx(120)
+    auto.at(start + timedelta(minutes=3))
+    bot.step()
+    assert store.get("bot:sync_after") is None
+    assert any(e["message"].startswith("follow-up sync") for e in store.events())
+
+    auto.at(ny(AUG2, 16, 35))  # the simulator fills day orders at the close
+    bot.step()
+    fills = store.fills(strategy="ma-timing")
+    assert len(fills) == len(ma)
+    assert {f.session for f in fills} == {"2024-08-02"}
+    sleeve = next(
+        s
+        for s in jobs.status(auto.paper, auto.clock.now)["sleeves"]
+        if s["strategy"] == "ma-timing"
+    )
+    assert sleeve["slippage_bps"] is None  # intraday fills aren't compared with the open
+
+    auto.at(ny(AUG2, 19))  # having traded, the sleeve is back on its monthly schedule
+    bot.step()
+    assert outcome(auto, "propose:2024-08-02") == "done"
+    assert store.proposals(strategy="ma-timing", session="2024-08-02") == []
+
+
+def test_submission_waits_for_a_proposal_run_that_is_still_retrying(auto: Any) -> None:
+    feed_up: list[bool] = []
+
+    def refresh(now: datetime) -> str:
+        if not feed_up:
+            raise RuntimeError("feed down")
+        lake = Lake(auto.root)
+        symbols = sorted({s for sl in auto.paper.book.sleeves for s in sl.strategy.symbols()})
+        return f"bars through {run_daily(lake, FakeSource(), symbols, now=now).end}"
+
+    tuesday = date(2024, 8, 6)  # the lake stops on Friday 2 August: Monday's bars are missing
+    bot = Bot(auto.paper, refresh_bars=refresh, clock=auto.clock)
+    auto.at(ny(tuesday, 8, 55))
+    bot.step()
+    auto.at(ny(tuesday, 9, 12))
+    bot.step()
+    assert outcome(auto, "propose:2024-08-05") is None  # retrying
+    assert outcome(auto, "submit:2024-08-06") is None  # not overtaken by an empty submission
+
+    feed_up.append(True)
+    auto.at(ny(tuesday, 9, 40))
+    bot.step()
+    assert outcome(auto, "propose:2024-08-05") == "done"
+    submit = auto.paper.store.get("bot:task:submit:2024-08-06")
+    assert submit["outcome"] == "done"
+    assert "market orders" in submit["message"]
+    sent = auto.paper.store.proposals(session="2024-08-05", status="submitted")
+    assert sent
+    assert {p.time_in_force for p in sent} == {"day"}
 
 
 def test_stale_bars_are_refreshed_before_proposing(auto: Any) -> None:

@@ -28,7 +28,7 @@ reducer**; it is not expected to beat buy-and-hold on raw return in a long bull 
 | Universe | Single asset (SPY) or Faber's 5-asset GTAA: US stocks (SPY), foreign stocks (EFA), US 10-year Treasuries (IEF), REITs (VNQ), commodities (DBC) |
 | Signal | On the last trading day of the month: invested if the month-end close is above the average of the last 10 month-end closes (inclusive), else in cash |
 | Sizing | Equal `1/N` slice per asset; an asset that is out leaves its slice in cash |
-| Rebalance | Monthly, back to target weights; weights drift with prices in between |
+| Rebalance | Monthly, back to target weights; weights drift with prices in between; a new paper sleeve takes its first positions at once |
 | Prices | Split- and dividend-adjusted closes (total return) |
 | Execution | Paper: at the signal month-end close. Ours by default: the next session's close (`lag_days=1`), never the signal bar |
 | Costs | 5 bps of traded notional by default (liquid ETFs); vary it in the notebook |
