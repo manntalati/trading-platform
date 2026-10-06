@@ -8,10 +8,11 @@ A web dashboard over everything the platform collects, live while the market is 
   and performance against S&P 500, Nasdaq 100 and 60/40.
 - **Ideas**: the rules-based research ideas ([ideas.md](ideas.md)) with the numbers behind each.
 - **Strategies**: strategy 1 (10-month MA timing) on SPY and on Faber's GTAA, against buy and hold.
-- **Paper**: the strategies' proposed paper trades, each with its reason and risk checks, to
-  approve (optionally fewer shares) or reject; every sleeve's equity, drawdown, slippage and
-  progress toward the paper gate; recent orders, activity, and the kill switch
-  ([paper-trading.md](paper-trading.md)). The tab shows how many proposals are waiting.
+- **Paper**: the bot's state and next step; the orders it has queued for the next open, each
+  with its reason and risk checks and a **Don't trade** veto; proposals waiting for approval
+  (strategies on manual approval only); every sleeve's equity, drawdown, slippage and progress
+  toward the paper gate; recent orders, activity, and the kill switch
+  ([paper-trading.md](paper-trading.md)).
 - **Market / Options**: price history per symbol; IV term structure, expected move and smile from
   the daily chain snapshots.
 - **System**: last ingest, validation report, option snapshots, broker syncs, live-feed status.
@@ -65,8 +66,8 @@ All JSON. Reads (`GET`):
 | `/api/portfolio/performance?days=365` | current-holdings backtest and account TWR vs benchmarks |
 | `/api/ideas` | research ideas |
 | `/api/strategies/ma-timing?universe=spy\|gtaa` | strategy 1 vs buy and hold |
-| `/api/paper` | paper account, kill switch, reconciliation, every sleeve's progress |
-| `/api/paper/proposals?scope=pending\|recent` | proposals with reasons and risk checks |
+| `/api/paper` | paper account, bot heartbeat and next task, kill switch, reconciliation, every sleeve's progress |
+| `/api/paper/proposals?scope=pending\|queued\|recent` | proposals with reasons and risk checks |
 | `/api/paper/history` | each sleeve's equity at every close |
 | `/api/paper/events` | paper-trading activity log |
 | `/ws/live` | WebSocket: `snapshot`, then `update` messages with quotes and portfolio value |
@@ -76,7 +77,7 @@ Writes (`POST`, paper trading only; never the Fidelity account):
 | Endpoint | What |
 |---|---|
 | `/api/paper/proposals/{id}/approve` | `{"quantity": n?, "note": "..."}`: approve, optionally fewer shares |
-| `/api/paper/proposals/{id}/reject` | `{"note": "..."}` |
+| `/api/paper/proposals/{id}/reject` | `{"note": "..."}`: reject, or veto a queued order before it is sent |
 | `/api/paper/approve-all` | `{"strategy": "..."?}`: every pending proposal (of one strategy) |
 | `/api/paper/kill` | `{"reason": "..."}`: engage the kill switch and cancel open paper orders |
 

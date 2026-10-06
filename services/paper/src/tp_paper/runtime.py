@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 import pandas as pd
 
 from tp_core.bars import load_bars
-from tp_core.config import MissingCredentialsError, Settings
-from tp_core.portfolio import Classifier
+from tp_core.config import MissingCredentialsError, Settings, load_universes
+from tp_core.portfolio import Classifier, held_symbols
 from tp_core.storage import Lake
+from tp_paper.bot import BarsRefresher
 from tp_paper.broker import (
     AlpacaPaperBroker,
     FakePaperBroker,
@@ -85,3 +86,30 @@ def lake_prices(lake: Lake) -> PriceSource:
         return cache[symbol].get(day)
 
     return prices
+
+
+def bars_refresher(settings: Settings, source: str, book: PaperBook) -> BarsRefresher:
+    """The daily bars job for the bot: the universe, every strategy's symbols and anything
+    held, from Alpaca (or the synthetic source)."""
+
+    def refresh(now: datetime) -> str:
+        from tp_ingest.jobs.bars import run_daily
+        from tp_ingest.sources.base import MarketDataSource
+
+        lake = Lake(settings.data_root)
+        symbols = set(load_universes(settings.universes_file).bars)
+        symbols |= {s for sleeve in book.sleeves for s in sleeve.strategy.symbols()}
+        symbols |= set(held_symbols(lake))
+        market: MarketDataSource
+        if source == "fake":
+            from tp_ingest.sources.fake import FakeSource
+
+            market = FakeSource()
+        else:
+            from tp_ingest.sources.alpaca import AlpacaSource
+
+            market = AlpacaSource.from_settings(settings)
+        result = run_daily(lake, market, sorted(symbols), now=now)
+        return f"bars refreshed through {result.end}: {result.report.summary()}"
+
+    return refresh

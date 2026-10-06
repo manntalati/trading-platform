@@ -2,13 +2,15 @@ import { useState } from "react";
 import { postJson, useApi } from "../api";
 import { GrowthChart, useThemeColors } from "../components/charts";
 import { Card, Empty, ErrorBanner, Loading, Stat } from "../components/ui";
-import { money, num, pct, qty, timeAgo } from "../format";
-import type { GrowthPoint, PaperEvent, PaperHistory, PaperProposal, PaperSleeve, PaperStatus } from "../types";
+import { money, num, nyTime, pct, qty, timeAgo } from "../format";
+import type { GrowthPoint, PaperBot, PaperEvent, PaperHistory, PaperProposal, PaperSleeve, PaperStatus } from "../types";
 
-/** Paper trading: decide the strategies' proposals, follow each sleeve toward the paper gate. */
+/** Paper trading: the bot's queued trades (with a veto), anything waiting for approval, and
+ * each sleeve's progress toward the paper gate. */
 export default function Paper(props: { onChange?: () => void }) {
   const status = useApi<PaperStatus>("/api/paper", 30_000);
   const pending = useApi<PaperProposal[]>("/api/paper/proposals", 30_000);
+  const queued = useApi<PaperProposal[]>("/api/paper/proposals?scope=queued", 30_000);
   const recent = useApi<PaperProposal[]>("/api/paper/proposals?scope=recent&limit=15", 60_000);
   const history = useApi<PaperHistory>("/api/paper/history", 300_000);
   const events = useApi<PaperEvent[]>("/api/paper/events?limit=12", 60_000);
@@ -18,6 +20,7 @@ export default function Paper(props: { onChange?: () => void }) {
   const refresh = () => {
     status.reload();
     pending.reload();
+    queued.reload();
     recent.reload();
     events.reload();
     props.onChange?.();
@@ -49,9 +52,27 @@ export default function Paper(props: { onChange?: () => void }) {
       )}
       {s && <Tiles status={s} />}
 
-      <Card title="Waiting for your decision" hint="approved orders go out as market-on-open orders at 9:10am ET; undecided ones expire">
-        <ErrorBanner error={pending.error} />
-        {pending.data && pending.data.length > 0 ? (
+      <Card title="Queued for the next open" hint="the bot sends these as market-on-open orders at 9:10am ET">
+        <ErrorBanner error={queued.error} />
+        {queued.data && queued.data.length > 0 ? (
+          <ul className="proposals">
+            {queued.data.map((p) => (
+              <QueuedRow
+                key={p.id}
+                p={p}
+                busy={busy !== null}
+                onVeto={() => act(p.id, `/api/paper/proposals/${encodeURIComponent(p.id)}/reject`, { note: "vetoed before submission" })}
+              />
+            ))}
+          </ul>
+        ) : (
+          <Empty>Nothing queued. The bot runs the strategies after each close and queues what passes the risk checks.</Empty>
+        )}
+      </Card>
+
+      {pending.data && pending.data.length > 0 && (
+        <Card title="Waiting for your decision" hint="strategies on manual approval; undecided proposals expire at 9:10am ET">
+          <ErrorBanner error={pending.error} />
           <Proposals
             proposals={pending.data}
             busy={busy}
@@ -59,12 +80,8 @@ export default function Paper(props: { onChange?: () => void }) {
             onReject={(p) => act(p.id, `/api/paper/proposals/${encodeURIComponent(p.id)}/reject`, { note: "" })}
             onApproveAll={(strategy) => act(`all:${strategy}`, "/api/paper/approve-all", { strategy })}
           />
-        ) : (
-          <Empty>
-            Nothing to decide. Strategies propose after each close (<code>uv run tp-paper propose</code>).
-          </Empty>
-        )}
-      </Card>
+        </Card>
+      )}
 
       {s && <Sleeves sleeves={s.sleeves} gate={s.gate} />}
       {s && <EquityChart history={history.data} sleeves={s.sleeves} />}
@@ -104,7 +121,7 @@ function Tiles(props: { status: PaperStatus }) {
         value={account ? money(account.equity) : "—"}
         sub={account ? `${props.status.broker} ${account.number} · cash ${money(account.cash)}` : props.status.broker}
       />
-      <Stat label="Waiting for you" value={props.status.pending} sub="proposals to approve or reject" />
+      <BotTile bot={props.status.bot} />
       <Stat
         label="Kill switch"
         value={
@@ -125,6 +142,67 @@ function Tiles(props: { status: PaperStatus }) {
         sub={rec ? `checked ${timeAgo(rec.at)}` : "runs with every sync"}
       />
     </div>
+  );
+}
+
+const TASKS: Record<string, string> = {
+  submit: "send orders",
+  sync_open: "record fills",
+  sync_close: "after-close sync",
+  propose: "run strategies",
+};
+
+function BotTile(props: { bot: PaperBot | null }) {
+  const bot = props.bot;
+  if (!bot) {
+    return <Stat label="Bot" value="Not started" sub={<>start it with <code>uv run tp-paper bot</code></>} />;
+  }
+  const next = bot.next ? `next: ${TASKS[bot.next.task] ?? bot.next.task}, ${nyTime(bot.next.due)} ET` : "nothing scheduled";
+  return (
+    <Stat
+      label="Bot"
+      value={
+        <span>
+          <span className={`dot ${bot.alive ? "good pulse" : "critical"}`} aria-hidden="true" /> {bot.alive ? "Running" : "Stopped"}
+        </span>
+      }
+      sub={bot.alive ? next : `last seen ${timeAgo(bot.heartbeat)}`}
+    />
+  );
+}
+
+export function QueuedRow(props: { p: PaperProposal; busy: boolean; onVeto: () => void }) {
+  const { p } = props;
+  const [open, setOpen] = useState(false);
+  return (
+    <li className="proposal">
+      <div className="proposal-head">
+        <span className="side">{p.side === "buy" ? "▲ Buy" : "▼ Sell"}</span>
+        <strong>
+          {qty(p.order_quantity)} {p.symbol}
+        </strong>
+        <span className="muted">
+          ≈ {money(p.notional)} · {p.strategy}
+        </span>
+        <span className="spacer" />
+        <button disabled={props.busy} onClick={props.onVeto}>
+          Don't trade
+        </button>
+      </div>
+      <p className="reason">{p.reason}</p>
+      <button className="link" aria-expanded={open} onClick={() => setOpen(!open)}>
+        {p.checks.length} risk checks passed {open ? "▴" : "▾"}
+      </button>
+      {open && (
+        <ul className="checks">
+          {p.checks.map((c) => (
+            <li key={c.check}>
+              <span aria-label={c.passed ? "passed" : "failed"}>{c.passed ? "✓" : "✗"}</span> <code>{c.check}</code> {c.detail}
+            </li>
+          ))}
+        </ul>
+      )}
+    </li>
   );
 }
 

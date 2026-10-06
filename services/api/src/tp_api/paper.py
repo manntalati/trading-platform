@@ -69,11 +69,13 @@ def status(request: Request) -> dict[str, Any]:
 @router.get("/proposals")
 def proposals(
     request: Request,
-    scope: Annotated[Literal["pending", "recent"], Query()] = "pending",
+    scope: Annotated[Literal["pending", "queued", "recent"], Query()] = "pending",
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
 ) -> list[dict[str, Any]]:
+    """pending: waiting for you; queued: approved, going out at the next open; recent: all."""
     store = _store(request)
-    rows = store.proposals(status="pending" if scope == "pending" else None, limit=limit)
+    status = {"pending": "pending", "queued": "approved", "recent": None}[scope]
+    rows = store.proposals(status=status, limit=limit)
     return [clean(p.to_dict()) for p in rows]
 
 

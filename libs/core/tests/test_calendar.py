@@ -68,3 +68,13 @@ def test_month_end_sessions_follow_the_exchange_calendar() -> None:
     assert is_last_session_of_month(date(2024, 3, 28))
     assert not is_last_session_of_month(date(2024, 3, 27))
     assert next_session(date(2024, 3, 28)) == date(2024, 4, 1)
+
+
+def test_session_hours_follow_the_exchange_including_half_days() -> None:
+    from tp_core.calendar import NEW_YORK, previous_session, session_close, session_open
+
+    assert session_open(date(2024, 7, 3)).astimezone(NEW_YORK).hour == 9
+    assert session_close(date(2024, 7, 3)).astimezone(NEW_YORK).hour == 13  # half day
+    assert session_close(date(2024, 7, 5)).astimezone(NEW_YORK).hour == 16
+    assert session_close(date(2024, 7, 5)).tzinfo is not None
+    assert previous_session(date(2024, 7, 5)) == date(2024, 7, 3)  # skips the 4th

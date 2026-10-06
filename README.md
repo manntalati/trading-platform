@@ -109,17 +109,17 @@ plus a kill switch and a per-strategy drawdown limit. See [docs/risk.md](docs/ri
 
 ## Paper trading
 
-The library strategies trade Alpaca's **paper** account, one capital sleeve each
-(`config/paper.toml`), through the same code and risk checks as the backtests. Each evening they
-propose orders with their reasons; you approve them (or set `approval = "auto"`), and approved
-orders go out as market-on-open orders the next morning. Fills are reconciled with the broker
-and every sleeve's progress toward the plan's paper gate (60 trading days, 30 trades) is tracked.
-Nothing can trade a live account. See [docs/paper-trading.md](docs/paper-trading.md).
+A bot trades the library strategies on Alpaca's **paper** account, unattended: after each close
+it runs every strategy, risk-checks the orders and queues them; before the next open it sends
+them as market-on-open orders; then it records the fills and reconciles with the broker. Each
+strategy has its own capital sleeve (`config/paper.toml`) and its progress toward the plan's
+paper gate (60 trading days, 30 trades) is tracked on the dashboard, where you can also veto a
+queued order or stop everything. Nothing can trade a live account. See
+[docs/paper-trading.md](docs/paper-trading.md).
 
 ```bash
-uv run tp-paper propose && uv run tp-paper proposals    # after the close
-uv run tp-paper approve --all && uv run tp-paper submit # before 9:28am ET
-uv run tp-paper status                                   # add --broker fake to try it offline
+uv run tp-paper bot                       # runs the daily cycle; or the tp-paper-bot service
+uv run tp-paper status                    # add --broker fake to try it offline
 ```
 
 ## Branches

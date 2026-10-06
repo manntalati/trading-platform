@@ -195,6 +195,16 @@ export interface PaperStatus {
   sleeves: PaperSleeve[];
   pending: number;
   gate: { days: number; trades: number };
+  bot: PaperBot | null;
+}
+
+export interface PaperBot {
+  state: "running" | "stopped";
+  alive: boolean;
+  heartbeat: string | null;
+  started_at: string | null;
+  next: { task: string; session: string; due: string } | null;
+  last: { task: string; session: string; outcome: string; at: string; message: string } | null;
 }
 
 export type PaperHistory = Record<string, { session: string; equity: number }[]>;

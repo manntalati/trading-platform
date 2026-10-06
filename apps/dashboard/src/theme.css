@@ -598,6 +598,10 @@ button:disabled {
   flex-wrap: wrap;
 }
 
+.proposal-head .spacer {
+  flex: 1;
+}
+
 .proposal .side {
   font-size: 12px;
   font-weight: 600;

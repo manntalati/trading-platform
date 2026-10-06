@@ -85,3 +85,23 @@ def next_session(day: date) -> date:
     if not upcoming:
         raise LookupError(f"no XNYS session in the 14 days after {day}")
     return upcoming[0]
+
+
+def previous_session(day: date) -> date:
+    """The last session strictly before ``day``."""
+    earlier = sessions(day - timedelta(days=14), day - timedelta(days=1))
+    if not earlier:
+        raise LookupError(f"no XNYS session in the 14 days before {day}")
+    return earlier[-1]
+
+
+def session_open(day: date) -> datetime:
+    """Regular-hours open of session ``day`` (UTC-aware)."""
+    ts = xnys().session_open(pd.Timestamp(day))
+    return ts.to_pydatetime().astimezone(UTC)  # type: ignore[no-any-return]
+
+
+def session_close(day: date) -> datetime:
+    """Regular-hours close of session ``day`` (UTC-aware); 13:00 New York on half days."""
+    ts = xnys().session_close(pd.Timestamp(day))
+    return ts.to_pydatetime().astimezone(UTC)  # type: ignore[no-any-return]
