@@ -122,6 +122,10 @@ def test_approve_all_and_history_and_events(client: TestClient) -> None:
     assert pending(client) == []
     recent = client.get("/api/paper/proposals?scope=recent").json()
     assert {r["status"] for r in recent} == {"approved"}
+    queued = client.get("/api/paper/proposals?scope=queued").json()
+    assert len(queued) == count
+    veto = client.post(f"/api/paper/proposals/{queued[0]['id']}/reject", json={}, headers=WRITE)
+    assert veto.json()["status"] == "rejected"
     assert isinstance(client.get("/api/paper/history").json(), dict)
     assert any(e["kind"] == "propose" for e in client.get("/api/paper/events").json())
 

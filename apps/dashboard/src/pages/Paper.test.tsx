@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { vi } from "vitest";
 import { postJson } from "../api";
 import type { PaperProposal } from "../types";
-import { ProposalRow } from "./Paper";
+import { ProposalRow, QueuedRow } from "./Paper";
 
 const proposal: PaperProposal = {
   id: "ma-timing-20240731-SPY-buy-1",
@@ -61,6 +61,16 @@ describe("ProposalRow", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Reject" }));
     expect(onReject).toHaveBeenCalledWith(proposal);
+  });
+});
+
+describe("QueuedRow", () => {
+  it("shows what the bot will trade and lets you stop it", () => {
+    const onVeto = vi.fn();
+    render(<QueuedRow p={{ ...proposal, status: "approved", decided_by: "auto" }} busy={false} onVeto={onVeto} />);
+    expect(screen.getByText(/ma-timing/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Don't trade" }));
+    expect(onVeto).toHaveBeenCalledTimes(1);
   });
 });
 

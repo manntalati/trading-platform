@@ -47,6 +47,7 @@ from tp_trading.risk import Book
 log = logging.getLogger(__name__)
 GATE_DAYS = 60  # paper gate: trading days ...
 GATE_TRADES = 30  # ... and trades, before a strategy can be considered for live micro
+BOT_HEARTBEAT_STALE = timedelta(minutes=15)  # the bot writes one at least every 5 minutes
 
 
 class PaperError(RuntimeError):
@@ -369,10 +370,14 @@ def decide(
     quantity: float | None = None,
     note: str = "",
 ) -> Proposal:
-    """Approve (optionally for fewer shares) or reject a pending proposal."""
+    """Approve (optionally for fewer shares) or reject a pending proposal.
+
+    Rejecting also works on an approved proposal that hasn't been sent yet: the veto on
+    automatic trading."""
     p = store.proposal(proposal_id)
-    if p.status != "pending":
-        raise PaperError(f"{proposal_id} is {p.status}, not pending")
+    allowed = ("pending",) if approve else ("pending", "approved")
+    if p.status not in allowed:
+        raise PaperError(f"{proposal_id} is {p.status}, not {' or '.join(allowed)}")
     values: dict[str, Any] = {"decided_at": now_iso(), "decided_by": by, "note": note}
     if approve:
         if quantity is not None:
@@ -385,7 +390,7 @@ def decide(
         values["status"] = "approved"
     else:
         values["status"] = "rejected"
-    if not store.update(proposal_id, expect=("pending",), **values):
+    if not store.update(proposal_id, expect=allowed, **values):
         raise PaperError(f"{proposal_id} changed while deciding; look again")
     return store.proposal(proposal_id)
 
@@ -583,7 +588,22 @@ def status(paper: Paper, now: datetime) -> dict[str, Any]:
         "reconciliation": store.get("reconciliation"),
         "sleeves": sleeves,
         "pending": len(store.proposals(status="pending")),
+        "bot": bot_status(store, now),
     }
+
+
+def bot_status(store: PaperStore, now: datetime) -> dict[str, Any] | None:
+    """The bot's last heartbeat, next task and last result; ``alive`` if it beat recently."""
+    status: dict[str, Any] | None = store.get("bot:status")
+    if not status:
+        return None
+    beat = status.get("heartbeat")
+    alive = (
+        status.get("state") == "running"
+        and beat is not None
+        and now - datetime.fromisoformat(beat) < BOT_HEARTBEAT_STALE
+    )
+    return status | {"alive": alive}
 
 
 def _slippage_bps(fills: Sequence[FillRecord], data: PaperData | None) -> float | None:

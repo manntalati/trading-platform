@@ -4,9 +4,11 @@
 #
 # capital   the strategy's sleeve: it sizes orders as if this were its whole account. The sleeves
 #           together must fit inside the paper account's equity (Alpaca paper starts at $100k).
-# approval  "manual": each proposal waits for you (dashboard or `tp-paper approve`); anything not
-#           approved by submission time expires. "auto": proposals that pass risk are approved
-#           as proposed. Paper only; the plan requires a human on every live order.
+# approval  "auto": proposals that pass the risk checks are approved on the spot and the bot
+#           (`tp-paper bot`) trades them at the next open; nothing waits for you. "manual": each
+#           proposal waits for you (dashboard or `tp-paper approve`) and expires if not approved
+#           by submission time. Auto is for paper only: the plan keeps a person on every order
+#           once real money is involved.
 # params    strategy parameters, as for `tp-backtest run NAME -p key=value`.
 #
 # Start with fewer strategies if you prefer: delete a block to stop it (its positions stay in
@@ -14,25 +16,25 @@
 
 [strategies.ma-timing]
 capital = 20000
-approval = "manual"
+approval = "auto"
 params = {}
 
 [strategies.ts-momentum]
 capital = 20000
-approval = "manual"
+approval = "auto"
 params = {}
 
 [strategies.xs-momentum]
 capital = 20000
-approval = "manual"
+approval = "auto"
 params = {}
 
 [strategies.dual-momentum]
 capital = 20000
-approval = "manual"
+approval = "auto"
 params = {}
 
 [strategies.rsi2]
 capital = 20000
-approval = "manual"
+approval = "auto"
 params = {}

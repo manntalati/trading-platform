@@ -83,6 +83,8 @@ def test_decisions_reject_or_approve_fewer_shares_never_more(env: Any) -> None:
     assert (rejected.status, rejected.note) == ("rejected", "not today")
     with pytest.raises(PaperError, match="is rejected, not pending"):
         jobs.decide(env.paper.store, second.id, approve=True)
+    vetoed = jobs.decide(env.paper.store, smaller.id, approve=False, note="changed my mind")
+    assert vetoed.status == "rejected"  # an approved, unsent proposal can still be stopped
 
 
 def test_market_on_open_orders_need_the_overnight_window(env: Any) -> None:

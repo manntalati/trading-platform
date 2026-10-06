@@ -8,6 +8,7 @@
     tp-paper submit                       before 9:28am ET: market-on-open orders
     tp-paper sync                         after the open: fills and reconciliation
     tp-paper kill --reason "..."          block new orders and cancel open ones
+    tp-paper bot                          all of the above, unattended (see tp_paper.bot)
 
 ``--broker fake`` simulates the account from the lake's bars (no keys needed).
 """
@@ -16,6 +17,8 @@ from __future__ import annotations
 
 import json
 import logging
+import signal
+import threading
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
@@ -23,8 +26,9 @@ import typer
 
 from tp_core.config import MissingCredentialsError, Settings
 from tp_paper import jobs
+from tp_paper.bot import Bot
 from tp_paper.jobs import Paper, PaperError
-from tp_paper.runtime import open_paper
+from tp_paper.runtime import bars_refresher, open_paper
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 STATE: dict[str, Any] = {"broker": "alpaca"}
@@ -82,6 +86,13 @@ def status(as_json: Annotated[bool, typer.Option("--json")] = False) -> None:
         )
     kill = report["kill_switch"]
     typer.echo(f"kill switch: {'ENGAGED ' + kill['reason'] if kill else 'off'}")
+    bot_ = report["bot"]
+    if bot_ is None:
+        typer.echo("bot: never run (tp-paper bot)")
+    else:
+        nxt = bot_.get("next") or {}
+        state = "running" if bot_["alive"] else f"NOT RUNNING (last seen {bot_.get('heartbeat')})"
+        typer.echo(f"bot: {state}; next {nxt.get('task', '—')} at {nxt.get('due', '—')}")
     rec = report["reconciliation"]
     if rec:
         typer.echo(
@@ -239,6 +250,38 @@ def kill(reason: Annotated[str, typer.Option(help="Why; shown on every refused o
     typer.echo(
         f"kill switch ENGAGED; {canceled} open order(s) canceled. `tp-risk resume` lifts it."
     )
+
+
+@app.command()
+def bot(
+    bars: Annotated[
+        str, typer.Option(help="Where the bot refreshes daily bars from: alpaca, fake, or off.")
+    ] = "alpaca",
+    once: Annotated[
+        bool, typer.Option(help="Run whatever is due now and exit (for cron).")
+    ] = False,
+) -> None:
+    """Run the paper-trading cycle unattended: refresh bars, propose, submit, sync, repeat."""
+    if bars not in ("alpaca", "fake", "off"):
+        raise typer.BadParameter("--bars must be alpaca, fake or off")
+    settings = Settings()
+    paper = _paper()
+    refresher = None if bars == "off" else bars_refresher(settings, bars, paper.book)
+    runner = Bot(paper, refresh_bars=refresher)
+    manual = [s.name for s in paper.book.sleeves if s.approval != "auto"]
+    if manual:
+        typer.echo(f"note: {', '.join(manual)} use manual approval; their proposals wait for you")
+    if once:
+        upcoming = runner.step()
+        typer.echo(
+            f"next: {upcoming.key} at {upcoming.due:%Y-%m-%d %H:%M} UTC" if upcoming else "idle"
+        )
+        return
+    stop = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: stop.set())
+    signal.signal(signal.SIGINT, lambda *_: stop.set())
+    typer.echo(f"paper bot running on {paper.broker.name}; Ctrl-C to stop")
+    runner.run_forever(stop)
 
 
 def main() -> None:

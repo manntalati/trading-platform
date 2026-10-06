@@ -7,6 +7,7 @@ dependencies = [
     "alpaca-py>=0.43",
     "pandas>=2.2",
     "tp-core",
+    "tp-ingest",
     "tp-risk",
     "tp-strategies",
     "tp-trading",
@@ -18,6 +19,7 @@ tp-paper = "tp_paper.cli:main"
 
 [tool.uv.sources]
 tp-core = { workspace = true }
+tp-ingest = { workspace = true }
 tp-risk = { workspace = true }
 tp-strategies = { workspace = true }
 tp-trading = { workspace = true }

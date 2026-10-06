@@ -20,7 +20,7 @@ def test_repo_book_runs_every_library_strategy_inside_a_default_paper_account() 
     book = PaperBook.load(REPO / "config" / "paper.toml")
     assert {s.name for s in book.sleeves} == set(REGISTRY)
     assert book.capital <= 100_000  # Alpaca paper accounts start at $100k
-    assert {s.approval for s in book.sleeves} == {"manual"}
+    assert {s.approval for s in book.sleeves} == {"auto"}  # the bot trades unattended
 
 
 @pytest.mark.parametrize(
@@ -123,3 +123,11 @@ def test_cli_without_keys_points_at_the_fake_broker(
     result = CliRunner().invoke(cli.app, ["--broker", "alpaca", "status"])
     assert result.exit_code == 2
     assert "--broker fake" in result.output
+
+
+def test_bot_once_runs_what_is_due_and_reports_the_next_task(cli_env: Path) -> None:
+    result = CliRunner().invoke(cli.app, ["bot", "--once", "--bars", "off"])
+    assert result.exit_code == 0, result.output
+    assert "next: " in result.output
+    status = CliRunner().invoke(cli.app, ["status"])
+    assert "bot: running; next " in status.output

@@ -1,0 +1,23 @@
+# The paper-trading bot: runs unattended, all day, every day. It follows the exchange calendar
+# itself (09:10 submit, 09:45 and 16:30 sync, 18:45 refresh bars + propose, New York time, early
+# closes included) and trades every sleeve whose approval is "auto" in config/paper.toml.
+# Stop it, or `tp-paper kill`, to stop trading.
+[Unit]
+Description=trading-platform: paper-trading bot
+Wants=network-online.target
+After=network-online.target
+OnFailure=tp-notify-failure@%n.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/trading-platform
+ExecStart=%h/trading-platform/.venv/bin/tp-paper bot
+Restart=on-failure
+RestartSec=60
+# SIGTERM lets it finish the current step and record that it stopped.
+KillSignal=SIGTERM
+TimeoutStopSec=60
+Nice=5
+
+[Install]
+WantedBy=default.target
