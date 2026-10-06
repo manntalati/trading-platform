@@ -18,6 +18,7 @@
   --series-3: #1baf7a;
   --series-4: #eda100;
   --series-5: #e87ba4;
+  --series-6: #008300;
   --reference: #898781;
 
   /* status: always paired with an icon + label */
@@ -50,6 +51,7 @@
     --series-3: #199e70;
     --series-4: #c98500;
     --series-5: #d55181;
+    --series-6: #008300;
     --good-text: #0ca30c;
     --critical-text: #e66767;
   }
@@ -72,6 +74,7 @@
   --series-3: #199e70;
   --series-4: #c98500;
   --series-5: #d55181;
+  --series-6: #008300;
   --good-text: #0ca30c;
   --critical-text: #e66767;
 }

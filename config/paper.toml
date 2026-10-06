@@ -12,29 +12,37 @@
 # params    strategy parameters, as for `tp-backtest run NAME -p key=value`.
 #
 # Start with fewer strategies if you prefer: delete a block to stop it (its positions stay in
-# the account until you sell them).
+# the account until you sell them). Changing a sleeve's capital moves money in or out of it: it
+# isn't counted as a gain or a loss, and the strategy rebalances to the new amount the next day.
 
 [strategies.ma-timing]
-capital = 20000
+capital = 18000
 approval = "auto"
 params = {}
 
 [strategies.ts-momentum]
-capital = 20000
+capital = 18000
 approval = "auto"
 params = {}
 
 [strategies.xs-momentum]
-capital = 20000
+capital = 18000
 approval = "auto"
 params = {}
 
 [strategies.dual-momentum]
-capital = 20000
+capital = 18000
 approval = "auto"
 params = {}
 
 [strategies.rsi2]
-capital = 20000
+capital = 18000
+approval = "auto"
+params = {}
+
+# Deliberately high risk: 3x leveraged ETFs, rebalanced every day, so it trades most days. A
+# smaller sleeve, and its own 50% drawdown limit (config/risk.toml). Paper only.
+[strategies.leveraged-momentum]
+capital = 10000
 approval = "auto"
 params = {}

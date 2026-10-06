@@ -1,7 +1,7 @@
 """The paper cycle end to end against the simulated broker, with a scripted clock."""
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 import pytest
@@ -209,3 +209,101 @@ def test_older_databases_gain_the_new_columns(tmp_path: Any) -> None:
     assert store.update("a", time_in_force="day")
     assert store.proposal("a").time_in_force == "day"
     PaperStore(path)  # opening again is a no-op
+
+
+def _fill_month_end_orders(env: Any) -> None:
+    propose_and_approve(env)
+    jobs.submit(env.paper, env.at(env.next_morning))
+    jobs.sync(env.paper, env.at(env.after_open))
+    jobs.sync(env.paper, env.at(env.next_evening))  # records 1 August
+
+
+def _with_capital(env: Any, name: str, capital: float) -> None:
+    from dataclasses import replace
+
+    from tp_paper.config import PaperBook
+
+    sleeves = [replace(s, capital=capital) if s.name == name else s for s in env.paper.book.sleeves]
+    env.paper.book = PaperBook(tuple(sleeves))
+
+
+def test_changing_a_sleeves_capital_is_money_moved_not_a_loss(env: Any) -> None:
+    _fill_month_end_orders(env)
+    friday = datetime(2024, 8, 2, 23, tzinfo=UTC)
+    unchanged = jobs.status(env.paper, env.at(friday))
+    before = next(s for s in unchanged["sleeves"] if s["strategy"] == "ma-timing")
+
+    _with_capital(env, "ma-timing", 16_000)  # config/paper.toml edited: $4k taken out
+    report = jobs.propose(env.paper, friday)
+    assert env.paper.risk.state.disabled("ma-timing") is None  # not a 20% "drawdown"
+    days = env.paper.store.sleeve_days("ma-timing")
+    assert [d.capital for d in days] == [20_000, 20_000, 16_000]
+    assert any(
+        "ma-timing: capital 20,000 -> 16,000" in e["message"] for e in env.paper.store.events()
+    )
+    # The smaller sleeve rebalances at once (mid-month) instead of carrying $4k of overdraft.
+    trades = env.paper.store.proposals(strategy="ma-timing", session="2024-08-02")
+    assert report.proposed["ma-timing"] == len(trades) > 0
+    assert {p.side for p in trades} == {"sell"}
+
+    after = next(
+        s for s in jobs.status(env.paper, friday)["sleeves"] if s["strategy"] == "ma-timing"
+    )
+    assert after["equity"] == pytest.approx(before["equity"] - 4_000)
+    assert after["return"] == pytest.approx(before["return"])  # performance unchanged
+    assert after["max_drawdown"] == pytest.approx(before["max_drawdown"], abs=0.01)
+
+
+def test_records_from_before_capital_was_stored_get_it_back(env: Any) -> None:
+    import sqlite3
+
+    _fill_month_end_orders(env)
+    with sqlite3.connect(env.paper.store.path) as db:
+        db.execute("UPDATE sleeve_days SET capital = NULL")
+    jobs.sync(env.paper, env.at(datetime(2024, 8, 2, 23, tzinfo=UTC)))
+    assert {d.capital for d in env.paper.store.sleeve_days("ma-timing")} == {20_000}
+    assert not any(e["kind"] == "capital" for e in env.paper.store.events())
+
+
+def test_a_sleeve_without_bars_yet_waits_and_the_others_still_trade(env: Any) -> None:
+    from tp_paper.config import PaperBook, Sleeve
+    from tp_strategies.library import build
+
+    risky = Sleeve(build("leveraged-momentum"), 10_000, "auto")
+    env.paper.book = PaperBook((*env.paper.book.sleeves, risky))
+    assert set(jobs.missing_bars(env.paper)) == set(risky.strategy.symbols())
+    report = jobs.propose(env.paper, env.at(env.month_end_evening))
+    assert report.skipped["leveraged-momentum"].startswith("no bars yet for FAS, SOXL")
+    assert report.proposed["ma-timing"] > 0
+
+
+def test_bars_behind_lists_only_the_symbols_missing_the_last_close(env: Any) -> None:
+    from tp_ingest.jobs.bars import run_daily
+    from tp_ingest.sources.fake import FakeSource
+    from tp_paper.config import PaperBook, Sleeve
+    from tp_strategies.library import build
+
+    assert jobs.bars_behind(env.paper, env.at(env.next_evening)) == []
+    risky = Sleeve(build("leveraged-momentum"), 10_000, "auto")
+    env.paper.book = PaperBook((*env.paper.book.sleeves, risky))
+    funds = sorted(risky.strategy.symbols())
+    assert sorted(jobs.bars_behind(env.paper, env.next_evening)) == funds  # none at all
+
+    class UntilJuly31(FakeSource):  # a feed that is a day behind for these funds
+        def daily_bars(self, symbols: Any, start: date, end: date) -> Any:
+            return super().daily_bars(symbols, start, min(end, date(2024, 7, 31)))
+
+    run_daily(env.paper.lake, UntilJuly31(), funds, now=datetime(2024, 8, 2, 22, 5, tzinfo=UTC))
+    assert jobs.missing_bars(env.paper) == []
+    assert sorted(jobs.bars_behind(env.paper, env.next_evening)) == funds  # a day behind
+    assert jobs.bars_behind(env.paper, env.month_end_evening) == []
+
+
+def test_the_simulator_waits_for_the_days_bars_before_expiring_an_order(env: Any) -> None:
+    friday_evening = datetime(2024, 8, 3, 0, tzinfo=UTC)  # 8pm ET Friday: queued for Monday
+    env.at(friday_evening)
+    env.broker.submit(OrderRequest("x-1", "SPY", "buy", 1, "opg"))
+    env.at(datetime(2024, 8, 5, 21, tzinfo=UTC))  # Monday 5pm: its bar isn't in the lake yet
+    assert env.broker.order_by_client_id("x-1").status == "submitted"
+    env.at(datetime(2024, 8, 6, 14, tzinfo=UTC))  # Tuesday: still no bar, so it never traded
+    assert env.broker.order_by_client_id("x-1").status != "submitted"

@@ -27,6 +27,7 @@ export function useThemeColors() {
         v("--series-3", "#1baf7a"),
         v("--series-4", "#eda100"),
         v("--series-5", "#e87ba4"),
+        v("--series-6", "#008300"),
       ],
       reference: v("--reference", "#898781"),
       grid: v("--grid", "#e1e0d9"),

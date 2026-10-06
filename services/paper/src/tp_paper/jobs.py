@@ -8,14 +8,12 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
-import pandas as pd
-
 from tp_core import metrics
-from tp_core.bars import load_bars
+from tp_core.bars import load_bars, missing_symbols
 from tp_core.calendar import NEW_YORK, is_session, last_completed_session
 from tp_core.portfolio import Classifier
 from tp_core.storage import Lake
@@ -29,7 +27,16 @@ from tp_paper.broker import (
     TimeInForce,
 )
 from tp_paper.config import PaperBook
-from tp_paper.ledger import PaperContext, PaperData, book_positions, sleeve_portfolio
+from tp_paper.ledger import (
+    MIN_FLOW,
+    PaperContext,
+    PaperData,
+    book_positions,
+    capital_flows,
+    sleeve_portfolio,
+    sleeve_returns,
+    time_weighted_return,
+)
 from tp_paper.store import (
     OPEN_AT_BROKER,
     FillRecord,
@@ -174,7 +181,9 @@ def _record_close(paper: Paper, now: datetime, fills: list[FillRecord]) -> str |
         return None
     if data.last_session != session:
         return None  # today's bars aren't in the lake yet; the evening run records it
-    recorded = {d.strategy for d in paper.store.sleeve_days() if d.session == iso(session)}
+    days = _fill_in_capital(paper, data, fills, paper.store.sleeve_days())
+    recorded = {d.strategy for d in days if d.session == iso(session)}
+    latest = {d.strategy: d for d in days if d.session < iso(session)}  # sorted by session
     prices = data.closes(data.position_of(session))
     newly_recorded = False
     for name, capital in strategies.items():
@@ -183,6 +192,11 @@ def _record_close(paper: Paper, now: datetime, fills: list[FillRecord]) -> str |
         mine = [f for f in fills if f.strategy == name and date.fromisoformat(f.session) <= session]
         portfolio = sleeve_portfolio(capital, mine)
         equity = portfolio.equity(prices)
+        before = latest.get(name)
+        if before is not None and before.capital is not None:
+            flow = capital - before.capital
+            if abs(flow) >= MIN_FLOW:
+                _capital_moved(paper, name, before.capital, capital, equity)
         newly_recorded = True
         paper.store.record_sleeve_day(
             SleeveDay(
@@ -191,6 +205,7 @@ def _record_close(paper: Paper, now: datetime, fills: list[FillRecord]) -> str |
                 equity,
                 portfolio.cash,
                 {s: p.quantity for s, p in portfolio.positions.items()},
+                capital,
             )
         )
         paper.risk.end_of_day(session, name, equity)
@@ -200,9 +215,48 @@ def _record_close(paper: Paper, now: datetime, fills: list[FillRecord]) -> str |
 
 
 def _capital_of(paper: Paper, strategy: str) -> float:
-    """Capital of a strategy that has left the book: its first recorded day's equity."""
+    """Capital of a strategy that has left the book: its last recorded capital (or, from
+    older records, its first day's equity)."""
     days = paper.store.sleeve_days(strategy)
+    known = [d.capital for d in days if d.capital is not None]
+    if known:
+        return known[-1]
     return days[0].equity if days else 0.0
+
+
+def _capital_moved(paper: Paper, name: str, old: float, new: float, equity: float) -> None:
+    """The sleeve's capital was changed in config/paper.toml: money moved in or out, not a
+    gain or a loss. Its drawdown peak moves in proportion, so the move can't trip the limit."""
+    before = equity - (new - old)  # what the sleeve would be worth without the move
+    peak = paper.risk.state.peak(name)
+    if peak is not None:
+        paper.risk.state.set_peak(name, peak * equity / before if before > 0 else None)
+    paper.store.log(
+        "capital",
+        f"{name}: capital {old:,.0f} -> {new:,.0f}, counted as money "
+        f"{'added' if new > old else 'withdrawn'}, not a gain or a loss",
+    )
+
+
+def _fill_in_capital(
+    paper: Paper, data: PaperData, fills: list[FillRecord], days: list[SleeveDay]
+) -> list[SleeveDay]:
+    """Records from before capital was stored get the capital they were computed with: their
+    equity less what the sleeve's fills to that day were worth at that close."""
+    out = []
+    for d in days:
+        if d.capital is None:
+            try:
+                t = data.position_of(date.fromisoformat(d.session))
+            except KeyError:
+                out.append(d)
+                continue
+            mine = [f for f in fills if f.strategy == d.strategy and f.session <= d.session]
+            capital = float(round(d.equity - sleeve_portfolio(0.0, mine).equity(data.closes(t))))
+            paper.store.set_sleeve_capital(d.strategy, d.session, capital)
+            d = replace(d, capital=capital)
+        out.append(d)
+    return out
 
 
 # -- propose ----------------------------------------------------------------------------------
@@ -234,6 +288,7 @@ def propose(paper: Paper, now: datetime, *, force: bool = False) -> ProposeRepor
             report.expired += 1
 
     fills = store.fills()
+    missing = set(missing_bars(paper))
     data = _load(paper, _held_symbols(fills) | _book_symbols(paper), session)
     if data.last_session < session:
         raise PaperError(
@@ -270,12 +325,22 @@ def propose(paper: Paper, now: datetime, *, force: bool = False) -> ProposeRepor
         if store.proposals(strategy=name, status=OPEN_AT_BROKER):
             report.skipped[name] = "orders still open at the broker"
             continue
+        lacking = sorted(set(sleeve.strategy.symbols()) & missing)
+        if lacking:
+            report.skipped[name] = (
+                f"no bars yet for {', '.join(lacking)}; `tp-data bars daily` backfills them"
+            )
+            continue
         mine = [f for f in fills if f.strategy == name]
         portfolio = sleeve_portfolio(sleeve.capital, mine)
-        # A sleeve that has never traded takes the positions its rules call for today instead
-        # of waiting for its next scheduled rebalance (month end, for most strategies).
+        # A sleeve that has never traded, or whose capital changed since it last traded, takes
+        # the positions its rules call for today instead of waiting for its next scheduled
+        # rebalance (month end, for most strategies).
+        catch_up = not mine or _capital_changed_since(
+            store.sleeve_days(name), max(f.session for f in mine)
+        )
         ctx = PaperContext(
-            sleeve.strategy, data, t, portfolio, paper.classifier.sectors, catch_up=not mine
+            sleeve.strategy, data, t, portfolio, paper.classifier.sectors, catch_up=catch_up
         )
         try:
             sleeve.strategy.on_bar(ctx)
@@ -310,6 +375,12 @@ def propose(paper: Paper, now: datetime, *, force: bool = False) -> ProposeRepor
         report.blocked[name] = sum(r.status == "blocked" for r in rows)
     store.log("propose", _propose_summary(report))
     return report
+
+
+def _capital_changed_since(days: Sequence[SleeveDay], session: str) -> bool:
+    """Whether the sleeve's capital moved on or after ``session``."""
+    flows = capital_flows(days)
+    return any(flow and d.session >= session for d, flow in zip(days, flows, strict=True))
 
 
 def _propose_summary(report: ProposeReport) -> str:
@@ -549,12 +620,7 @@ def status(paper: Paper, now: datetime) -> dict[str, Any]:
         history = [d for d in days if d.strategy == name]
         portfolio = sleeve_portfolio(capital, mine)
         equity = portfolio.equity(prices)
-        curve = pd.Series(
-            [d.equity for d in history],
-            index=pd.DatetimeIndex([d.session for d in history]),
-            dtype=float,
-        )
-        returns = curve.pct_change().dropna()
+        returns = sleeve_returns(history, capital).dropna()  # capital moves taken out
         disabled = paper.risk.state.disabled(name)
         sleeves.append(
             {
@@ -562,7 +628,7 @@ def status(paper: Paper, now: datetime) -> dict[str, Any]:
                 "approval": approval,
                 "capital": capital,
                 "equity": equity,
-                "return": equity / capital - 1 if capital else None,
+                "return": time_weighted_return(history, equity, capital) if capital else None,
                 "max_drawdown": metrics.max_drawdown(returns) if len(returns) else 0.0,
                 "sharpe": metrics.sharpe_ratio(returns) if len(returns) >= 20 else None,
                 "positions": {s: p.quantity for s, p in portfolio.positions.items()},
@@ -645,10 +711,39 @@ def _held_symbols(fills: Sequence[FillRecord]) -> set[str]:
     return set(book_positions(fills))
 
 
+def missing_bars(paper: Paper) -> list[str]:
+    """Symbols the book trades or holds that have no bars in the lake yet (e.g. a strategy
+    just added); ``tp-data bars daily`` backfills them."""
+    wanted = _book_symbols(paper) | _held_symbols(paper.store.fills())
+    return missing_symbols(paper.lake, sorted(wanted))
+
+
+def bars_behind(paper: Paper, now: datetime) -> list[str]:
+    """Symbols the book trades or holds whose newest bar is older than the last completed
+    session (or that have none): what the bot fetches before proposing."""
+    session = last_completed_session(now)
+    wanted = sorted(_book_symbols(paper) | _held_symbols(paper.store.fills()))
+    absent = missing_symbols(paper.lake, wanted)
+    present = [s for s in wanted if s not in absent]
+    newest: dict[str, date] = {}
+    if present:
+        recent = load_bars(paper.lake, present, start=session - timedelta(days=10))
+        newest = {str(k): v for k, v in recent.groupby("symbol")["session"].max().items()}
+    return absent + [s for s in present if s not in newest or newest[s] < session]
+
+
 def _load(paper: Paper, symbols: set[str], session: date) -> PaperData:
+    """Bars for ``symbols``, leaving out the ones not in the lake yet (the strategies that
+    need them skip until they are). Held symbols must all be there: they value the sleeves."""
+    absent = set(missing_symbols(paper.lake, sorted(symbols)))
+    held_absent = absent & _held_symbols(paper.store.fills())
+    if held_absent:
+        raise PaperError(
+            f"no bars for held {sorted(held_absent)}; run `tp-data bars backfill` first"
+        )
     try:
-        bars = load_bars(paper.lake, sorted(symbols), end=session)
-    except KeyError as exc:
+        bars = load_bars(paper.lake, sorted(symbols - absent), end=session)
+    except (KeyError, ValueError) as exc:
         raise PaperError(str(exc.args[0])) from exc
     if bars.empty:
         raise PaperError("no bars in the lake; run `tp-data bars backfill`")

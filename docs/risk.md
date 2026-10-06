@@ -18,7 +18,7 @@ whole paper account in paper trading.
 | `strategy_enabled` | disabled strategies can't open risk | buys |
 | `daily_loss` | equity down 2% since the prior close: no new risk that day | buys |
 | `fresh_data` | the symbol's newest bar must be the signal session | buys |
-| `gross_exposure` | sum of positions ≤ 100% of equity (no leverage) | buys |
+| `gross_exposure` | sum of positions ≤ 100% of equity (no borrowing; leveraged funds count at market value) | buys |
 | `max_position` | one single name ≤ 10% of equity | buys of stocks/ADRs (funds exempt) |
 | `max_sector` | single names in one GICS sector ≤ 30% | buys of stocks/ADRs |
 | `risk_per_trade` | (price − stop) × shares ≤ 1% of equity | buys that carry a stop |
@@ -43,7 +43,12 @@ name in a sector of its own.
 After every close the manager tracks each strategy's peak equity. A drawdown past the limit
 (10% by default; per-strategy overrides in `[strategy_drawdown.overrides]`, each with its
 reason) is recorded and, in paper trading, **disables the strategy** until you look at it and
-run `tp-risk enable <name>`, which also restarts the peak from its next equity.
+run `tp-risk enable <name>`, which also restarts the peak from its next equity. The one override
+so far is the high-risk sleeve, strategy 6, at 50%: it holds 3x funds, and its spec explains why
+it is the deliberate exception to the "no leverage" rule, for paper only.
+
+Changing a sleeve's capital in `config/paper.toml` moves its peak in proportion, so taking money
+out of a sleeve can't trip its limit.
 
 Backtests record breaches but keep trading, so you can see how often a strategy would have been
 stopped. `tp-backtest run ... --enforce-drawdown` shows the effect of stopping instead.

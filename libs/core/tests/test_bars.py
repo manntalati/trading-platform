@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from tp_core.bars import build_clean_bars, close_matrix, load_bars
+from tp_core.bars import build_clean_bars, close_matrix, load_bars, missing_symbols
 from tp_core.schemas import (
     CLEAN_STOCK_BARS_1D,
     QUARANTINE_STOCK_BARS_1D,
@@ -112,6 +112,7 @@ def test_load_bars_filters_and_errors(lake: Lake) -> None:
     assert list(window["symbol"]) == ["AAA", "BBB"]
     with pytest.raises(KeyError, match="ZZZ"):
         load_bars(lake, ["AAA", "ZZZ"])
+    assert missing_symbols(lake, ["AAA", "ZZZ", "BBB"]) == ["ZZZ"]
 
 
 def test_close_matrix(lake: Lake) -> None:

@@ -207,7 +207,7 @@ export interface PaperBot {
   last: { task: string; session: string; outcome: string; at: string; message: string } | null;
 }
 
-export type PaperHistory = Record<string, { session: string; equity: number }[]>;
+export type PaperHistory = Record<string, { session: string; equity: number; growth?: Num }[]>;
 
 export interface PaperEvent {
   id: number;

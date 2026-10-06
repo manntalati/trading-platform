@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from tp_strategies.library.dual_momentum import DualMomentum
+from tp_strategies.library.leveraged_momentum import LeveragedMomentum
 from tp_strategies.library.ma_timing import MaTiming
 from tp_strategies.library.rsi2 import Rsi2Reversion
 from tp_strategies.library.ts_momentum import TimeSeriesMomentum
@@ -25,6 +26,7 @@ STRATEGIES: tuple[type[Strategy], ...] = (
     CrossSectionalMomentum,
     DualMomentum,
     Rsi2Reversion,
+    LeveragedMomentum,
 )
 REGISTRY: dict[str, type[Strategy]] = {cls.name: cls for cls in STRATEGIES}
 

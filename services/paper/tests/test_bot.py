@@ -243,3 +243,43 @@ def test_repo_book_is_automatic() -> None:
 
     book = PaperBook.load(Path(__file__).resolve().parents[3] / "config" / "paper.toml")
     assert {s.approval for s in book.sleeves} == {"auto"}
+
+
+def test_a_new_daily_sleeve_gets_its_bars_and_runs_every_evening(auto: Any) -> None:
+    from tp_paper.config import Sleeve
+    from tp_strategies.library import build
+
+    refreshed: list[datetime] = []
+    # The simulator fills from the lake, whose bars run to 2 August: fetch through then too
+    # (just after the template's own ingest, so this run is the latest).
+    lake_end = datetime(2024, 8, 2, 22, 5, tzinfo=UTC)
+
+    def refresh(now: datetime) -> str:
+        refreshed.append(now)
+        lake = Lake(auto.root)
+        symbols = sorted({s for sl in auto.paper.book.sleeves for s in sl.strategy.symbols()})
+        return f"bars through {run_daily(lake, FakeSource(), symbols, now=lake_end).end}"
+
+    risky = Sleeve(build("leveraged-momentum"), 10_000, "auto")
+    auto.paper.book = PaperBook((*auto.paper.book.sleeves, risky))
+    store = auto.paper.store
+    bot = Bot(auto.paper, refresh_bars=refresh, clock=auto.clock)
+    auto.at(ny(JUL31, 19))
+    bot.step()
+    assert len(refreshed) == 1  # its funds had no bars: their history was fetched first
+    assert outcome(auto, "propose:2024-07-31") == "done"
+    assert store.proposals(strategy="leveraged-momentum", session="2024-07-31")
+
+    auto.at(ny(AUG1, 9, 12))
+    bot.step()
+    auto.at(ny(AUG1, 10))
+    bot.step()
+    assert store.fills(strategy="leveraged-momentum")
+    auto.at(ny(AUG1, 19))
+    bot.step()
+    assert len(refreshed) == 1  # nothing behind any more
+    # It runs every evening (whether it trades depends on how far the funds moved: the
+    # strategy tests show it trading most days at 3x-fund volatility).
+    assert outcome(auto, "propose:2024-08-01") == "done"
+    assert not any("leveraged-momentum skipped" in e["message"] for e in store.events())
+    assert [d.session for d in store.sleeve_days("leveraged-momentum")][-1] == "2024-08-01"

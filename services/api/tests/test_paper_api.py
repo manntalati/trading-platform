@@ -126,7 +126,9 @@ def test_approve_all_and_history_and_events(client: TestClient) -> None:
     assert len(queued) == count
     veto = client.post(f"/api/paper/proposals/{queued[0]['id']}/reject", json={}, headers=WRITE)
     assert veto.json()["status"] == "rejected"
-    assert isinstance(client.get("/api/paper/history").json(), dict)
+    history = client.get("/api/paper/history").json()
+    first = history["ma-timing"][0]
+    assert first["growth"] == pytest.approx(first["equity"] / 20_000)  # $1 of capital
     assert any(e["kind"] == "propose" for e in client.get("/api/paper/events").json())
 
 
