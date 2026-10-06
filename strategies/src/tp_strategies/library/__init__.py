@@ -14,13 +14,19 @@ from typing import Any
 
 from tp_strategies.library.dual_momentum import DualMomentum
 from tp_strategies.library.ma_timing import MaTiming
+from tp_strategies.library.rsi2 import Rsi2Reversion
 from tp_strategies.library.ts_momentum import TimeSeriesMomentum
 from tp_strategies.library.xs_momentum import CrossSectionalMomentum
 from tp_trading.strategy import Strategy
 
-REGISTRY: dict[str, type[Strategy]] = {
-    cls.name: cls for cls in (MaTiming, TimeSeriesMomentum, CrossSectionalMomentum, DualMomentum)
-}
+STRATEGIES: tuple[type[Strategy], ...] = (
+    MaTiming,
+    TimeSeriesMomentum,
+    CrossSectionalMomentum,
+    DualMomentum,
+    Rsi2Reversion,
+)
+REGISTRY: dict[str, type[Strategy]] = {cls.name: cls for cls in STRATEGIES}
 
 
 def build(name: str, params: Mapping[str, Any] | None = None) -> Strategy:
