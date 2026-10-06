@@ -9,6 +9,7 @@ produced it.
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -41,6 +42,7 @@ def run_backtest(
     config: EngineConfig,
     *,
     risk: RiskGate | None = None,
+    sectors: Mapping[str, str] | None = None,
     benchmark: str | None = "SPY",
     now: datetime,
     save: bool = True,
@@ -48,7 +50,7 @@ def run_backtest(
     symbols = list(dict.fromkeys([*strategy.symbols(), *([benchmark] if benchmark else [])]))
     bars = load_bars(lake, symbols, end=config.end)
     data = MarketData.from_bars(bars)
-    result = BacktestEngine(strategy, data, config, risk).run()
+    result = BacktestEngine(strategy, data, config, risk, sectors=sectors).run()
 
     bench = None
     if benchmark:

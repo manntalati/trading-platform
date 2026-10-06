@@ -75,18 +75,17 @@ class RiskManager:
         return decisions
 
     def end_of_day(self, session: date, strategy: str, equity: float) -> None:
-        """Track the strategy's peak; a drawdown past its limit is recorded and, when enforced,
-        disables the strategy until someone re-enables it."""
+        """Track the strategy's peak; a drawdown past its limit is recorded once per drawdown
+        (until a new peak) and, when enforced, disables the strategy until someone re-enables
+        it."""
         peak = self.state.peak(strategy)
-        if peak is None or equity > peak:
+        if peak is None or equity >= peak:
             self.state.set_peak(strategy, equity)
-            peak = equity
-        drawdown = equity / peak - 1.0 if peak > 0 else 0.0
-        limit = self.limits.drawdown_limit(strategy)
-        if drawdown >= -limit:
             self._breached.discard(strategy)
             return
-        if strategy in self._breached:
+        drawdown = equity / peak - 1.0 if peak > 0 else 0.0
+        limit = self.limits.drawdown_limit(strategy)
+        if drawdown >= -limit or strategy in self._breached:
             return
         self._breached.add(strategy)
         reason = (

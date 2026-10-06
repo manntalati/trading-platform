@@ -101,4 +101,8 @@ Rules:
   produce intents; whether they become orders is decided outside the strategy.
 - Give every order a `reason`. In paper trading it is what you read before approving it.
 - Keep no state between bars: paper trading starts a fresh process each day.
+- Reference data comes through the context too: `ctx.sector(symbol)` gives the GICS sector from
+  `config/classifications.toml`.
+- Size inside the risk limits rather than relying on rejections: `order_target_weights` already
+  never borrows and never leaves a trimmed position above its target.
 - Write the spec in `docs/strategies/` before the code.

@@ -230,3 +230,44 @@ def test_ordering_without_a_price_is_an_error() -> None:
 
     with pytest.raises(ValueError, match="no usable price for BBB"):
         BacktestEngine(Scripted(act=act), MarketData.from_closes(closes)).run()
+
+
+def _flat(aaa: list[float]) -> pd.DataFrame:
+    return pd.DataFrame({"AAA": aaa, "BBB": [50.0] * len(aaa)}, index=DAYS[: len(aaa)])
+
+
+def test_a_rebalance_never_borrows_when_small_trims_are_skipped() -> None:
+    log: list[list[OrderIntent]] = []
+
+    def act(ctx: Context) -> None:
+        if ctx.now == DAYS[0].date():
+            ctx.order_target_weights({"AAA": 0.6})
+        elif ctx.now == DAYS[10].date():  # AAA drifted to ~60.7%: inside min_change, kept
+            ctx.order_target_weights({"AAA": 0.6, "BBB": 0.4}, min_change=0.05)
+            log.append(ctx.drain())
+
+    closes = _flat([100.0, 100.0] + [103.0] * 10)
+    BacktestEngine(
+        Scripted(act=act), MarketData.from_closes(closes), EngineConfig(execution=FREE)
+    ).run()
+    [[bbb]] = log
+    assert bbb.symbol == "BBB"
+    equity = 40_000 + 600 * 103
+    assert 600 * 103 + bbb.quantity * 50 <= equity  # scaled down instead of borrowing
+    assert bbb.quantity >= 799
+
+
+def test_trims_round_down_so_a_position_never_ends_above_target() -> None:
+    log: list[list[OrderIntent]] = []
+
+    def act(ctx: Context) -> None:
+        if ctx.now == DAYS[0].date():
+            ctx.order("AAA", 10)
+        elif ctx.now == DAYS[5].date():
+            ctx.order_target_weights({"AAA": 0.76})  # 7.6 shares
+            log.append(ctx.drain())
+
+    cfg = EngineConfig(initial_cash=1_000, execution=FREE)
+    BacktestEngine(Scripted(act=act), MarketData.from_closes(_flat([100.0] * 8)), cfg).run()
+    [[trim]] = log
+    assert (trim.side, trim.quantity) == ("sell", 3)  # leaves 7 (70%), not 8 (80%)

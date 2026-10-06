@@ -102,6 +102,7 @@ def run(
         ),
     )
     settings = Settings()
+    classifier = Classifier.load(settings.classifications_file)
     gate = None
     if risk:
         if not settings.risk_file.exists():
@@ -113,14 +114,14 @@ def run(
             raise typer.Exit(2)
         gate = RiskManager(
             Limits.load(settings.risk_file),
-            Classifier.load(settings.classifications_file),
+            classifier,
             MemoryRiskState(),
             enforce_drawdown=enforce_drawdown,
         )
     try:
         outcome = run_backtest(
-            Lake(settings.data_root), built, config, risk=gate, benchmark=benchmark,
-            now=datetime.now(UTC), save=save,
+            Lake(settings.data_root), built, config, risk=gate, sectors=classifier.sectors,
+            benchmark=benchmark, now=datetime.now(UTC), save=save,
         )  # fmt: skip
     except KeyError as exc:
         typer.echo(str(exc.args[0]), err=True)

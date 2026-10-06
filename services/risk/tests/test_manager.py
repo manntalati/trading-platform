@@ -185,9 +185,10 @@ def test_drawdown_breach_in_research_mode_only_records() -> None:
     state = MemoryRiskState()
     m = RiskManager(Limits(strategy_drawdown_overrides={"s": 0.05}), CLASSIFIER, state,
                     enforce_drawdown=False)  # fmt: skip
-    for day, equity in enumerate([100.0, 94.0, 99.0, 93.0], start=1):
+    for day, equity in enumerate([100.0, 94.0, 99.0, 93.0, 101.0, 95.0], start=1):
         m.end_of_day(date(2024, 7, day), "s", equity)
-    assert [e["session"] for e in m.events] == ["2024-07-02", "2024-07-04"]  # re-armed on recovery
+    # one event per drawdown: a bounce to 99 doesn't re-arm it, the new peak at 101 does
+    assert [e["session"] for e in m.events] == ["2024-07-02", "2024-07-06"]
     assert state.disabled("s") is None
 
 

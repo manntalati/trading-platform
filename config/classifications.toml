@@ -68,6 +68,7 @@ FZILX = "International Equity"  # Fidelity ZERO International
 # Bonds
 IEF = "US Treasuries"
 TLT = "US Treasuries"
+BIL = "US Treasuries"   # 1-3 month T-bills
 HYG = "Corporate Credit"
 AGG = "US Bonds"
 BND = "US Bonds"
