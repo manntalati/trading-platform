@@ -389,16 +389,18 @@ function EquityChart(props: { history: PaperHistory | null; sleeves: PaperSleeve
   const bySession = new Map<string, GrowthPoint>();
   for (const name of names) {
     for (const day of props.history?.[name] ?? []) {
+      // growth leaves out capital moved in or out; older APIs only sent equity
       const base = capital.get(name);
-      if (!base) continue;
+      const growth = day.growth ?? (base ? day.equity / base : null);
+      if (growth == null) continue;
       const row: GrowthPoint = bySession.get(day.session) ?? { date: day.session };
-      row[name] = day.equity / base;
+      row[name] = growth;
       bySession.set(day.session, row);
     }
   }
   const data = [...bySession.values()].sort((a, b) => String(a.date).localeCompare(String(b.date)));
   return (
-    <Card title="Sleeve equity" hint="growth of $1 of each sleeve's capital, marked at every close">
+    <Card title="Sleeve equity" hint="growth of $1 in each sleeve, marked at every close; capital changes left out">
       {data.length >= 2 ? (
         <GrowthChart data={data} series={names} colors={names.map((_, i) => theme.series[i] ?? theme.reference)} />
       ) : (

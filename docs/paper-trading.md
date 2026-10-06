@@ -56,9 +56,10 @@ with `tp-paper bot --once` every five minutes.
   momentum rebalance on the last session of the month. A sleeve that has never traded doesn't
   wait for that: on its first run it takes the positions its latest signal calls for (MA timing
   uses the last month-end), then follows the monthly schedule.
-- **Most days after that are quiet.** The monthly strategies trade once a month, and RSI(2)
-  only when one of its names gets oversold (it exits on strength), so a run that proposes
-  nothing is normal. The dashboard's activity log and `tp-paper status` show what every run
+- **Most days after that are quiet, except for one sleeve.** The monthly strategies trade once
+  a month, and RSI(2) only when one of its names gets oversold (it exits on strength), so a run
+  that proposes nothing for them is normal. The leveraged-momentum sleeve is the exception: it
+  rebalances every evening and trades on most days. The dashboard's activity log and `tp-paper status` show what every run
   decided, including "no trades proposed" and anything the risk checks blocked.
 
 ## Set up
@@ -68,7 +69,8 @@ with `tp-paper bot --once` every five minutes.
    the same account show up as reconciliation breaks.
 2. Choose the book in [`config/paper.toml`](../config/paper.toml): which strategies, how much
    capital each (the sleeves must fit inside the account's equity, $100k by default), approval
-   mode and parameters. All five library strategies start with $20k each on automatic approval.
+   mode and parameters. Five library strategies have $18k each, and the high-risk daily
+   sleeve (strategy 6, 3x leveraged funds) has $10k. All are on automatic approval.
 3. Backfill the bars once (`uv run tp-data bars backfill --years 5`), then start the bot:
 
 ```bash
@@ -103,6 +105,20 @@ Every decision is stored with who made it (`auto`, `you`, `dashboard`) and when,
 measure whether your vetoes helped or hurt.
 
 ## Sleeves, reconciliation and the gate
+
+### Adding a strategy or moving capital
+
+Edit `config/paper.toml` and restart the bot. The sleeves must still fit inside the account's
+equity.
+
+- **A new strategy's symbols** get their history fetched the first evening (the bot's bars
+  refresh backfills symbols the lake doesn't have). The ingest job's universe
+  (`config/universes.toml`) should list them too, so the evening bars job keeps them current.
+  Until the bars are there, the sleeve is skipped and the others trade as usual.
+- **Changing a sleeve's capital** is treated as money moved in or out, not as a gain or a loss.
+  Its returns, Sharpe and the dashboard's growth curve leave the move out, and its drawdown
+  peak moves in proportion. The next evening the strategy rebalances to the new amount instead
+  of waiting for its next scheduled rebalance. The activity log records the move.
 
 Each strategy's positions and cash are rebuilt from its own fills, so two strategies can hold
 the same ETF and each knows its share. After every sync the sum of all sleeves is compared with

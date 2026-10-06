@@ -73,6 +73,13 @@ HYG = "Corporate Credit"
 AGG = "US Bonds"
 BND = "US Bonds"
 FXNAX = "US Bonds"    # Fidelity US Bond Index
+# Leveraged (3x daily reset): strategy 6 only
+TQQQ = "Leveraged Equity"   # Nasdaq-100
+UPRO = "Leveraged Equity"   # S&P 500
+SOXL = "Leveraged Equity"   # semiconductors
+TNA = "Leveraged Equity"    # Russell 2000
+FAS = "Leveraged Equity"    # financials
+TMF = "Leveraged Treasuries"  # 20+ year Treasuries
 # Real assets
 VNQ = "Real Estate"
 DBC = "Commodities"

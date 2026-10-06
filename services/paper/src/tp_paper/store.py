@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS sleeve_days (
     equity REAL NOT NULL,
     cash REAL NOT NULL,
     positions TEXT NOT NULL,
+    capital REAL,
     PRIMARY KEY (strategy, session)
 );
 CREATE TABLE IF NOT EXISTS events (
@@ -85,7 +86,7 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
 # Columns added after the first release, added to older databases when they are opened.
-ADDED_COLUMNS = {"proposals": {"time_in_force": "TEXT"}}
+ADDED_COLUMNS = {"proposals": {"time_in_force": "TEXT"}, "sleeve_days": {"capital": "REAL"}}
 
 OPEN_AT_BROKER = ("submitted", "partially_filled")
 TERMINAL = ("rejected", "blocked", "expired", "filled", "canceled", "failed")
@@ -153,6 +154,9 @@ class SleeveDay:
     equity: float
     cash: float
     positions: dict[str, float]
+    # The sleeve's capital that day. A change from one day to the next is money moved in or out
+    # (config/paper.toml edited), not a gain or loss. None on rows from before it was recorded.
+    capital: float | None = None
 
 
 class PaperStore:
@@ -271,8 +275,23 @@ class PaperStore:
     def record_sleeve_day(self, day: SleeveDay) -> None:
         with self._connect() as db:
             db.execute(
-                "INSERT OR REPLACE INTO sleeve_days VALUES (?, ?, ?, ?, ?)",
-                (day.strategy, day.session, day.equity, day.cash, json.dumps(day.positions)),
+                "INSERT OR REPLACE INTO sleeve_days "
+                "(strategy, session, equity, cash, positions, capital) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    day.strategy,
+                    day.session,
+                    day.equity,
+                    day.cash,
+                    json.dumps(day.positions),
+                    day.capital,
+                ),
+            )
+
+    def set_sleeve_capital(self, strategy: str, session: str, capital: float) -> None:
+        with self._connect() as db:
+            db.execute(
+                "UPDATE sleeve_days SET capital = ? WHERE strategy = ? AND session = ?",
+                (capital, strategy, session),
             )
 
     def sleeve_days(self, strategy: str | None = None) -> list[SleeveDay]:
@@ -284,7 +303,12 @@ class PaperStore:
         with self._connect() as db:
             return [
                 SleeveDay(
-                    r["strategy"], r["session"], r["equity"], r["cash"], json.loads(r["positions"])
+                    r["strategy"],
+                    r["session"],
+                    r["equity"],
+                    r["cash"],
+                    json.loads(r["positions"]),
+                    r["capital"],
                 )
                 for r in db.execute(sql, args)
             ]

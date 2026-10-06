@@ -56,7 +56,9 @@ def failed(decision: RiskDecision) -> set[str]:
 
 def test_repo_limits_match_the_plan() -> None:
     limits = Limits.load(REPO / "config" / "risk.toml")
-    assert limits == Limits()
+    # The plan's values; the one exception is the deliberately high-risk paper sleeve's
+    # drawdown limit (see docs/strategies/06-leveraged-momentum.md).
+    assert limits == Limits(strategy_drawdown_overrides={"leveraged-momentum": 0.50})
     assert limits.drawdown_limit("anything") == 0.10
 
 

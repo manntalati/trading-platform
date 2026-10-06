@@ -8,13 +8,13 @@ each still knows its own share. Reconciliation checks that the sum of sleeves eq
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import date
 
 import pandas as pd
 
 from tp_core.bars import close_matrix
-from tp_paper.store import FillRecord
+from tp_paper.store import FillRecord, SleeveDay
 from tp_trading.data import Field, MarketData
 from tp_trading.events import Fill, Side
 from tp_trading.portfolio import Portfolio, Position
@@ -37,6 +37,51 @@ def sleeve_portfolio(capital: float, fills: Iterable[FillRecord]) -> Portfolio:
             )
         )
     return portfolio
+
+
+# A capital change smaller than this (rounding in older records) is not money moved.
+MIN_FLOW = 0.5
+
+
+def capital_flows(days: Sequence[SleeveDay]) -> list[float]:
+    """Money moved into (+) or out of (-) one sleeve at each recorded close: the change in its
+    configured capital since the previous record. Days with no capital on record count as
+    unchanged."""
+    flows, previous = [], None
+    for d in days:
+        flow = 0.0
+        if d.capital is not None and previous is not None and abs(d.capital - previous) >= MIN_FLOW:
+            flow = d.capital - previous
+        flows.append(flow)
+        previous = d.capital if d.capital is not None else previous
+    return flows
+
+
+def sleeve_returns(days: Sequence[SleeveDay], capital: float) -> pd.Series:
+    """Daily time-weighted returns of one sleeve: capital moved in or out is not a gain or a
+    loss. The first close is measured against the capital it started with (``capital`` when
+    the record has none)."""
+    if not days:
+        return pd.Series(dtype=float)
+    flows = capital_flows(days)
+    start = days[0].capital if days[0].capital is not None else capital
+    values = [days[0].equity / start - 1.0 if start else math.nan]
+    for before, day, flow in zip(days, days[1:], flows[1:], strict=False):
+        values.append((day.equity - flow) / before.equity - 1.0 if before.equity else math.nan)
+    return pd.Series(values, index=pd.DatetimeIndex([d.session for d in days]), dtype=float)
+
+
+def time_weighted_return(days: Sequence[SleeveDay], equity: float, capital: float) -> float:
+    """Return since the sleeve started, compounding the daily returns, then from the last
+    record to ``equity`` now (``capital`` is today's: a change not yet recorded is a flow)."""
+    if not days:
+        return equity / capital - 1.0 if capital else math.nan
+    growth: float = math.prod(1.0 + float(r) for r in sleeve_returns(days, capital))
+    last = days[-1]
+    flow = capital - last.capital if last.capital is not None else 0.0
+    if abs(flow) < MIN_FLOW:
+        flow = 0.0
+    return growth * ((equity - flow) / last.equity if last.equity else 1.0) - 1.0
 
 
 def book_positions(fills: Iterable[FillRecord]) -> dict[str, float]:

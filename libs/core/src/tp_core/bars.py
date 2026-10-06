@@ -124,6 +124,11 @@ def _write_report(lake: Lake, report: ValidationReport, now: datetime) -> None:
     write_json(payload, lake.reports_dir("validation") / f"stock_bars_1d-{now:%Y%m%dT%H%M%SZ}.json")
 
 
+def missing_symbols(lake: Lake, symbols: Iterable[str]) -> list[str]:
+    """The ``symbols`` with no clean bars in the lake (never ingested, or not rebuilt yet)."""
+    return [s for s in symbols if not any(_symbol_dir(lake, s).glob("*.parquet"))]
+
+
 def load_bars(
     lake: Lake,
     symbols: Iterable[str] | None = None,

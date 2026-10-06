@@ -221,14 +221,14 @@ class Bot:
             s = jobs.sync(self.paper, now)
             breaks = f", {len(s.breaks)} reconciliation break(s)" if s.breaks else ""
             return f"{s.fills} fill(s), {s.updated} update(s){breaks}"
-        try:
-            report = jobs.propose(self.paper, now)
-        except PaperError as exc:
-            if "tp-data bars daily" not in str(exc) or self.refresh_bars is None:
-                raise
-            self._log(f"{task.key}: bars are behind; refreshing ({exc})")
+        behind = jobs.bars_behind(self.paper, now)
+        if behind and self.refresh_bars is not None:
+            # The evening bars job may not have run, or a strategy was just added (its symbols
+            # are backfilled). A feed that is down raises, and the task is retried.
+            which = ", ".join(behind) if len(behind) <= 6 else f"{len(behind)} symbols"
+            self._log(f"{task.key}: bars are behind for {which}; refreshing")
             self._log(f"{task.key}: {self.refresh_bars(now)}")
-            report = jobs.propose(self.paper, now)
+        report = jobs.propose(self.paper, now)
         made = sum(report.proposed.values())
         blocked = sum(report.blocked.values())
         message = f"{made} proposal(s), {blocked} blocked by risk"

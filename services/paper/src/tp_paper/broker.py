@@ -14,7 +14,7 @@ from datetime import UTC, date, datetime, time
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
 
-from tp_core.calendar import NEW_YORK, is_session, next_session
+from tp_core.calendar import NEW_YORK, is_session, next_session, session_open
 from tp_core.storage import write_json
 
 TimeInForce = Literal["opg", "day"]
@@ -238,7 +238,8 @@ class FakePaperBroker:
     ``propose``, ``submit`` and ``sync`` can run as separate processes.
 
     Opening-auction (``opg``) orders fill at the open of the session they were queued for;
-    ``day`` orders at that session's close. No fees, no slippage beyond the bar price.
+    ``day`` orders at that session's close, once its bar is in the lake (an order whose symbol
+    has no bar that day expires at the next open). No fees, no slippage beyond the bar price.
     """
 
     name = "fake-paper"
@@ -286,7 +287,9 @@ class FakePaperBroker:
                 continue
             bar = self.prices(order["symbol"], session)
             if bar is None:
-                order["status"] = "expired"  # no trading in it that day: the auction order dies
+                if now < session_open(next_session(session)):
+                    continue  # the day's bars aren't in the lake yet (the evening job adds them)
+                order["status"] = "expired"  # no trading in it that day: the order dies
                 continue
             price = bar[0] if order["time_in_force"] == "opg" else bar[1]
             limit = order.get("limit_price")

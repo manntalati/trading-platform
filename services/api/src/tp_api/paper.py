@@ -18,8 +18,9 @@ from tp_api.queries import clean
 from tp_core.config import Settings
 from tp_paper import jobs
 from tp_paper.jobs import Paper, PaperError
+from tp_paper.ledger import sleeve_returns
 from tp_paper.runtime import open_paper
-from tp_paper.store import PaperStore
+from tp_paper.store import PaperStore, SleeveDay
 
 router = APIRouter(prefix="/api/paper", dependencies=[Depends(require_token)])
 Write = [Depends(require_dashboard_client)]
@@ -81,9 +82,19 @@ def proposals(
 
 @router.get("/history")
 def history(request: Request) -> dict[str, list[dict[str, Any]]]:
-    out: dict[str, list[dict[str, Any]]] = {}
+    """Each sleeve's equity at every close, and its growth: what $1 of its capital has become,
+    with capital moved in or out taken out."""
+    by_strategy: dict[str, list[SleeveDay]] = {}
     for day in _store(request).sleeve_days():
-        out.setdefault(day.strategy, []).append({"session": day.session, "equity": day.equity})
+        by_strategy.setdefault(day.strategy, []).append(day)
+    out: dict[str, list[dict[str, Any]]] = {}
+    for name, days in by_strategy.items():
+        start = next((d.capital for d in days if d.capital), days[0].equity)
+        growth = (1.0 + sleeve_returns(days, start)).cumprod()
+        out[name] = [
+            clean({"session": d.session, "equity": d.equity, "growth": float(g)})
+            for d, g in zip(days, growth, strict=True)
+        ]
     return out
 
 

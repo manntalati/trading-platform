@@ -24,3 +24,7 @@ default = 0.10
 [strategy_drawdown.overrides]
 # Per-strategy limits, each with the reason in a comment. Example:
 # "some-strategy" = 0.20  # why: what its backtest drawdowns look like, and who agreed
+# Strategy 6 is the deliberately high-risk paper sleeve the owner asked for (October 2026), to
+# see how an aggressive daily strategy behaves. It holds 3x funds, which routinely fall 30%+ in
+# an ordinary correction, so 10% would switch it off within weeks; 50% is "this is broken".
+"leveraged-momentum" = 0.50
