@@ -22,6 +22,7 @@ members = [
     "tp-broker",
     "tp-core",
     "tp-ingest",
+    "tp-paper",
     "tp-research",
     "tp-risk",
     "tp-strategies",
@@ -4067,6 +4068,31 @@ requires-dist = [
 ]
 
 [[package]]
+name = "tp-paper"
+version = "0.1.0"
+source = { editable = "services/paper" }
+dependencies = [
+    { name = "alpaca-py" },
+    { name = "pandas" },
+    { name = "tp-core" },
+    { name = "tp-risk" },
+    { name = "tp-strategies" },
+    { name = "tp-trading" },
+    { name = "typer" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "alpaca-py", specifier = ">=0.43" },
+    { name = "pandas", specifier = ">=2.2" },
+    { name = "tp-core", editable = "libs/core" },
+    { name = "tp-risk", editable = "services/risk" },
+    { name = "tp-strategies", editable = "strategies" },
+    { name = "tp-trading", editable = "libs/trading" },
+    { name = "typer", specifier = ">=0.12" },
+]
+
+[[package]]
 name = "tp-research"
 version = "0.1.0"
 source = { editable = "research" }
@@ -4143,6 +4169,7 @@ dependencies = [
     { name = "tp-broker" },
     { name = "tp-core" },
     { name = "tp-ingest" },
+    { name = "tp-paper" },
     { name = "tp-research" },
     { name = "tp-risk" },
     { name = "tp-strategies" },
@@ -4173,6 +4200,7 @@ requires-dist = [
     { name = "tp-broker", editable = "services/broker" },
     { name = "tp-core", editable = "libs/core" },
     { name = "tp-ingest", editable = "services/ingest" },
+    { name = "tp-paper", editable = "services/paper" },
     { name = "tp-research", editable = "research" },
     { name = "tp-risk", editable = "services/risk" },
     { name = "tp-strategies", editable = "strategies" },

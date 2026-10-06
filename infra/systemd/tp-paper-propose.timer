@@ -1,0 +1,10 @@
+# 18:50 New York on weekdays, after tp-bars-daily (18:30) has stored today's bars.
+[Unit]
+Description=trading-platform: paper-trading proposals (weekdays 18:50 ET)
+
+[Timer]
+OnCalendar=Mon..Fri 18:50 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,12 @@
+# 09:10 New York on weekdays: inside the market-on-open window (orders after 9:28 are refused).
+[Unit]
+Description=trading-platform: paper-trading order submission (weekdays 09:10 ET)
+
+[Timer]
+OnCalendar=Mon..Fri 09:10 America/New_York
+# A submission caught up hours late would be refused (or worse, trade a stale signal at the
+# wrong time), so a missed morning stays missed; the evening run expires those proposals.
+Persistent=false
+
+[Install]
+WantedBy=timers.target
