@@ -1,20 +1,23 @@
 [project]
 name = "tp-strategies"
 version = "0.1.0"
-description = "Strategy library: published strategies implemented against tp_core data."
+description = "Strategy library: published strategies on the tp_trading contract, plus research versions."
 requires-python = ">=3.12"
 dependencies = [
     "numpy>=2.0",
     "pandas>=2.2",
     "tp-core",
+    "tp-trading",
     "typer>=0.12",
 ]
 
 [project.scripts]
 tp-ideas = "tp_strategies.cli:main"
+tp-backtest = "tp_strategies.backtest_cli:main"
 
 [tool.uv.sources]
 tp-core = { workspace = true }
+tp-trading = { workspace = true }
 
 [build-system]
 requires = ["hatchling>=1.27"]

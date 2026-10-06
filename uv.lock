@@ -24,6 +24,7 @@ members = [
     "tp-ingest",
     "tp-research",
     "tp-strategies",
+    "tp-trading",
     "trading-platform",
 ]
 
@@ -4083,6 +4084,7 @@ dependencies = [
     { name = "numpy" },
     { name = "pandas" },
     { name = "tp-core" },
+    { name = "tp-trading" },
     { name = "typer" },
 ]
 
@@ -4091,7 +4093,25 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.0" },
     { name = "pandas", specifier = ">=2.2" },
     { name = "tp-core", editable = "libs/core" },
+    { name = "tp-trading", editable = "libs/trading" },
     { name = "typer", specifier = ">=0.12" },
+]
+
+[[package]]
+name = "tp-trading"
+version = "0.1.0"
+source = { editable = "libs/trading" }
+dependencies = [
+    { name = "numpy" },
+    { name = "pandas" },
+    { name = "tp-core" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "numpy", specifier = ">=2.0" },
+    { name = "pandas", specifier = ">=2.2" },
+    { name = "tp-core", editable = "libs/core" },
 ]
 
 [[package]]
@@ -4105,6 +4125,7 @@ dependencies = [
     { name = "tp-ingest" },
     { name = "tp-research" },
     { name = "tp-strategies" },
+    { name = "tp-trading" },
 ]
 
 [package.dev-dependencies]
@@ -4133,6 +4154,7 @@ requires-dist = [
     { name = "tp-ingest", editable = "services/ingest" },
     { name = "tp-research", editable = "research" },
     { name = "tp-strategies", editable = "strategies" },
+    { name = "tp-trading", editable = "libs/trading" },
 ]
 
 [package.metadata.requires-dev]

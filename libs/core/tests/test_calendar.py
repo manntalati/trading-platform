@@ -58,3 +58,13 @@ def test_sessions_back_includes_end() -> None:
 def test_session_midnight_utc_tracks_dst() -> None:
     assert session_midnight_utc(date(2024, 1, 2)).hour == 5  # EST
     assert session_midnight_utc(date(2024, 7, 2)).hour == 4  # EDT
+
+
+def test_month_end_sessions_follow_the_exchange_calendar() -> None:
+    from tp_core.calendar import is_last_session_of_month, last_session_of_month, next_session
+
+    assert last_session_of_month(2024, 3) == date(2024, 3, 28)  # Good Friday 29th, then weekend
+    assert last_session_of_month(2024, 12) == date(2024, 12, 31)
+    assert is_last_session_of_month(date(2024, 3, 28))
+    assert not is_last_session_of_month(date(2024, 3, 27))
+    assert next_session(date(2024, 3, 28)) == date(2024, 4, 1)

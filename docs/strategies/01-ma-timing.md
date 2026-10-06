@@ -3,7 +3,10 @@
 - Family: trend following (time-series momentum, monthly)
 - Source: Mebane Faber, *A Quantitative Approach to Tactical Asset Allocation* (2007; updated
   2013). Citation from general knowledge; check the details against the paper.
-- Code: [`strategies/src/tp_strategies/ma_timing.py`](../../strategies/src/tp_strategies/ma_timing.py)
+- Code: [`library/ma_timing.py`](../../strategies/src/tp_strategies/library/ma_timing.py)
+  (event-driven, `tp-backtest run ma-timing`, paper trading) and the vectorised research
+  version [`ma_timing.py`](../../strategies/src/tp_strategies/ma_timing.py); a parity test
+  keeps them identical
 - Notebook: [`research/notebooks/s01_faber_10m_ma.py`](../../research/notebooks/s01_faber_10m_ma.py)
 - Stage: 1 (backtest)
 
