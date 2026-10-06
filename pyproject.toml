@@ -11,6 +11,7 @@ dependencies = [
     "tp-ingest",
     "tp-strategies",
     "tp-research",
+    "tp-trading",
 ]
 
 [tool.uv]
@@ -27,6 +28,7 @@ tp-core = { workspace = true }
 tp-ingest = { workspace = true }
 tp-strategies = { workspace = true }
 tp-research = { workspace = true }
+tp-trading = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -77,7 +79,9 @@ ignore = [
 "research/notebooks/**" = ["E402", "B018"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["tp_api", "tp_broker", "tp_core", "tp_ingest", "tp_strategies", "tp_research"]
+known-first-party = [
+    "tp_api", "tp_broker", "tp_core", "tp_ingest", "tp_strategies", "tp_research", "tp_trading",
+]
 
 [tool.mypy]
 python_version = "3.12"
@@ -85,6 +89,7 @@ strict = true
 warn_unreachable = true
 files = [
     "libs/core/src",
+    "libs/trading/src",
     "services/ingest/src",
     "services/broker/src",
     "services/api/src",
@@ -100,6 +105,7 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = [
     "libs/core/tests",
+    "libs/trading/tests",
     "services/ingest/tests",
     "services/broker/tests",
     "services/api/tests",

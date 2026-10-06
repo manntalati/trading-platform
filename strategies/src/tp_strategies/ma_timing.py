@@ -19,18 +19,18 @@ Execution timing (look-ahead control):
   replicate the paper, not to estimate what you could have earned.
 
 This is the vectorised research version that works on a price matrix. The event-driven version
-(``on_bar`` etc.) comes with the backtest engine and must reproduce these numbers.
+that paper-trades, ``tp_strategies.library.ma_timing.MaTiming``, reproduces these numbers exactly
+(see its parity test).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
 
-from tp_core.calendar import sessions
+from tp_core.calendar import is_last_session_of_month
 
 CASH = "cash"
 
@@ -64,14 +64,9 @@ def month_end_closes(prices: pd.DataFrame) -> pd.DataFrame:
     """
     month = pd.DatetimeIndex(prices.index).to_period("M")
     month_end = prices.groupby(month).tail(1)
-    if len(month_end) and not _is_last_session_of_month(month_end.index[-1].date()):
+    if len(month_end) and not is_last_session_of_month(month_end.index[-1].date()):
         month_end = month_end.iloc[:-1]
     return month_end
-
-
-def _is_last_session_of_month(day: date) -> bool:
-    upcoming = sessions(day + timedelta(days=1), day + timedelta(days=10))
-    return bool(upcoming) and upcoming[0].month != day.month
 
 
 def ma_signals(prices: pd.DataFrame, months: int = 10) -> pd.DataFrame:

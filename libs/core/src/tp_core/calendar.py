@@ -61,3 +61,27 @@ def sessions_back(end: date, count: int) -> list[date]:
 def session_midnight_utc(day: date) -> pd.Timestamp:
     """Midnight New York time on ``day`` expressed in UTC: Alpaca's daily-bar timestamp."""
     return pd.Timestamp(datetime(day.year, day.month, day.day, tzinfo=NEW_YORK)).tz_convert(UTC)
+
+
+@cache
+def last_session_of_month(year: int, month: int) -> date:
+    """The final XNYS session of a calendar month (the exchange calendar is known in advance,
+    so using it is not look-ahead)."""
+    first = date(year, month, 1)
+    nxt = date(year + month // 12, month % 12 + 1, 1)
+    days = sessions(first, nxt - timedelta(days=1))
+    if not days:
+        raise LookupError(f"no XNYS sessions in {year}-{month:02d}")
+    return days[-1]
+
+
+def is_last_session_of_month(day: date) -> bool:
+    return day == last_session_of_month(day.year, day.month)
+
+
+def next_session(day: date) -> date:
+    """The first session strictly after ``day``."""
+    upcoming = sessions(day + timedelta(days=1), day + timedelta(days=14))
+    if not upcoming:
+        raise LookupError(f"no XNYS session in the 14 days after {day}")
+    return upcoming[0]

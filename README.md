@@ -12,11 +12,12 @@ live outside strategy code; backtests are hypotheses, not evidence.
 
 ```
 libs/core/         tp_core        shared library: config, data storage + validation, metrics, portfolio
+libs/trading/      tp_trading     strategy contract, event-driven backtester, simulated execution
 services/ingest/   tp_ingest      data jobs and vendor adapters
 services/broker/   tp_broker      read-only brokerage sync (Fidelity via SnapTrade, Alpaca, demo)
 services/api/      tp_api         dashboard API: REST + live WebSocket
 apps/dashboard/                   dashboard web app (React + TypeScript + Vite)
-strategies/        tp_strategies  strategy library
+strategies/        tp_strategies  strategy library (tp-backtest), research versions, ideas
 research/          tp_research    Phase 0 exercises; notebooks/ holds jupytext .py notebooks
 infra/                            deployment (systemd/cron now; Docker, k3s, Terraform later)
 docs/                             plan, ADRs (docs/decisions), Phase 0 notes (docs/phase0)
@@ -84,6 +85,13 @@ UI development (hot reload): [apps/dashboard/README.md](apps/dashboard/README.md
 
 Strategies live in `strategies/` with a written spec in [`docs/strategies/`](docs/strategies/)
 before any code; notebooks in [`research/`](research/README.md) run them against the lake.
+Library strategies implement one contract that both backtests and paper-trades
+([docs/backtesting.md](docs/backtesting.md), [ADR 0003](docs/decisions/0003-strategy-contract.md)):
+
+```bash
+uv run tp-backtest list
+uv run tp-backtest run ma-timing --start 2018-01-01      # tear sheet vs SPY; saved under data/reports/backtests
+```
 
 | # | Strategy | Spec | Status |
 |---|---|---|---|
