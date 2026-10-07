@@ -73,7 +73,8 @@ All JSON. Reads (`GET`):
 | `/api/bars/{symbol}?days=365` | daily bars (raw and adjusted close) |
 | `/api/options/{underlying}` | latest chain snapshot: ATM IV and expected move per expiry, smile |
 | `/api/portfolio` | accounts (masked), holdings with weights, classification and P&L, option terms (premium per share, breakeven, moneyness, days to expiry), exposures, and `pnl`: unrealized, realized, income, total |
-| `/api/trades?source=all\|mine\|paper` | your trades and the paper bot's fills, newest first, with realized P&L; totals for each |
+| `/api/trades?source=all\|mine\|paper` | your trades (and today's, pending, from position changes) and the paper bot's fills, newest first, with realized P&L; totals; how fresh the brokerage data is |
+| `/api/broker/sync` | the last dashboard-started brokerage sync: running, result |
 | `/api/portfolio/performance?days=365` | current-holdings backtest and account TWR vs benchmarks |
 | `/api/ideas` | research ideas |
 | `/api/strategies/ma-timing?universe=spy\|gtaa` | strategy 1 vs buy and hold |
@@ -83,7 +84,8 @@ All JSON. Reads (`GET`):
 | `/api/paper/events` | paper-trading activity log |
 | `/ws/live` | WebSocket: `snapshot`, then `update` messages with quotes and portfolio value |
 
-Writes (`POST`, paper trading only; never the Fidelity account):
+Writes (`POST`; paper trading, and pulling brokerage data; nothing can trade the Fidelity
+account):
 
 | Endpoint | What |
 |---|---|
@@ -91,6 +93,7 @@ Writes (`POST`, paper trading only; never the Fidelity account):
 | `/api/paper/proposals/{id}/reject` | `{"note": "..."}`: reject, or veto a queued order before it is sent |
 | `/api/paper/approve-all` | `{"strategy": "..."?}`: every pending proposal (of one strategy) |
 | `/api/paper/kill` | `{"reason": "..."}`: engage the kill switch and cancel open paper orders |
+| `/api/broker/sync` | `{"refresh": true?}`: sync the brokerage now (read-only), optionally having SnapTrade re-pull from Fidelity first; runs in the background |
 
 Interactive docs: `http://127.0.0.1:8000/docs`.
 

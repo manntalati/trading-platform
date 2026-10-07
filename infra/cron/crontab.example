@@ -14,6 +14,12 @@ REPO=/home/YOU/trading-platform
 # regular hours either way (the systemd timer keeps it at 15:45 New York all year).
 45 19 *   *   1-5    cd $REPO && .venv/bin/tp-data options snapshot >> $REPO/data/logs/options.log 2>&1
 
+# Fidelity through SnapTrade: free, so hourly on weekdays (SnapTrade refreshes its copy once a
+# day; this picks it up soon after). Add --refresh to make SnapTrade re-pull from Fidelity first
+# (a small SnapTrade fee each time); the dashboard's "Refresh from Fidelity" button does that
+# on demand.
+30 11-23 * *  1-5    cd $REPO && .venv/bin/tp-broker sync --source snaptrade >> $REPO/data/logs/broker.log 2>&1
+
 # Paper trading without the always-on service: `--once` runs whatever is due and exits, so every
 # five minutes is enough. The bot follows the exchange calendar itself (no UTC arithmetic).
 */5 * *   *   *      cd $REPO && .venv/bin/tp-paper bot --once >> $REPO/data/logs/paper.log 2>&1

@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useApi } from "../api";
 import { useThemeColors, GrowthChart } from "../components/charts";
+import { FidelityFreshness } from "../components/broker";
 import { BarList, Card, Delta, Empty, ErrorBanner, Loading, Stat, StatsTable } from "../components/ui";
 import { money, pct, qty } from "../format";
 import type { LiveState } from "../live";
@@ -64,6 +65,13 @@ export default function Portfolio({ live }: { live: LiveState }) {
 
   return (
     <div className="grid">
+      <FidelityFreshness
+        freshness={p.freshness}
+        onSynced={() => {
+          portfolio.reload();
+          perf.reload();
+        }}
+      />
       <div className="grid tiles">
         <Stat label="Total value" value={money(liveTotal)} sub={live.portfolio ? <><Delta value={live.portfolio.day_pnl} kind="money" /> today (stocks and ETFs, live)</> : "Last sync"} />
         <Stat

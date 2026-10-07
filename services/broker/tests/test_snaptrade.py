@@ -16,6 +16,10 @@ ACCOUNT = {
     "meta": {"account_id": "Z12345678", "institution_name": "Fidelity"},
     "balance": {"total": {"amount": 6010.0, "currency": "USD"}},
     "is_paper": False,
+    "sync_status": {
+        "holdings": {"last_successful_sync": "2026-10-06T20:19:15.909815+00:00"},
+        "transactions": {"last_successful_sync": "2026-10-05"},
+    },
 }
 
 
@@ -82,6 +86,9 @@ class FakeApi:
     def connection_portal_url(self, broker: str | None) -> str:
         return "https://app.snaptrade.com/portal?x"
 
+    def refresh_connection(self, authorization_id: str) -> None:
+        self.calls.append(("refresh", authorization_id))
+
 
 def test_snapshot_maps_accounts_and_positions() -> None:
     snap = SnapTradeSource(FakeApi()).snapshot()
@@ -106,6 +113,47 @@ def test_snapshot_maps_accounts_and_positions() -> None:
     assert option["market_value"] == pytest.approx(110.0)
     # Holdings + cash reconcile with the broker's total.
     assert h["market_value"].sum() + account["cash"] == pytest.approx(account["total_value"])
+    # How fresh SnapTrade's cached copy is.
+    assert account["holdings_as_of"] == pd.Timestamp("2026-10-06T20:19:15.909815Z")
+    assert account["transactions_as_of"] == date(2026, 10, 5)
+
+
+class RefreshingApi(FakeApi):
+    """Positions get newer a few polls after the refresh request (or never)."""
+
+    def __init__(self, polls_until_fresh: int | None) -> None:
+        super().__init__()
+        self.polls_until_fresh = polls_until_fresh
+        self.polls = 0
+
+    def list_accounts(self) -> list[dict[str, Any]]:
+        refreshed = any(c[0] == "refresh" for c in self.calls)
+        if refreshed:
+            self.polls += 1
+        if refreshed and self.polls_until_fresh is not None and self.polls > self.polls_until_fresh:
+            newer = {"holdings": {"last_successful_sync": "2026-10-07T14:05:00+00:00"}}
+            return [ACCOUNT | {"sync_status": ACCOUNT["sync_status"] | newer}]
+        return [ACCOUNT]
+
+
+def test_refresh_asks_each_connection_and_waits_for_newer_positions() -> None:
+    api = RefreshingApi(polls_until_fresh=2)
+    slept: list[float] = []
+    clock = iter(range(0, 1000, 15))
+    result = SnapTradeSource(api).refresh(sleep=slept.append, clock=lambda: float(next(clock)))
+    assert ("refresh", "auth-1") in api.calls
+    assert result.completed
+    assert result.requested == 1
+    assert len(slept) == 2  # polled until the positions were newer
+
+
+def test_refresh_gives_up_waiting_without_failing() -> None:
+    clock = iter(range(0, 1000, 15))
+    result = SnapTradeSource(RefreshingApi(polls_until_fresh=None)).refresh(
+        timeout=60, sleep=lambda s: None, clock=lambda: float(next(clock))
+    )
+    assert not result.completed
+    assert "next sync" in result.message
 
 
 def test_positions_key_fallback_for_older_payloads() -> None:

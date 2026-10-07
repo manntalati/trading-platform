@@ -118,6 +118,7 @@ export interface Trade {
   fee: Num;
   realized_pnl: Num;
   cost_known: boolean;
+  pending: boolean; // read off today's position changes; the transaction posts tomorrow
 }
 
 export interface PaperTradeSummary {
@@ -134,6 +135,7 @@ export interface Trades {
   trades: Trade[];
   mine: PnlSummary | null;
   paper: PaperTradeSummary | null;
+  freshness: BrokerFreshness | null;
 }
 
 export interface Portfolio {
@@ -155,6 +157,23 @@ export interface Portfolio {
   concentration?: { largest_weight: Num; largest_symbol: string; effective_positions: Num };
   priced_share?: number;
   pnl?: PortfolioPnl;
+  freshness?: BrokerFreshness;
+}
+
+export interface BrokerFreshness {
+  synced_at: string | null; // when we last pulled from SnapTrade
+  positions_as_of: string | null; // how old SnapTrade's copy of the positions was then
+  transactions_through: string | null; // the last day of transactions it has
+}
+
+export interface BrokerSyncState {
+  running: boolean;
+  refresh?: boolean;
+  source?: string;
+  started_at?: string;
+  finished_at?: string;
+  ok?: boolean;
+  message?: string;
 }
 
 export type Stats = Record<string, Record<string, Num | string>>;

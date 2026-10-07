@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useApi } from "../api";
+import { FidelityFreshness } from "../components/broker";
 import { Card, Delta, Empty, ErrorBanner, Loading, Stat } from "../components/ui";
 import { money, pct, qty } from "../format";
 import type { Trade, Trades as TradesData } from "../types";
@@ -23,6 +24,7 @@ export default function Trades() {
   return (
     <div className="grid">
       <ErrorBanner error={trades.error} />
+      {source !== "paper" && <FidelityFreshness freshness={t?.freshness} onSynced={trades.reload} />}
       <div className="grid tiles">
         {source !== "paper" && (
           <>
@@ -101,8 +103,8 @@ export function TradeTable({ rows, compact = false }: { rows: Trade[]; compact?:
               <td className={r.source === "paper" ? "" : "muted"}>
                 {r.source === "paper" ? <span className="source-tag">Paper</span> : null} {r.source === "paper" ? r.strategy : r.account}
               </td>
-              <td title={r.symbol}>
-                {r.action} {compact ? `${qty(r.quantity)} ` : ""}
+              <td title={r.pending ? "From today's change in your positions: the transaction itself reaches your history tomorrow" : r.symbol}>
+                {r.pending && <span className="source-tag">pending</span>} {r.action} {compact ? `${qty(r.quantity)} ` : ""}
                 <strong>{r.label}</strong>
                 {compact && r.price != null ? <span className="muted"> @ {money(r.price, true)}</span> : null}
               </td>

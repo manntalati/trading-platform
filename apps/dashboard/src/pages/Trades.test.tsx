@@ -18,6 +18,7 @@ const base: Trade = {
   fee: 0.67,
   realized_pnl: 148.68,
   cost_known: true,
+  pending: false,
 };
 
 describe("TradeTable", () => {
@@ -27,7 +28,9 @@ describe("TradeTable", () => {
       { ...base, symbol: "OLD", label: "OLD", kind: "equity", action: "Sell", realized_pnl: null, cost_known: false },
       { ...base, source: "paper", account: "Paper · ma-timing", strategy: "ma-timing", symbol: "SPY", label: "SPY", kind: "equity", action: "Buy", realized_pnl: null },
     ];
+    rows.push({ ...base, symbol: "NEW", label: "NEW", kind: "equity", action: "Bought", realized_pnl: null, pending: true });
     render(<TradeTable rows={rows} />);
+    expect(screen.getByText("pending")).toBeInTheDocument();
     expect(screen.getByText("XYZ Jan 16 '26 $50 Call")).toBeInTheDocument();
     expect(screen.getByText(/\+\$148\.68/)).toBeInTheDocument();
     expect(screen.getByText("cost unknown")).toBeInTheDocument();

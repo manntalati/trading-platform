@@ -28,6 +28,15 @@ def test_sync_stores_snapshot_and_activities(tmp_path: Path) -> None:
     assert pf.external_flows(lake).sum() == pytest.approx(12 * 500)
 
 
+def test_sync_can_refresh_first(tmp_path: Path) -> None:
+    lake = Lake(tmp_path)
+    result = run_sync(lake, FakeBroker(as_of=NOW.date()), now=NOW, refresh=True)
+    assert result.refresh == "demo positions are always fresh"
+    accounts = pf.latest_snapshot(lake).accounts
+    assert (accounts["transactions_as_of"] == date(2024, 7, 11)).all()
+    assert accounts["holdings_as_of"].notna().all()
+
+
 def test_second_sync_fetches_activities_with_overlap(tmp_path: Path) -> None:
     lake = Lake(tmp_path)
     run_sync(lake, FakeBroker(as_of=NOW.date()), now=NOW)
