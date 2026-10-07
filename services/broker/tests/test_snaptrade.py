@@ -3,6 +3,7 @@
 from datetime import date
 from typing import Any
 
+import pandas as pd
 import pytest
 
 from tp_broker.snaptrade import SnapTradeSource
@@ -127,6 +128,7 @@ def act(i: int, kind: str = "BUY", option: bool = False) -> dict[str, Any]:
         "fee": 0,
         "currency": {"code": "USD"},
         "description": "YOU BOUGHT",
+        "option_type": "BUY_TO_OPEN" if option else "",
     }
     return base
 
@@ -139,6 +141,8 @@ def test_activities_paginate_and_map() -> None:
     assert df.iloc[-1]["type"] == "CONTRIBUTION"
     assert df.iloc[0]["symbol"] == "AAPL"
     assert df.iloc[999]["symbol"] == "ABC261218C00045000"  # option trade: from option_symbol
+    assert df.iloc[999]["option_action"] == "BUY_TO_OPEN"
+    assert pd.isna(df.iloc[0]["option_action"])
     assert df.iloc[0]["trade_date"] == date(2024, 7, 1)  # 04:00Z is midnight New York
     assert api.calls == [
         ("activities", (date(2024, 6, 1), 0)),

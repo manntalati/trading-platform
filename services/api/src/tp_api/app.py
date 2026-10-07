@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from tp_api import __version__, paper, queries
+from tp_api.dashboard import bundle_state
 from tp_api.deps import Ctx, require_token
 from tp_api.live import (
     AlpacaQuoteSource,
@@ -52,7 +53,9 @@ def build_hub(settings: Settings, mode: QuoteMode, interval: float = 1.0) -> Liv
     snap = latest_snapshot(ctx.lake)
     table = holdings_table(snap, ctx.classifier)
     held = table[table["kind"].isin(MARKET_KINDS)]
-    symbols = list(dict.fromkeys([*held["symbol"], *ctx.universes.watchlist]))
+    # Option underlyings too: their price shows how far each contract is from its strike.
+    underlyings = table[table["kind"] == "option"]["underlying"].dropna()
+    symbols = list(dict.fromkeys([*held["symbol"], *underlyings, *ctx.universes.watchlist]))
     prices = ctx.prices(None)
     last = prices.ffill().iloc[-1] if not prices.empty else None
     prev_close: dict[str, float] = (
@@ -122,6 +125,7 @@ def create_app(
     @app.get("/api/status", dependencies=auth)
     def status(c: Ctx, request: Request) -> dict[str, Any]:
         out = queries.status(c, now_utc())
+        out["dashboard"] = bundle_state().to_dict()
         hub: LiveHub | None = request.app.state.hub
         out["live"] = (
             {"source": hub.source.name, "symbols": hub.symbols, "error": hub.error}
@@ -143,7 +147,15 @@ def create_app(
 
     @app.get("/api/portfolio", dependencies=auth)
     def portfolio(c: Ctx) -> dict[str, Any]:
-        return queries.portfolio(c)
+        return queries.portfolio(c, now_utc())
+
+    @app.get("/api/trades", dependencies=auth)
+    def trades(
+        c: Ctx,
+        source: Annotated[str, Query(pattern="^(all|mine|paper)$")] = "all",
+        limit: Annotated[int, Query(ge=1, le=2000)] = 300,
+    ) -> dict[str, Any]:
+        return queries.trades(c, source, limit)
 
     @app.get("/api/portfolio/performance", dependencies=auth)
     def performance(c: Ctx, days: Annotated[int, Query(ge=30, le=5000)] = 365) -> dict[str, Any]:

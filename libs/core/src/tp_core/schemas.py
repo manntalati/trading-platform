@@ -186,6 +186,7 @@ RAW_BROKER_ACTIVITIES_SCHEMA = pa.schema(
         ("description", pa.string()),
         ("ingested_at", _TS),
         ("run_id", pa.string()),
+        ("option_action", pa.string()),  # options: BUY_TO_OPEN, SELL_TO_CLOSE, ...; added later
     ]
 )
 

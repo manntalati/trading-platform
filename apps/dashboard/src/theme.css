@@ -551,6 +551,16 @@ button[aria-pressed="true"] {
   text-align: center;
 }
 
+.source-tag {
+  display: inline-block;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 18px;
+}
+
 button.primary {
   background: var(--accent);
   border-color: var(--accent);

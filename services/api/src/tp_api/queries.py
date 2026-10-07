@@ -11,12 +11,14 @@ from typing import Any
 import pandas as pd
 
 from tp_core import metrics
-from tp_core.bars import close_matrix, load_bars
+from tp_core.bars import close_matrix, load_bars, missing_symbols
 from tp_core.calendar import NEW_YORK, last_completed_session, xnys
 from tp_core.chains import load_chain_snapshots
 from tp_core.config import Settings, Universes, load_universes
+from tp_core.pnl import Fill, broker_trades, fill_trades, option_label, summarize
 from tp_core.portfolio import (
     BENCHMARK_SYMBOLS,
+    CASH_KIND,
     Classifier,
     benchmark_returns,
     concentration,
@@ -26,10 +28,12 @@ from tp_core.portfolio import (
     holdings_table,
     latest_snapshot,
     priced_weights,
+    read_activities,
     time_weighted_returns,
     value_history,
 )
 from tp_core.storage import Lake, parquet_files
+from tp_paper.store import PaperStore
 from tp_strategies.ideas import ideas_from_lake
 from tp_strategies.ma_timing import equal_weight_monthly, ma_timing
 
@@ -91,6 +95,19 @@ class Context:
     def prices(self, symbols: list[str] | None = None) -> pd.DataFrame:
         bars = load_bars(self.lake, symbols) if symbols else load_bars(self.lake)
         return close_matrix(bars) if not bars.empty else pd.DataFrame()
+
+    def last_closes(self, symbols: list[str]) -> dict[str, float]:
+        """Latest raw close of each symbol that has bars."""
+        present = [s for s in dict.fromkeys(symbols) if s not in missing_symbols(self.lake, [s])]
+        if not present:
+            return {}
+        bars = load_bars(self.lake, present)
+        last = bars.sort_values("session").groupby("symbol")["close"].last()
+        return {str(k): float(v) for k, v in last.items()}
+
+    def is_cash(self, symbol: str) -> bool:
+        """The money-market sweep (e.g. SPAXX): cash, not a holding or a trade."""
+        return self.classifier.funds.get(symbol) == "Cash"
 
 
 # -- status -------------------------------------------------------------------------------------
@@ -231,11 +248,12 @@ def option_summary(ctx: Context, underlying: str) -> dict[str, Any]:
 # -- portfolio ----------------------------------------------------------------------------------
 
 
-def portfolio(ctx: Context) -> dict[str, Any]:
+def portfolio(ctx: Context, now: datetime | None = None) -> dict[str, Any]:
     snap = latest_snapshot(ctx.lake)
     if snap.empty:
         return {"synced": False, "accounts": [], "holdings": []}
-    table = holdings_table(snap, ctx.classifier)
+    today = (now or datetime.now(UTC)).astimezone(NEW_YORK).date()
+    table = _with_option_terms(ctx, holdings_table(snap, ctx.classifier, today))
     priced = set(ctx.prices().columns)
     columns = ["source", "account_name", "account_number_masked", "institution", "cash"]
     accounts = snap.accounts[[*columns, "total_value", "taken_at"]]
@@ -249,7 +267,155 @@ def portfolio(ctx: Context) -> dict[str, Any]:
         "by_asset_class": clean(exposures(table, "asset_class").to_dict()),
         "concentration": clean(concentration(table)),
         "priced_share": float(priced_weights(table, priced).sum()),
+        "pnl": clean(_pnl(ctx, table, snap.total_value, today)),
     }
+
+
+def _with_option_terms(ctx: Context, table: pd.DataFrame) -> pd.DataFrame:
+    """Per-share premium and cost (as brokers quote them), breakeven and moneyness for options."""
+    out = table.assign(
+        label=table["symbol"],
+        premium=math.nan,
+        cost_premium=math.nan,
+        underlying_price=math.nan,
+        breakeven=math.nan,
+        moneyness=math.nan,
+    )
+    out["expiration"] = [d.isoformat() if isinstance(d, date) else None for d in out["expiration"]]
+    options = out["kind"] == "option"
+    if not options.any():
+        return out
+    closes = ctx.last_closes([str(u) for u in out.loc[options, "underlying"].dropna()])
+    for i in out.index[options]:
+        row = out.loc[i]
+        multiplier = float(row["multiplier"]) or 1.0
+        premium = float(row["price"]) / multiplier
+        cost = float(row["cost_basis_per_unit"]) / multiplier
+        strike, call = float(row["strike"]), row["right"] == "C"
+        spot = closes.get(str(row["underlying"]), math.nan)
+        out.loc[i, ["label", "premium", "cost_premium", "underlying_price"]] = [
+            option_label(str(row["symbol"])) or row["symbol"],
+            premium,
+            cost,
+            spot,
+        ]
+        out.loc[i, "breakeven"] = strike + cost if call else strike - cost
+        out.loc[i, "moneyness"] = (
+            (spot / strike - 1.0) * (1 if call else -1) if strike else math.nan
+        )
+    return out
+
+
+def _pnl(ctx: Context, table: pd.DataFrame, value: float, today: date) -> dict[str, Any]:
+    """Unrealized (open positions vs their cost), realized (closed trades in the synced history),
+    income and fees: how much the account is up or down."""
+    held = table[(table["kind"] != CASH_KIND) & table["unrealized_pnl"].notna()]
+    unrealized = float(held["unrealized_pnl"].sum())
+    cost = float((held["market_value"] - held["unrealized_pnl"]).abs().sum())
+    acts = read_activities(ctx.lake)
+    summary = summarize(broker_trades(acts, is_cash=ctx.is_cash), acts, today)
+    total = unrealized + summary.realized + summary.income - summary.fees
+    return {
+        **summary.to_dict(),
+        "unrealized": unrealized,
+        "unrealized_pct": unrealized / cost if cost else None,
+        "total": total,
+        "value": value,
+        # Only meaningful when the synced history starts with the account's first deposit.
+        "value_minus_deposits": value - summary.net_deposits if summary.net_deposits else None,
+    }
+
+
+# -- trades -------------------------------------------------------------------------------------
+
+
+def trades(ctx: Context, source: str = "all", limit: int = 200) -> dict[str, Any]:
+    """Every trade on one list: yours (brokerage activity) and the paper bot's fills, newest
+    first, each with the P&L it realized; plus totals for both."""
+    rows: list[dict[str, Any]] = []
+    today = datetime.now(UTC).astimezone(NEW_YORK).date()
+    mine = paper = None
+    if source in ("all", "mine"):
+        acts = read_activities(ctx.lake)
+        broker = broker_trades(acts, is_cash=ctx.is_cash)
+        labels = _account_labels(ctx)
+        for t in broker.to_dict("records"):
+            rows.append(
+                {
+                    "date": t["trade_date"],
+                    "source": "broker",
+                    "account": labels.get(str(t["account_id"]), "Brokerage"),
+                    "strategy": None,
+                    **{k: t[k] for k in ("symbol", "label", "kind", "action", "quantity")},
+                    **{k: t[k] for k in ("price", "amount", "fee", "realized_pnl", "cost_known")},
+                }
+            )
+        mine = summarize(broker, acts, today).to_dict()
+    if source in ("all", "paper"):
+        paper_rows, paper = _paper_trades(ctx)
+        rows += paper_rows
+    rows.sort(key=lambda r: str(r["date"]), reverse=True)
+    return {"trades": clean(rows[:limit]), "mine": clean(mine), "paper": clean(paper)}
+
+
+def _account_labels(ctx: Context) -> dict[str, str]:
+    snap = latest_snapshot(ctx.lake)
+    out = {}
+    for _, a in snap.accounts.iterrows():
+        name = a["account_number_masked"] or a["account_name"] or ""
+        out[str(a["account_id"])] = f"{a['institution'] or a['source']} {name}".strip()
+    return out
+
+
+def _paper_trades(ctx: Context) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    path = ctx.settings.data_root / "state" / "paper.sqlite"
+    if not path.exists():
+        return [], None
+    store = PaperStore(path)
+    fills = [
+        Fill(f.strategy, f.symbol, f.side, f.quantity, f.price, f.fees,
+             date.fromisoformat(f.session), f.id)
+        for f in store.fills()
+    ]  # fmt: skip
+    rows = []
+    realized: list[float] = []
+    for r in fill_trades(fills):
+        f: Fill = r["fill"]
+        units = f.quantity if f.side == "buy" else -f.quantity
+        if r["realized_pnl"] is not None:
+            realized.append(r["realized_pnl"])
+        rows.append(
+            {
+                "date": f.day,
+                "source": "paper",
+                "account": f"Paper · {f.book}",
+                "strategy": f.book,
+                "symbol": f.symbol,
+                "label": f.symbol,
+                "kind": "equity",
+                "action": "Buy" if f.side == "buy" else "Sell",
+                "quantity": f.quantity,
+                "price": f.price,
+                "amount": -units * f.price - f.fees,
+                "fee": f.fees,
+                "realized_pnl": r["realized_pnl"],
+                "cost_known": True,
+            }
+        )
+    latest = {d.strategy: d for d in store.sleeve_days()}  # sorted by session: the last wins
+    sleeves = {name: d.equity - d.capital for name, d in latest.items() if d.capital is not None}
+    summary = {
+        "realized": sum(realized),
+        "closed_trades": len(realized),
+        "winners": sum(1 for v in realized if v > 0),
+        "win_rate": sum(1 for v in realized if v > 0) / len(realized) if realized else None,
+        "fills": len(rows),
+        # Each sleeve's equity at its last recorded close less its capital: everything it has
+        # made or lost, open positions included.
+        "pnl": sum(sleeves.values()) if sleeves else None,
+        "by_strategy": sleeves,
+    }
+    return rows, summary
 
 
 def performance(ctx: Context, days: int) -> dict[str, Any]:

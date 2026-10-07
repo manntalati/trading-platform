@@ -42,6 +42,7 @@ ACTIVITY_COLUMNS = (
     "fee",
     "currency",
     "description",
+    "option_action",  # options: BUY_TO_OPEN, SELL_TO_CLOSE, ... (opening vs closing)
 )
 
 

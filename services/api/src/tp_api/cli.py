@@ -9,6 +9,7 @@ import typer
 import uvicorn
 
 from tp_api.app import QuoteMode, create_app
+from tp_api.dashboard import ensure_built
 from tp_core.config import Settings
 
 app = typer.Typer(add_completion=False)
@@ -23,6 +24,9 @@ def serve(
     quotes: Annotated[
         QuoteMode, typer.Option(help="Live prices: alpaca (IEX stream), fake (demo) or off.")
     ] = QuoteMode.alpaca,
+    build: Annotated[
+        bool, typer.Option(help="Rebuild the dashboard first if its source changed (needs Node).")
+    ] = True,
 ) -> None:
     """Serve the API on http://HOST:PORT (the dashboard too, once built)."""
     settings = Settings()
@@ -35,6 +39,8 @@ def serve(
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
+    if build:
+        ensure_built()
     uvicorn.run(create_app(settings, quotes=quotes), host=host, port=port, log_level="info")
 
 

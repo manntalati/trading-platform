@@ -3,7 +3,8 @@ import { useApi } from "../api";
 import { Card, Delta, Empty, ErrorBanner, Stat } from "../components/ui";
 import { money, nyTime, timeAgo } from "../format";
 import type { LiveState } from "../live";
-import type { Ideas, Quote, Status } from "../types";
+import type { Ideas, PaperStatus, Portfolio, Quote, Status, Trades } from "../types";
+import { TradeTable } from "./Trades";
 
 function QuoteTile({ quote }: { quote: Quote }) {
   const prev = useRef(quote.price);
@@ -43,9 +44,15 @@ export function LiveQuotes({ live }: { live: LiveState }) {
 export default function Overview({ live }: { live: LiveState }) {
   const status = useApi<Status>("/api/status", 30_000);
   const ideas = useApi<Ideas>("/api/ideas", 300_000);
+  const portfolio = useApi<Portfolio>("/api/portfolio", 120_000);
+  const trades = useApi<Trades>("/api/trades?limit=8", 60_000);
+  const paper = useApi<PaperStatus>("/api/paper", 60_000);
   const s = status.data;
   const attention = ideas.data?.ideas.filter((i) => i.severity === "attention") ?? [];
   const p = live.portfolio;
+  const pnl = portfolio.data?.pnl;
+  const bot = paper.data?.bot;
+  const paperPnl = trades.data?.paper?.pnl;
 
   return (
     <div className="grid">
@@ -57,14 +64,34 @@ export default function Overview({ live }: { live: LiveState }) {
           sub={p ? <><Delta value={p.day_pnl} kind="money" /> today (<Delta value={p.day_pnl_pct} />)</> : "No portfolio synced"}
         />
         <Stat
+          label="Total P&L"
+          value={pnl ? <Delta value={pnl.total} kind="money" /> : "—"}
+          sub={
+            pnl ? (
+              <>
+                <Delta value={pnl.unrealized} kind="money" /> open · <Delta value={pnl.realized} kind="money" /> closed ·{" "}
+                <a href="#/portfolio">details</a>
+              </>
+            ) : (
+              "No portfolio synced"
+            )
+          }
+        />
+        <Stat
+          label="Paper bot"
+          value={paperPnl != null ? <Delta value={paperPnl} kind="money" /> : bot ? (bot.alive ? "Running" : "Stopped") : "—"}
+          sub={
+            <>
+              <span className={`dot ${bot?.alive ? "good" : bot ? "critical" : ""}`} aria-hidden="true" />{" "}
+              {bot ? (bot.alive ? "running" : "not running") : "not started"}
+              {trades.data?.paper ? ` · ${trades.data.paper.fills} fills` : ""} · <a href="#/paper">paper tab</a>
+            </>
+          }
+        />
+        <Stat
           label="Market"
           value={s ? (s.market.is_open ? "Open" : "Closed") : "—"}
           sub={s ? (s.market.is_open ? `Closes ${nyTime(s.market.next_close)} ET` : `Opens ${nyTime(s.market.next_open)} ET`) : null}
-        />
-        <Stat
-          label="Daily bars"
-          value={s?.bars.latest_session ?? "—"}
-          sub={s ? `${s.bars.symbols} symbols${s.bars.stale ? " · behind schedule" : ""}` : null}
         />
         <Stat
           label="Needs attention"
@@ -75,6 +102,15 @@ export default function Overview({ live }: { live: LiveState }) {
 
       <Card title="Live prices" hint={live.lastUpdate ? `updated ${timeAgo(live.lastUpdate)}` : live.source ?? undefined}>
         <LiveQuotes live={live} />
+      </Card>
+
+      <Card title="Recent trades" hint={<a href="#/trades">all trades</a>}>
+        <ErrorBanner error={trades.error} />
+        {trades.data && trades.data.trades.length > 0 ? (
+          <TradeTable rows={trades.data.trades} compact />
+        ) : (
+          <Empty>No trades yet: yours appear after a brokerage sync, the paper bot's after its first fills.</Empty>
+        )}
       </Card>
 
       <div className="grid cols-2">

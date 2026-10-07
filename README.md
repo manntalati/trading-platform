@@ -73,8 +73,10 @@ How the ideas are generated: [docs/ideas.md](docs/ideas.md).
 
 ## Dashboard
 
-A FastAPI service with live prices over WebSocket, serving a React dashboard: portfolio vs
-benchmarks, ideas, strategies, options and system health. Details: [docs/dashboard.md](docs/dashboard.md).
+A FastAPI service with live prices over WebSocket, serving a React dashboard: portfolio and what
+you're up or down (options included), every trade (yours and the paper bot's) with its P&L,
+paper trading, benchmarks, ideas, strategies, options and system health. `tp-api` rebuilds the
+UI when its source changed. Details: [docs/dashboard.md](docs/dashboard.md).
 
 ```bash
 make web-install web-build                # once: build the UI (needs Node 22+)

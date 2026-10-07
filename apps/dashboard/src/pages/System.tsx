@@ -48,6 +48,17 @@ export default function System({ live }: { live: LiveState }) {
                 ok={s.broker.length ? true : null}
                 detail={s.broker.map((b) => `${b.institution} ${b.account}: ${timeAgo(b.synced_at)}`).join(" · ") || "not linked"}
               />
+              {s.dashboard && (
+                <Row
+                  label="Dashboard build"
+                  ok={!s.dashboard.stale}
+                  detail={
+                    s.dashboard.stale
+                      ? "older than its source: restart tp-api (it rebuilds when Node is installed) or run make web-build"
+                      : `built ${timeAgo(s.dashboard.built_at)}`
+                  }
+                />
+              )}
               <Row
                 label="Live quotes"
                 ok={live.connection === "open" && !live.error}

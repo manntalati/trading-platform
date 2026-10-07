@@ -10,6 +10,7 @@ from datetime import date, timedelta
 import pandas as pd
 
 from tp_broker.base import ACCOUNT_COLUMNS, ACTIVITY_COLUMNS, HOLDING_COLUMNS, BrokerSnapshot
+from tp_core.occ import Right, format_occ
 
 # (account, symbol, description, kind, quantity, cost per unit, fallback price)
 DEMO_HOLDINGS: tuple[tuple[str, str, str, str, float, float, float], ...] = (
@@ -26,6 +27,12 @@ ACCOUNTS = {
     "indiv": ("demo-indiv", "Individual", "…1234"),
     "roth": ("demo-roth", "ROTH IRA", "…5678"),
 }
+# Demo option positions, expiring a while after ``as_of`` (a Friday about 10 and 24 weeks out):
+# (underlying, weeks out, right, strike, contracts, cost per contract, fallback price per contract)
+DEMO_OPTIONS: tuple[tuple[str, int, Right, float, float, float, float], ...] = (
+    ("AAPL", 10, "C", 250.0, 2, 850.0, 1240.0),
+    ("QQQ", 24, "P", 450.0, 1, 600.0, 310.0),
+)
 
 
 @dataclass
@@ -39,8 +46,31 @@ class FakeBroker:
     as_of: date = date(2024, 7, 12)
     name: str = "fake"
 
+    def option_symbols(self) -> list[str]:
+        return [
+            format_occ(u, _friday(self.as_of, weeks), right, strike)
+            for u, weeks, right, strike, *_ in DEMO_OPTIONS
+        ]
+
     def snapshot(self) -> BrokerSnapshot:
         holdings = []
+        for symbol, (underlying, _, right, strike, qty, cost, premium) in zip(
+            self.option_symbols(), DEMO_OPTIONS, strict=True
+        ):
+            holdings.append(
+                {
+                    "account_id": ACCOUNTS["indiv"][0],
+                    "symbol": symbol,
+                    "underlying": underlying,
+                    "description": f"{underlying} {'CALL' if right == 'C' else 'PUT'} {strike:g}",
+                    "kind": "option",
+                    "quantity": qty,
+                    "price": premium,
+                    "market_value": qty * premium,
+                    "cost_basis_per_unit": cost,
+                    "currency": "USD",
+                }
+            )
         for acct, symbol, desc, kind, qty, cost, fallback in DEMO_HOLDINGS:
             price = self.price_of(symbol) if kind in {"stock", "etf"} else None
             price = fallback if price is None else price
@@ -76,7 +106,8 @@ class FakeBroker:
         )
 
     def activities(self, since: date | None) -> pd.DataFrame:
-        """A $500 contribution on the first of each of the last 12 months, plus a dividend."""
+        """A $500 contribution on the first of each of the last 12 months, a dividend, the buys
+        behind the individual account's holdings, and a few closed trades."""
         rows = []
         for months_back in range(12):
             day = (self.as_of.replace(day=1) - timedelta(days=31 * months_back)).replace(day=1)
@@ -84,6 +115,26 @@ class FakeBroker:
         rows.append(
             _activity("d-1", "demo-indiv", "DIVIDEND", "AAPL", self.as_of - timedelta(days=40), 10)
         )
+        start = self.as_of - timedelta(days=300)
+        for acct, symbol, _, kind, qty, cost, _ in DEMO_HOLDINGS:
+            if acct == "indiv" and kind in {"stock", "etf"}:
+                rows.append(_trade(f"b-{symbol}", "BUY", symbol, start, qty, cost))
+        calls = self.option_symbols()
+        expired = format_occ("MSFT", _friday(start, 8), "C", 400.0)
+        rows += [
+            # a stock bought and sold at a profit, another at a loss
+            _trade("rt-1", "BUY", "AMD", start + timedelta(days=20), 10, 150.0),
+            _trade("rt-2", "SELL", "AMD", start + timedelta(days=90), -10, 172.0),
+            _trade("rt-3", "BUY", "INTC", start + timedelta(days=30), 20, 35.0),
+            _trade("rt-4", "SELL", "INTC", start + timedelta(days=120), -20, 31.0),
+            # the option positions held now, and a call that expired worthless
+            _trade("o-1", "BUY", calls[0], self.as_of - timedelta(days=30), 2, 8.5, "BUY_TO_OPEN"),
+            _trade("o-2", "BUY", calls[1], self.as_of - timedelta(days=20), 1, 6.0, "BUY_TO_OPEN"),
+            _trade("o-3", "BUY", expired, start, 1, 4.2, "BUY_TO_OPEN"),
+            _trade("o-4", "OPTIONEXPIRATION", expired, _friday(start, 8), -1, 0.0),
+            # the money-market sweep buys (cash, not trades)
+            _trade("s-1", "BUY", "SPAXX", self.as_of - timedelta(days=5), 250, 1.0),
+        ]
         df = pd.DataFrame(rows, columns=list(ACTIVITY_COLUMNS))
         if since is not None:
             df = df[df["trade_date"] >= since]
@@ -107,3 +158,27 @@ def _activity(
         "currency": "USD",
         "description": kind.title(),
     }
+
+
+def _trade(
+    activity_id: str,
+    kind: str,
+    symbol: str,
+    day: date,
+    units: float,
+    price: float,
+    option_action: str | None = None,
+) -> dict[str, object]:
+    multiplier = 100.0 if option_action or kind == "OPTIONEXPIRATION" else 1.0
+    return {
+        **_activity(activity_id, "demo-indiv", kind, symbol, day, -units * price * multiplier),
+        "units": float(units),
+        "price": price,
+        "option_action": option_action,
+        "description": f"{kind.title()} {symbol}",
+    }
+
+
+def _friday(start: date, weeks: int) -> date:
+    day = start + timedelta(weeks=weeks)
+    return day + timedelta(days=(4 - day.weekday()) % 7)

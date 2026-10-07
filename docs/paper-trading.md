@@ -36,7 +36,8 @@ It is built to be left alone:
   for about two hours, then logged as failed; the next session starts clean.
 - **It reports in.** A heartbeat every few minutes, the next task, and the last result show on
   the dashboard's Paper tab and in `tp-paper status`; everything it does goes to the activity
-  log.
+  log. Its P&L and latest fills are on the Overview, and every fill is on the Trades tab next to
+  your own trades.
 - **The guard rails stay on.** Every order passes the risk checks; the kill switch stops it
   submitting; a sleeve that breaks its drawdown limit is disabled until you run
   `tp-risk enable <name>` (the one thing that needs you).

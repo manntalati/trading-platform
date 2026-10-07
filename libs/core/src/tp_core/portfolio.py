@@ -15,12 +15,15 @@ from __future__ import annotations
 import math
 import tomllib
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from tp_core import metrics
+from tp_core.occ import OccSymbol, parse_occ
+from tp_core.pnl import FLOW_IN, FLOW_OUT, OPTION_MULTIPLIER
 from tp_core.schemas import (
     RAW_BROKER_ACCOUNTS,
     RAW_BROKER_ACCOUNTS_SCHEMA,
@@ -34,8 +37,6 @@ from tp_core.storage import Lake, read_parquet_dir
 # Holdings we can price from our own daily bars (Alpaca covers US-listed stocks and ETFs).
 MARKET_KINDS = frozenset({"stock", "etf", "adr", "cef"})
 CASH_KIND = "cash"
-FLOW_IN = frozenset({"CONTRIBUTION", "DEPOSIT", "TRANSFER_IN"})
-FLOW_OUT = frozenset({"WITHDRAWAL", "TRANSFER_OUT"})
 
 BENCHMARKS: dict[str, dict[str, float]] = {
     "S&P 500 (SPY)": {"SPY": 1.0},
@@ -159,31 +160,47 @@ def account_totals(accounts: pd.DataFrame, holdings: pd.DataFrame) -> pd.Series:
 
 
 def held_symbols(lake: Lake) -> list[str]:
-    """Market-priced symbols in the latest snapshot (to add to the daily bars ingest)."""
+    """Market-priced symbols in the latest snapshot, and the underlyings of options held (to add
+    to the daily bars ingest and the live quotes)."""
     snap = latest_snapshot(lake)
     if snap.holdings.empty:
         return []
-    priced = snap.holdings[snap.holdings["kind"].isin(MARKET_KINDS)]
-    return sorted({str(s).upper() for s in priced["symbol"].dropna()})
+    h = snap.holdings
+    priced = h[h["kind"].isin(MARKET_KINDS)]["symbol"]
+    underlyings = h[h["kind"] == "option"]["underlying"]
+    return sorted({str(s).upper() for s in pd.concat([priced, underlyings]).dropna()})
 
 
 # -- current holdings ---------------------------------------------------------------------------
 
 
-def holdings_table(snap: PortfolioSnapshot, classifier: Classifier) -> pd.DataFrame:
-    """One row per symbol across accounts, plus a cash row, with weights and classification."""
+def holdings_table(
+    snap: PortfolioSnapshot, classifier: Classifier, today: date | None = None
+) -> pd.DataFrame:
+    """One row per symbol across accounts, plus a cash row, with weights and classification.
+
+    Options are per contract (``price`` and cost x the multiplier, so quantity x price is the
+    value), with the contract's terms parsed out and, given ``today``, the days to expiry.
+    """
     columns = [
         "symbol",
         "description",
         "kind",
+        "underlying",
         "quantity",
         "price",
         "market_value",
         "cost_basis_per_unit",
         "unrealized_pnl",
+        "unrealized_pct",
         "weight",
         "sector",
         "asset_class",
+        "multiplier",
+        "expiration",
+        "strike",
+        "right",
+        "days_to_expiry",
     ]
     if snap.empty:
         return pd.DataFrame(columns=columns)
@@ -194,6 +211,7 @@ def holdings_table(snap: PortfolioSnapshot, classifier: Classifier) -> pd.DataFr
         grouped = h.groupby("symbol", dropna=False).agg(
             description=("description", "first"),
             kind=("kind", "first"),
+            underlying=("underlying", "first"),
             quantity=("quantity", "sum"),
             market_value=("market_value", "sum"),
             cost_value=("cost_value", lambda s: s.sum(min_count=len(s))),
@@ -202,18 +220,30 @@ def holdings_table(snap: PortfolioSnapshot, classifier: Classifier) -> pd.DataFr
             qty = float(g["quantity"])
             mv = float(g["market_value"]) if pd.notna(g["market_value"]) else math.nan
             cost_value = float(g["cost_value"]) if pd.notna(g["cost_value"]) else math.nan
-            rows.append(
-                {
-                    "symbol": symbol,
-                    "description": g["description"],
-                    "kind": g["kind"],
-                    "quantity": qty,
-                    "price": mv / qty if qty else math.nan,
-                    "market_value": mv,
-                    "cost_basis_per_unit": cost_value / qty if qty else math.nan,
-                    "unrealized_pnl": mv - cost_value,
+            row: dict[str, object] = {
+                "symbol": symbol,
+                "description": g["description"],
+                "kind": g["kind"],
+                "underlying": g["underlying"] if pd.notna(g["underlying"]) else symbol,
+                "quantity": qty,
+                "price": mv / qty if qty else math.nan,
+                "market_value": mv,
+                "cost_basis_per_unit": cost_value / qty if qty else math.nan,
+                "unrealized_pnl": mv - cost_value,
+                "unrealized_pct": (mv - cost_value) / abs(cost_value) if cost_value else math.nan,
+                "multiplier": 1.0,
+            }
+            occ = _occ(str(symbol)) if g["kind"] == "option" else None
+            if occ is not None:
+                row |= {
+                    "underlying": occ.root if pd.isna(g["underlying"]) else g["underlying"],
+                    "multiplier": OPTION_MULTIPLIER,
+                    "expiration": occ.expiration,
+                    "strike": occ.strike,
+                    "right": occ.right,
+                    "days_to_expiry": (occ.expiration - today).days if today else math.nan,
                 }
-            )
+            rows.append(row)
     cash = float(snap.accounts["cash"].fillna(0.0).sum())
     if cash:
         rows.append(
@@ -223,12 +253,26 @@ def holdings_table(snap: PortfolioSnapshot, classifier: Classifier) -> pd.DataFr
     total = table["market_value"].sum()
     table["weight"] = table["market_value"] / total if total else math.nan
     classes = [
-        classifier.classify(str(s), str(k))
-        for s, k in zip(table["symbol"], table["kind"], strict=True)
+        _option_class(classifier, str(u)) if k == "option" else classifier.classify(str(s), str(k))
+        for s, k, u in zip(table["symbol"], table["kind"], table["underlying"], strict=True)
     ]
     table["sector"] = [c.sector for c in classes]
     table["asset_class"] = [c.asset_class for c in classes]
     return table.sort_values("market_value", ascending=False).reset_index(drop=True)
+
+
+def _option_class(classifier: Classifier, underlying: str) -> Classification:
+    """Options are their own asset class, in their underlying's sector (when it's known)."""
+    of_underlying = classifier.classify(underlying, "stock")
+    known = underlying in classifier.sectors or underlying in classifier.funds
+    return Classification(of_underlying.sector if known else "Options", "Options")
+
+
+def _occ(symbol: str) -> OccSymbol | None:
+    try:
+        return parse_occ(symbol)
+    except ValueError:
+        return None
 
 
 def exposures(table: pd.DataFrame, by: str) -> pd.Series:

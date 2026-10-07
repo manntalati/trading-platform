@@ -19,7 +19,8 @@ runner = CliRunner()
 def test_sync_stores_snapshot_and_activities(tmp_path: Path) -> None:
     lake = Lake(tmp_path)
     result = run_sync(lake, FakeBroker(as_of=NOW.date()), now=NOW)
-    assert (result.accounts, result.activities) == (2, 13)
+    # 12 contributions, a dividend, 6 buys, 2 round trips, 3 option buys, an expiry, a sweep
+    assert (result.accounts, result.activities) == (2, 28)
     assert result.holdings > 5
     snap = pf.latest_snapshot(lake)
     assert snap.total_value > 0
@@ -39,7 +40,7 @@ def test_second_sync_fetches_activities_with_overlap(tmp_path: Path) -> None:
             return super().activities(since)
 
     run_sync(lake, Recording(as_of=NOW.date()), now=NOW.replace(day=13))
-    assert Recording.seen == date(2024, 7, 1) - ACTIVITY_OVERLAP
+    assert Recording.seen == date(2024, 7, 7) - ACTIVITY_OVERLAP  # newest: the 7 July sweep
     # Re-fetched activities do not double count.
     assert pf.external_flows(lake).sum() == pytest.approx(12 * 500)
 
