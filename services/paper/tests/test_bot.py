@@ -283,3 +283,58 @@ def test_a_new_daily_sleeve_gets_its_bars_and_runs_every_evening(auto: Any) -> N
     assert outcome(auto, "propose:2024-08-01") == "done"
     assert not any("leveraged-momentum skipped" in e["message"] for e in store.events())
     assert [d.session for d in store.sleeve_days("leveraged-momentum")][-1] == "2024-08-01"
+
+
+def test_network_errors_are_recognised() -> None:
+    import socket
+
+    import requests
+
+    from tp_paper.bot import is_network_error
+
+    offline = requests.exceptions.ConnectionError(
+        "Failed to resolve 'paper-api.alpaca.markets' ([Errno 8] nodename nor servname provided)"
+    )
+    assert is_network_error(offline)
+    assert is_network_error(socket.gaierror(8, "nodename nor servname provided"))
+    assert is_network_error(TimeoutError())
+    wrapped = RuntimeError("bars refresh failed")
+    wrapped.__cause__ = ConnectionRefusedError()  # as `raise ... from` sets it
+    assert is_network_error(wrapped)
+    assert not is_network_error(RuntimeError("feed down"))
+    assert not is_network_error(ValueError("bad symbol"))
+
+
+def test_no_network_retries_every_two_minutes_until_it_is_back(auto: Any) -> None:
+    import requests
+
+    calls: list[datetime] = []
+    online: list[bool] = []
+
+    def refresh(now: datetime) -> str:
+        calls.append(now)
+        if not online:
+            raise requests.exceptions.ConnectionError("Failed to resolve 'data.alpaca.markets'")
+        lake = Lake(auto.root)
+        symbols = sorted({s for sl in auto.paper.book.sleeves for s in sl.strategy.symbols()})
+        return f"bars through {run_daily(lake, FakeSource(), symbols, now=now).end}"
+
+    monday = date(2024, 8, 5)  # the lake stops on Friday 2 August: the bot must fetch bars
+    bot = Bot(auto.paper, refresh_bars=refresh, clock=auto.clock)
+    start = auto.at(ny(monday, 19))
+    nxt = bot.step()
+    retry = auto.paper.store.get("bot:retry:propose:2024-08-05")
+    assert datetime.fromisoformat(retry["after"]) == start + timedelta(minutes=2)
+    assert bot.seconds_until_next(nxt) == pytest.approx(120)
+    assert any("no network, retrying at" in e["message"] for e in auto.paper.store.events())
+
+    for minutes in range(5, 5 * 12, 5):  # an hour offline, a pass every 5 minutes (cron)
+        auto.at(start + timedelta(minutes=minutes))
+        bot.step()
+    assert len(calls) == 12  # more than MAX_ATTEMPTS: being offline is no reason to give up
+    assert outcome(auto, "propose:2024-08-05") is None
+
+    online.append(True)
+    auto.at(start + timedelta(minutes=61))
+    bot.step()
+    assert outcome(auto, "propose:2024-08-05") == "done"
