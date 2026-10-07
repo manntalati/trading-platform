@@ -48,21 +48,92 @@ export interface Status {
   broker: { source: string; institution: string; account: string; synced_at: string }[];
   universe: { bars: number; options: number; watchlist: string[] };
   live: { source: string; symbols: string[]; error: string | null };
+  dashboard?: { built_at: string | null; source_changed_at: string | null; stale: boolean };
 }
 
 export interface Holding {
   symbol: string;
+  label: string; // options: "XYZ Jan 16 '26 $50 Call"
   description: string | null;
   kind: string;
+  underlying: string | null;
   quantity: Num;
-  price: Num;
+  price: Num; // options: per contract
   market_value: Num;
   cost_basis_per_unit: Num;
   unrealized_pnl: Num;
+  unrealized_pct: Num;
   weight: Num;
   sector: string;
   asset_class: string;
   priced: boolean;
+  // options only
+  multiplier?: Num;
+  expiration?: string | null;
+  strike?: Num;
+  right?: "C" | "P" | null;
+  days_to_expiry?: Num;
+  premium?: Num; // per share, as brokers quote it
+  cost_premium?: Num;
+  underlying_price?: Num;
+  breakeven?: Num;
+  moneyness?: Num; // + in the money, - out of the money (fraction of the strike)
+}
+
+export interface PnlSummary {
+  realized: number;
+  realized_ytd: number;
+  closed_trades: number;
+  winners: number;
+  win_rate: Num;
+  unknown_cost: number;
+  income: number;
+  income_ytd: number;
+  fees: number;
+  net_deposits: number;
+  since: string | null;
+  by_symbol: Record<string, number>;
+}
+
+export interface PortfolioPnl extends PnlSummary {
+  unrealized: number;
+  unrealized_pct: Num;
+  total: number;
+  value: number;
+  value_minus_deposits: Num;
+}
+
+export interface Trade {
+  date: string;
+  source: "broker" | "paper";
+  account: string;
+  strategy: string | null;
+  symbol: string;
+  label: string;
+  kind: "equity" | "option";
+  action: string;
+  quantity: number;
+  price: Num;
+  amount: Num;
+  fee: Num;
+  realized_pnl: Num;
+  cost_known: boolean;
+}
+
+export interface PaperTradeSummary {
+  realized: number;
+  closed_trades: number;
+  winners: number;
+  win_rate: Num;
+  fills: number;
+  pnl: Num;
+  by_strategy: Record<string, number>;
+}
+
+export interface Trades {
+  trades: Trade[];
+  mine: PnlSummary | null;
+  paper: PaperTradeSummary | null;
 }
 
 export interface Portfolio {
@@ -83,6 +154,7 @@ export interface Portfolio {
   by_asset_class?: Record<string, number>;
   concentration?: { largest_weight: Num; largest_symbol: string; effective_positions: Num };
   priced_share?: number;
+  pnl?: PortfolioPnl;
 }
 
 export type Stats = Record<string, Record<string, Num | string>>;

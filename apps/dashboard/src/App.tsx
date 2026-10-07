@@ -8,12 +8,14 @@ import Overview from "./pages/Overview";
 import Paper from "./pages/Paper";
 import Portfolio from "./pages/Portfolio";
 import Strategies from "./pages/Strategies";
+import Trades from "./pages/Trades";
 import System from "./pages/System";
 import type { PaperProposal } from "./types";
 
 const PAGES = [
   { path: "overview", label: "Overview" },
   { path: "portfolio", label: "Portfolio" },
+  { path: "trades", label: "Trades" },
   { path: "ideas", label: "Ideas" },
   { path: "strategies", label: "Strategies" },
   { path: "paper", label: "Paper" },
@@ -97,6 +99,7 @@ export default function App() {
       <main>
         {page === "overview" && <Overview live={live} />}
         {page === "portfolio" && <Portfolio live={live} />}
+        {page === "trades" && <Trades />}
         {page === "ideas" && <Ideas />}
         {page === "strategies" && <Strategies />}
         {page === "paper" && <Paper onChange={waiting.reload} />}

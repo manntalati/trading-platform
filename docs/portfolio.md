@@ -32,12 +32,43 @@ Under `data/raw/broker/` (git-ignored, never pushed):
 |---|---|---|
 | `accounts` | account per sync | cash, broker-reported total; account number masked to last 4 digits |
 | `holdings` | position per sync | quantity, broker price, market value, average cost per unit, kind, underlying; options are stored per contract (price and cost x100) |
-| `activities` | transaction | buys, sells, dividends, contributions, withdrawals, fees; re-fetched with a 30-day overlap, de-duplicated by id |
+| `activities` | transaction | buys, sells, option opens/closes/expirations, dividends, contributions, withdrawals, fees; re-fetched with a 30-day overlap, de-duplicated by id |
 
 Every market-priced holding (stocks, ETFs) is added to the daily bars job automatically, so
 holdings outside `config/universes.toml` get price history too. Mutual funds (e.g. FXAIX) are not
 on Alpaca's market data, so they are valued at the broker's price but left out of the
 price-based analytics (the dashboard shows how much of the portfolio that covers).
+
+## Up or down: profit and loss
+
+The Portfolio tab answers "how much am I up or down" three ways:
+
+| | What | From |
+|---|---|---|
+| **Unrealized** | open positions against what they cost | the broker's average cost per position (each sync) |
+| **Realized** | what closed trades made or lost | your transactions, by average cost |
+| **Total** | unrealized + realized + dividends and interest, less account fees | both |
+
+Realized P&L is worked out from the synced transactions (`tp_core.pnl`): each buy adds its cost
+(fees included), each sale realizes the cash received less the average cost of what was sold.
+The Trades tab lists every trade with the figure it realized.
+
+- **Options** count contracts and use the cash that changed hands, so the x100 multiplier is
+  already in the numbers. An expired contract closes at zero: the whole premium is the loss (or,
+  for one sold to open, the gain). Assignment and exercise close the option at zero too; the
+  shares that change hands appear as their own buy or sell.
+- **The money-market sweep** (SPAXX) moves cash in and out every day; those purchases and
+  redemptions are cash management, not trades, and are left out.
+- **History starts at the first synced transaction.** A sale of something bought before then
+  has an unknown cost: it's marked "cost unknown" and left out of realized P&L rather than
+  counted wrong.
+- Fidelity reports tax-lot (FIFO) gains; this uses average cost, so a partial sale's realized
+  figure can differ from Fidelity's. The total is the same once a position is fully closed.
+
+Options are shown the way the broker shows them: contracts and premium per share (the stored
+price is per contract), with the underlying's price, how far in or out of the money, breakeven
+(strike plus or minus the premium paid) and days to expiry. They sit in their own asset class,
+in their underlying's sector.
 
 ## Two kinds of performance
 

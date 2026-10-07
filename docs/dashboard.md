@@ -2,10 +2,16 @@
 
 A web dashboard over everything the platform collects, live while the market is open:
 
-- **Overview**: market clock, live watchlist, portfolio value and today's P&L ticking in real
-  time, data-pipeline health.
-- **Portfolio**: Fidelity holdings (read-only), allocation by sector and asset class, concentration,
-  and performance against S&P 500, Nasdaq 100 and 60/40.
+- **Overview**: portfolio value and today's P&L ticking in real time, your total P&L, the paper
+  bot's P&L and whether it's running, the latest trades (yours and the bot's), market clock,
+  live watchlist.
+- **Portfolio**: Fidelity holdings (read-only) with what you're up or down: total P&L, unrealized
+  (open positions against their cost) and realized (closed trades), per holding in $ and %;
+  options in their own table, quoted like the broker does (contracts, premium per share), with
+  the underlying's live price, breakeven and days to expiry; allocation by sector and asset
+  class, concentration, and performance against S&P 500, Nasdaq 100 and 60/40.
+- **Trades**: every trade in one list, yours (from the brokerage sync) and the paper bot's
+  fills, newest first, each with the profit or loss it realized; filter All / Mine / Paper bot.
 - **Ideas**: the rules-based research ideas ([ideas.md](ideas.md)) with the numbers behind each.
 - **Strategies**: strategy 1 (10-month MA timing) on SPY and on Faber's GTAA, against buy and hold.
 - **Paper**: the bot's state and next step; the orders it has queued for the next open, each
@@ -25,7 +31,10 @@ uv run tp-api --quotes fake          # http://127.0.0.1:8000 with simulated live
 uv run tp-api --quotes alpaca        # real-time IEX trades from Alpaca (needs ALPACA_* keys)
 ```
 
-`tp-api` serves the built app at `/`. For UI work, `npm run dev` in `apps/dashboard` gives hot
+`tp-api` serves the built app at `/`. When the dashboard's source is newer than the build (you
+pulled new code), it rebuilds it on start if Node and the packages are installed, and otherwise
+logs how to (`make web-install web-build`); the System tab shows when it was built. Without
+that, new pages such as Paper and Trades don't appear. For UI work, `npm run dev` in `apps/dashboard` gives hot
 reload on http://localhost:5173 and proxies `/api` and `/ws` to `tp-api`
 ([apps/dashboard/README.md](../apps/dashboard/README.md)).
 
@@ -48,8 +57,9 @@ Alpaca IEX trade stream (1 connection, <= 30 symbols)
 ```
 
 Streamed symbols are your market-priced holdings plus the `[dashboard] watchlist` in
-`config/universes.toml`. Today's P&L is measured against the last close in the lake. Holdings
-without a live price (mutual funds, options, cash) are held at the broker's last valuation.
+`config/universes.toml`, and the underlyings of options you hold. Today's P&L is measured against
+the last close in the lake. Holdings without a live price (mutual funds, options, cash) are held
+at the broker's last valuation; an option's underlying is live, so its moneyness updates.
 Outside market hours the stream is quiet and the dashboard shows last closes.
 
 ## API
@@ -59,10 +69,11 @@ All JSON. Reads (`GET`):
 | Endpoint | What |
 |---|---|
 | `/api/health` | liveness |
-| `/api/status` | market clock, bars freshness, latest validation and options reports, broker syncs, live feed |
+| `/api/status` | market clock, bars freshness, latest validation and options reports, broker syncs, live feed, dashboard build |
 | `/api/bars/{symbol}?days=365` | daily bars (raw and adjusted close) |
 | `/api/options/{underlying}` | latest chain snapshot: ATM IV and expected move per expiry, smile |
-| `/api/portfolio` | accounts (masked), holdings with weights and classification, exposures |
+| `/api/portfolio` | accounts (masked), holdings with weights, classification and P&L, option terms (premium per share, breakeven, moneyness, days to expiry), exposures, and `pnl`: unrealized, realized, income, total |
+| `/api/trades?source=all\|mine\|paper` | your trades and the paper bot's fills, newest first, with realized P&L; totals for each |
 | `/api/portfolio/performance?days=365` | current-holdings backtest and account TWR vs benchmarks |
 | `/api/ideas` | research ideas |
 | `/api/strategies/ma-timing?universe=spy\|gtaa` | strategy 1 vs buy and hold |

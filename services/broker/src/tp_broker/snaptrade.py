@@ -234,4 +234,5 @@ def _activity_row(account_id: str, activity: Mapping[str, Any]) -> dict[str, Any
         "fee": _num(activity.get("fee")),
         "currency": currency.get("code") if isinstance(currency, Mapping) else None,
         "description": activity.get("description"),
+        "option_action": (activity.get("option_type") or None) if option else None,
     }

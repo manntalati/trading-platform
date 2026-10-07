@@ -6,10 +6,11 @@ export function money(value: number | null | undefined, cents = false): string {
   return (cents || Math.abs(value) < 1000 ? usd2 : usd0).format(value);
 }
 
-/** Signed money, e.g. "+$12.30" / "−$4.00" (true minus sign for readability). */
+/** Signed money, e.g. "+$12.30" / "−$4.00" / "+$23,255" (true minus sign for readability;
+ * cents only under $1,000, like ``money``). */
 export function signedMoney(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return "—";
-  const body = usd2.format(Math.abs(value));
+  const body = (Math.abs(value) < 1000 ? usd2 : usd0).format(Math.abs(value));
   return `${value >= 0 ? "+" : "−"}${body}`;
 }
 

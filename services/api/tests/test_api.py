@@ -11,6 +11,7 @@ from tp_api.app import QuoteMode, create_app
 from tp_broker.fake import FakeBroker
 from tp_broker.jobs import run_sync
 from tp_core.bars import load_bars
+from tp_core.calendar import NEW_YORK
 from tp_core.config import Settings
 from tp_core.storage import Lake
 from tp_ingest.jobs.bars import run_backfill
@@ -73,6 +74,7 @@ def test_status(client: TestClient) -> None:
     assert {b["institution"] for b in body["broker"]} == {"Fidelity (demo)"}
     assert body["live"]["source"] == "fake"
     assert "SPY" in body["live"]["symbols"]
+    assert set(body["dashboard"]) == {"built_at", "source_changed_at", "stale"}
 
 
 def test_bars(client: TestClient) -> None:
@@ -106,6 +108,68 @@ def test_portfolio(client: TestClient) -> None:
     assert body["by_sector"]["Information Technology"] > 0
     assert 0 < body["priced_share"] < 1
     assert all("…" in a["account_number_masked"] for a in body["accounts"])
+
+
+def test_portfolio_options_are_quoted_per_share_with_their_terms(client: TestClient) -> None:
+    body = client.get("/api/portfolio").json()
+    calls = [h for h in body["holdings"] if h["kind"] == "option" and h["right"] == "C"]
+    call = calls[0]
+    assert call["label"].startswith("AAPL ")
+    assert call["label"].endswith(" $250 Call")
+    assert call["underlying"] == "AAPL"
+    assert call["sector"] == "Information Technology"  # the underlying's
+    assert call["asset_class"] == "Options"
+    assert call["premium"] == pytest.approx(12.40)  # per share, as the broker quotes it
+    assert call["cost_premium"] == pytest.approx(8.50)
+    assert call["market_value"] == pytest.approx(2 * 1240.0)  # 2 contracts x 100 shares
+    assert call["breakeven"] == pytest.approx(258.50)
+    assert call["unrealized_pnl"] == pytest.approx(2 * (1240.0 - 850.0))
+    assert call["unrealized_pct"] == pytest.approx(390 / 850)
+    today = datetime.now(UTC).astimezone(NEW_YORK).date()
+    assert call["days_to_expiry"] == (date.fromisoformat(call["expiration"]) - today).days
+    assert call["underlying_price"] > 0
+    assert call["moneyness"] == pytest.approx(call["underlying_price"] / 250 - 1)
+
+
+def test_portfolio_pnl_up_or_down(client: TestClient) -> None:
+    pnl = client.get("/api/portfolio").json()["pnl"]
+    # AMD +220, INTC -80, an expired call -420 (the demo's closed trades)
+    assert pnl["realized"] == pytest.approx(220 - 80 - 420)
+    assert (pnl["closed_trades"], pnl["winners"]) == (3, 1)
+    assert pnl["unrealized"] > 0
+    assert pnl["income"] == pytest.approx(10.0)
+    assert pnl["net_deposits"] == pytest.approx(12 * 500)
+    assert pnl["total"] == pytest.approx(pnl["unrealized"] + pnl["realized"] + pnl["income"])
+    assert pnl["by_symbol"]["AMD"] == pytest.approx(220)
+
+
+def test_trades_combines_yours_and_the_paper_bots(client: TestClient, lake_root: Path) -> None:
+    from tp_paper.store import FillRecord, PaperStore
+
+    store = PaperStore.under(lake_root)
+    for i, (side, price, day) in enumerate(
+        [("buy", 100.0, "2024-07-01"), ("sell", 110.0, "2024-07-03")]
+    ):
+        store.add_fill(FillRecord(f"p{i}", f"p{i}", "ma-timing", "SPY", side, 10, price, 0.0, day,
+                                  f"{day}T13:30:00+00:00", price))  # fmt: skip
+    body = client.get("/api/trades").json()
+    rows = body["trades"]
+    assert [r["date"] for r in rows] == sorted((r["date"] for r in rows), reverse=True)
+    assert {r["source"] for r in rows} == {"broker", "paper"}
+    assert not any(r["symbol"] == "SPAXX" for r in rows)  # the cash sweep isn't a trade
+    paper = [r for r in rows if r["source"] == "paper"]
+    assert paper[0]["account"] == "Paper · ma-timing"
+    assert paper[0]["realized_pnl"] == pytest.approx(100.0)
+    assert body["paper"]["realized"] == pytest.approx(100.0)
+    expired = next(r for r in rows if r["action"] == "Expired")
+    assert expired["label"].startswith("MSFT ")
+    assert expired["label"].endswith(" $400 Call")
+    assert expired["realized_pnl"] == pytest.approx(-420)
+    assert expired["account"] == "Fidelity (demo) …1234"
+    assert body["mine"]["realized"] == pytest.approx(-280)
+    only_paper = client.get("/api/trades?source=paper").json()
+    assert {r["source"] for r in only_paper["trades"]} == {"paper"}
+    assert only_paper["mine"] is None
 
 
 def test_performance(client: TestClient) -> None:
