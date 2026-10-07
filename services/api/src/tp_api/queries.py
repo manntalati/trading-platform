@@ -15,7 +15,15 @@ from tp_core.bars import close_matrix, load_bars, missing_symbols
 from tp_core.calendar import NEW_YORK, last_completed_session, xnys
 from tp_core.chains import load_chain_snapshots
 from tp_core.config import Settings, Universes, load_universes
-from tp_core.pnl import Fill, broker_trades, fill_trades, option_label, summarize
+from tp_core.occ import parse_occ
+from tp_core.pnl import (
+    OPTION_MULTIPLIER,
+    Fill,
+    broker_trades,
+    fill_trades,
+    option_label,
+    summarize,
+)
 from tp_core.portfolio import (
     BENCHMARK_SYMBOLS,
     CASH_KIND,
@@ -27,6 +35,7 @@ from tp_core.portfolio import (
     holdings_backtest,
     holdings_table,
     latest_snapshot,
+    position_changes,
     priced_weights,
     read_activities,
     time_weighted_returns,
@@ -256,9 +265,12 @@ def portfolio(ctx: Context, now: datetime | None = None) -> dict[str, Any]:
     table = _with_option_terms(ctx, holdings_table(snap, ctx.classifier, today))
     priced = set(ctx.prices().columns)
     columns = ["source", "account_name", "account_number_masked", "institution", "cash"]
-    accounts = snap.accounts[[*columns, "total_value", "taken_at"]]
+    accounts = snap.accounts[
+        [*columns, "total_value", "taken_at", "holdings_as_of", "transactions_as_of"]
+    ]
     return {
         "synced": True,
+        "freshness": freshness(snap.accounts),
         "total_value": snap.total_value,
         "cash": float(snap.accounts["cash"].fillna(0).sum()),
         "accounts": records(accounts),
@@ -326,6 +338,23 @@ def _pnl(ctx: Context, table: pd.DataFrame, value: float, today: date) -> dict[s
     }
 
 
+def freshness(accounts: pd.DataFrame) -> dict[str, Any]:
+    """How current the brokerage data is: when we last synced, how old the positions in that
+    sync were (the aggregator caches them), and the last day of transactions it has."""
+    if accounts.empty:
+        return {"synced_at": None, "positions_as_of": None, "transactions_through": None}
+    held = accounts["holdings_as_of"].dropna()
+    txns = accounts["transactions_as_of"].dropna()
+    out: dict[str, Any] = clean(
+        {
+            "synced_at": accounts["taken_at"].max(),
+            "positions_as_of": held.min() if len(held) else None,
+            "transactions_through": txns.min() if len(txns) else None,
+        }
+    )
+    return out
+
+
 # -- trades -------------------------------------------------------------------------------------
 
 
@@ -348,14 +377,69 @@ def trades(ctx: Context, source: str = "all", limit: int = 200) -> dict[str, Any
                     "strategy": None,
                     **{k: t[k] for k in ("symbol", "label", "kind", "action", "quantity")},
                     **{k: t[k] for k in ("price", "amount", "fee", "realized_pnl", "cost_known")},
+                    "pending": False,
                 }
             )
         mine = summarize(broker, acts, today).to_dict()
+        rows += _pending_trades(ctx, acts, labels)
     if source in ("all", "paper"):
         paper_rows, paper = _paper_trades(ctx)
         rows += paper_rows
-    rows.sort(key=lambda r: str(r["date"]), reverse=True)
-    return {"trades": clean(rows[:limit]), "mine": clean(mine), "paper": clean(paper)}
+    rows.sort(key=lambda r: (str(r["date"]), r.get("pending", False)), reverse=True)
+    snap = latest_snapshot(ctx.lake)
+    return {
+        "trades": clean(rows[:limit]),
+        "mine": clean(mine),
+        "paper": clean(paper),
+        "freshness": freshness(snap.accounts) if source != "paper" else None,
+    }
+
+
+def _pending_trades(
+    ctx: Context, acts: pd.DataFrame, labels: dict[str, str]
+) -> list[dict[str, Any]]:
+    """Trades made since the last day's sync that the transaction history doesn't have yet
+    (brokers post transactions the next day), read off the change in positions."""
+    out = []
+    changes = position_changes(ctx.lake)
+    for c in changes.to_dict("records"):
+        since = pd.Timestamp(c["since"]).tz_convert(NEW_YORK).date()
+        if not acts.empty:
+            posted = acts[
+                (acts["account_id"] == c["account_id"])
+                & (acts["symbol"] == c["symbol"])
+                & (acts["trade_date"] >= since)
+            ]
+            if not posted.empty:
+                continue  # already in the transaction history
+        option = c["kind"] == "option"
+        price = float(c["price"]) / (OPTION_MULTIPLIER if option else 1.0)
+        label = option_label(str(c["symbol"])) or str(c["symbol"])
+        expired = False
+        if option and c["change"] < 0:
+            occ = parse_occ(str(c["symbol"]))
+            expired = occ.expiration <= c["date"]
+        action = "Expired" if expired else "Bought" if c["change"] > 0 else "Sold"
+        out.append(
+            {
+                "date": c["date"],
+                "source": "broker",
+                "account": labels.get(str(c["account_id"]), "Brokerage"),
+                "strategy": None,
+                "symbol": c["symbol"],
+                "label": label,
+                "kind": "option" if option else "equity",
+                "action": action,
+                "quantity": abs(float(c["change"])),
+                "price": price,
+                "amount": -float(c["change"]) * float(c["price"]) if c["change"] > 0 else None,
+                "fee": None,
+                "realized_pnl": None,
+                "cost_known": True,
+                "pending": True,
+            }
+        )
+    return out
 
 
 def _account_labels(ctx: Context) -> dict[str, str]:
@@ -400,6 +484,7 @@ def _paper_trades(ctx: Context) -> tuple[list[dict[str, Any]], dict[str, Any] | 
                 "fee": f.fees,
                 "realized_pnl": r["realized_pnl"],
                 "cost_known": True,
+                "pending": False,
             }
         )
     latest = {d.strategy: d for d in store.sleeve_days()}  # sorted by session: the last wins

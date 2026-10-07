@@ -18,7 +18,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from tp_api import __version__, paper, queries
+from tp_api import __version__, broker, paper, queries
+from tp_api.broker import BrokerSync
 from tp_api.dashboard import bundle_state
 from tp_api.deps import Ctx, require_token
 from tp_api.live import (
@@ -63,20 +64,14 @@ def build_hub(settings: Settings, mode: QuoteMode, interval: float = 1.0) -> Liv
         if last is not None
         else {}
     )
-    positions = [
-        Position(str(r["symbol"]), float(r["quantity"]), prev_close[str(r["symbol"])])
-        for _, r in held.iterrows()
-        if str(r["symbol"]) in prev_close
-    ]
-    live_value = sum(p.quantity * p.prev_close for p in positions)
-    static_value = snap.total_value - live_value if not snap.empty else 0.0
+    positions, static_value, as_of = hub_portfolio(ctx, prev_close)
     source: QuoteSource
     if mode is QuoteMode.fake:
         source = FakeQuoteSource(prev_close, interval=interval / 2)
     else:
         key, secret = settings.require_alpaca_keys()
         source = AlpacaQuoteSource(key, secret, feed=settings.quotes_feed)
-    return LiveHub(
+    hub = LiveHub(
         source,
         symbols,
         prev_close=prev_close,
@@ -84,6 +79,40 @@ def build_hub(settings: Settings, mode: QuoteMode, interval: float = 1.0) -> Liv
         static_value=static_value,
         interval=interval,
     )
+    hub.portfolio_as_of = as_of
+    return hub
+
+
+def hub_portfolio(
+    ctx: queries.Context, prev_close: dict[str, float]
+) -> tuple[list[Position], float, object]:
+    """Positions valued live (those with a reference close), the rest of the account's value
+    held at the broker's price, and which snapshot this is."""
+    snap = latest_snapshot(ctx.lake)
+    if snap.empty:
+        return [], 0.0, None
+    table = holdings_table(snap, ctx.classifier)
+    held = table[table["kind"].isin(MARKET_KINDS)]
+    positions = [
+        Position(str(r["symbol"]), float(r["quantity"]), prev_close[str(r["symbol"])])
+        for _, r in held.iterrows()
+        if str(r["symbol"]) in prev_close
+    ]
+    live_value = sum(p.quantity * p.prev_close for p in positions)
+    return positions, snap.total_value - live_value, snap.accounts["taken_at"].max()
+
+
+def update_hub_portfolio(app: FastAPI) -> None:
+    """Re-read the positions if a sync stored a newer snapshot (from the dashboard or cron)."""
+    hub: LiveHub | None = app.state.hub
+    if hub is None:
+        return
+    ctx = queries.Context(app.state.settings)
+    snap_at = latest_snapshot(ctx.lake).accounts["taken_at"].max()
+    if hub.portfolio_as_of is not None and snap_at == hub.portfolio_as_of:
+        return
+    positions, static_value, as_of = hub_portfolio(ctx, hub.prev_close)
+    hub.set_portfolio(positions, static_value, as_of)
 
 
 def create_app(
@@ -146,7 +175,8 @@ def create_app(
         return queries.option_summary(c, underlying)
 
     @app.get("/api/portfolio", dependencies=auth)
-    def portfolio(c: Ctx) -> dict[str, Any]:
+    def portfolio(c: Ctx, request: Request) -> dict[str, Any]:
+        update_hub_portfolio(request.app)  # a sync since the last look: value the new positions
         return queries.portfolio(c, now_utc())
 
     @app.get("/api/trades", dependencies=auth)
@@ -170,6 +200,8 @@ def create_app(
         return queries.ma_timing_view(c, universe)
 
     app.include_router(paper.router)
+    app.state.broker_sync = BrokerSync(settings, on_done=lambda: update_hub_portfolio(app))
+    app.include_router(broker.router)
 
     @app.websocket("/ws/live")
     async def live(websocket: WebSocket) -> None:

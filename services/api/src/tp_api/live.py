@@ -141,6 +141,15 @@ class LiveHub:
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self._tasks: list[asyncio.Task[None]] = []
         self.error: str | None = None
+        self.portfolio_as_of: object = None  # the snapshot the positions come from
+
+    def set_portfolio(self, positions: list[Position], static_value: float, as_of: object) -> None:
+        """New positions after a brokerage sync (symbols already streamed stay live; others are
+        valued at the broker's price until the next restart)."""
+        self.positions = positions
+        self.static_value = static_value
+        self.portfolio_as_of = as_of
+        self._dirty |= {p.symbol for p in positions}  # push the new total on the next tick
 
     # -- lifecycle --------------------------------------------------------------------------------
 

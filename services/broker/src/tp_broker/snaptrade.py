@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Mapping
+import time
+from collections.abc import Callable, Mapping
 from datetime import date
 from typing import Any, Protocol
 
@@ -23,6 +24,7 @@ from tp_broker.base import (
     ACTIVITY_COLUMNS,
     HOLDING_COLUMNS,
     BrokerSnapshot,
+    RefreshResult,
     mask_account_number,
 )
 from tp_core.config import Settings
@@ -56,6 +58,8 @@ class SnapTradeApi(Protocol):
     ) -> dict[str, Any]: ...
 
     def connection_portal_url(self, broker: str | None) -> str: ...
+
+    def refresh_connection(self, authorization_id: str) -> None: ...
 
 
 class SdkSnapTradeApi:
@@ -96,6 +100,9 @@ class SdkSnapTradeApi:
         body = self._client.account_information.get_account_activities(**kwargs).body
         return dict(self._plain(body))
 
+    def refresh_connection(self, authorization_id: str) -> None:
+        self._client.connections.refresh_brokerage_authorization(authorization_id=authorization_id)
+
     def connection_portal_url(self, broker: str | None) -> str:
         kwargs: dict[str, Any] = {"connection_type": "read"}
         if broker:
@@ -134,6 +141,51 @@ class SnapTradeSource:
             accounts=pd.DataFrame(accounts, columns=list(ACCOUNT_COLUMNS)),
             holdings=pd.DataFrame(holdings, columns=list(HOLDING_COLUMNS)),
         )
+
+    def refresh(
+        self,
+        *,
+        timeout: float = 180.0,
+        poll: float = 15.0,
+        sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> RefreshResult:
+        """Ask SnapTrade to pull positions from the brokerage now (it caches them for a day; this
+        also pulls the previous day's transactions if it hasn't yet), then wait until every
+        account reports positions newer than before. SnapTrade charges a small fee per refresh.
+
+        Transactions are never updated intraday: a trade made today shows in the positions after
+        a refresh, but in the transaction history only the next day."""
+        accounts = self.api.list_accounts()
+        before = {str(a["id"]): _holdings_as_of(a) for a in accounts}
+        connections = sorted(
+            {
+                str(a["brokerage_authorization"])
+                for a in accounts
+                if a.get("brokerage_authorization")
+            }
+        )
+        for connection in connections:
+            self.api.refresh_connection(connection)
+        start = clock()
+        while True:
+            now = {str(a["id"]): _holdings_as_of(a) for a in self.api.list_accounts()}
+            fresh = all(
+                now.get(k) is not None and (v is None or now[k] > v)  # type: ignore[operator]
+                for k, v in before.items()
+            )
+            waited = clock() - start
+            if fresh:
+                return RefreshResult(len(connections), True, waited, "positions refreshed")
+            if waited >= timeout:
+                return RefreshResult(
+                    len(connections),
+                    False,
+                    waited,
+                    f"refresh requested; positions not updated after {waited:.0f}s (they will "
+                    "be on the next sync)",
+                )
+            sleep(poll)
 
     def activities(self, since: date | None) -> pd.DataFrame:
         rows: list[dict[str, Any]] = []
@@ -178,7 +230,23 @@ def _account_row(account: Mapping[str, Any], balances: list[dict[str, Any]]) -> 
         "cash": cash,
         "total_value": _num(total),
         "currency": "USD",
+        "holdings_as_of": _holdings_as_of(account),
+        "transactions_as_of": _transactions_as_of(account),
     }
+
+
+def _holdings_as_of(account: Mapping[str, Any]) -> pd.Timestamp | None:
+    value = ((account.get("sync_status") or {}).get("holdings") or {}).get("last_successful_sync")
+    stamp = pd.to_datetime(value, utc=True, errors="coerce") if value else None
+    return None if stamp is None or pd.isna(stamp) else stamp
+
+
+def _transactions_as_of(account: Mapping[str, Any]) -> date | None:
+    value = ((account.get("sync_status") or {}).get("transactions") or {}).get(
+        "last_successful_sync"
+    )
+    stamp = pd.to_datetime(value, errors="coerce") if value else None
+    return None if stamp is None or pd.isna(stamp) else stamp.date()
 
 
 def _holding_row(account_id: str, position: Mapping[str, Any]) -> dict[str, Any]:

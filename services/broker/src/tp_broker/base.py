@@ -16,6 +16,8 @@ ACCOUNT_COLUMNS = (
     "cash",
     "total_value",
     "currency",
+    "holdings_as_of",  # when the aggregator last pulled positions from the brokerage (UTC)
+    "transactions_as_of",  # the last day of transactions it has
 )
 HOLDING_COLUMNS = (
     "account_id",
@@ -61,6 +63,22 @@ class BrokerSource(Protocol):
 
     def activities(self, since: date | None) -> pd.DataFrame:
         """Transactions with trade date on or after ``since`` (all history if None)."""
+        ...
+
+
+@dataclass(frozen=True)
+class RefreshResult:
+    """Asking the aggregator to pull fresh data from the brokerage before a sync."""
+
+    requested: int  # connections asked to refresh
+    completed: bool  # every account's positions came back newer before the timeout
+    waited: float  # seconds
+    message: str = ""
+
+
+class RefreshableSource(BrokerSource, Protocol):
+    def refresh(self, *, timeout: float = 180.0) -> RefreshResult:
+        """Have the brokerage data re-pulled now (it is otherwise cached for a day)."""
         ...
 
 

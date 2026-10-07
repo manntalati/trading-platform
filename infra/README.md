@@ -8,7 +8,7 @@ are plain CLI commands so they move into containers unchanged.
 |---|---|---|
 | `tp-bars-daily` | Mon–Fri 18:30 America/New_York | `tp-data bars daily` |
 | `tp-options-snapshot` | Mon–Fri 15:45 America/New_York | `tp-data options snapshot` |
-| `tp-broker-sync` | Mon–Fri 17:45 America/New_York | `tp-broker sync --source snaptrade` |
+| `tp-broker-sync` | Mon–Fri hourly 07:30–21:30 America/New_York | `tp-broker sync --source snaptrade` |
 | `tp-paper-bot` | always on (service, restarts on failure) | `tp-paper bot`: the unattended paper-trading cycle |
 | `tp-api` | always on (service, restarts on failure) | `tp-api --host 127.0.0.1 --quotes alpaca` |
 | `tp-notify-failure@` | on failure of any unit above | journal + optional Discord webhook |

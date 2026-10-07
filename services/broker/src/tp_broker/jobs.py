@@ -10,7 +10,7 @@ from typing import Any
 
 import pandas as pd
 
-from tp_broker.base import BrokerSource
+from tp_broker.base import BrokerSource, RefreshResult
 from tp_core.calendar import NEW_YORK
 from tp_core.portfolio import read_activities
 from tp_core.schemas import (
@@ -38,11 +38,25 @@ class SyncResult:
     holdings: int = 0
     activities: int = 0
     files: list[Path] = field(default_factory=list)
+    refresh: str | None = None  # what asking the aggregator for fresh data achieved
 
 
-def run_sync(lake: Lake, source: BrokerSource, *, now: datetime) -> SyncResult:
+def run_sync(
+    lake: Lake, source: BrokerSource, *, now: datetime, refresh: bool = False
+) -> SyncResult:
+    """Snapshot balances and positions and fetch new transactions. With ``refresh``, first have
+    the aggregator pull fresh positions from the brokerage (its data is otherwise up to a day
+    old; SnapTrade charges a small fee per refresh)."""
     run_id = new_run_id(now)
     result = SyncResult(run_id=run_id, source=source.name)
+    if refresh:
+        refresher = getattr(source, "refresh", None)
+        if refresher is None:
+            result.refresh = f"{source.name} can't be refreshed on demand"
+        else:
+            outcome: RefreshResult = refresher()
+            result.refresh = outcome.message
+            log.info("%s refresh: %s (%.0fs)", source.name, outcome.message, outcome.waited)
     snapshot_date = now.astimezone(NEW_YORK).date()
     stamp: dict[str, Any] = {
         "taken_at": pd.Timestamp(now),

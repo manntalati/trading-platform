@@ -9,7 +9,13 @@ from datetime import date, timedelta
 
 import pandas as pd
 
-from tp_broker.base import ACCOUNT_COLUMNS, ACTIVITY_COLUMNS, HOLDING_COLUMNS, BrokerSnapshot
+from tp_broker.base import (
+    ACCOUNT_COLUMNS,
+    ACTIVITY_COLUMNS,
+    HOLDING_COLUMNS,
+    BrokerSnapshot,
+    RefreshResult,
+)
 from tp_core.occ import Right, format_occ
 
 # (account, symbol, description, kind, quantity, cost per unit, fallback price)
@@ -97,6 +103,10 @@ class FakeBroker:
                 "cash": self.cash[key],
                 "total_value": None,
                 "currency": "USD",
+                # like an aggregator's daily cache: positions from the last close, transactions
+                # through the day before
+                "holdings_as_of": pd.Timestamp(self.as_of, tz="UTC") + pd.Timedelta(hours=20),
+                "transactions_as_of": self.as_of - timedelta(days=1),
             }
             for key, (account_id, name, masked) in ACCOUNTS.items()
         ]
@@ -104,6 +114,9 @@ class FakeBroker:
             accounts=pd.DataFrame(accounts, columns=list(ACCOUNT_COLUMNS)),
             holdings=pd.DataFrame(holdings, columns=list(HOLDING_COLUMNS)),
         )
+
+    def refresh(self, *, timeout: float = 180.0) -> RefreshResult:
+        return RefreshResult(1, True, 0.0, "demo positions are always fresh")
 
     def activities(self, since: date | None) -> pd.DataFrame:
         """A $500 contribution on the first of each of the last 12 months, a dividend, the buys

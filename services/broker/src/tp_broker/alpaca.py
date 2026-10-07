@@ -51,6 +51,7 @@ class AlpacaAccountSource:
                 "cash": _num(account.get("cash")),
                 "total_value": _num(account.get("equity") or account.get("portfolio_value")),
                 "currency": account.get("currency") or "USD",
+                "holdings_as_of": pd.Timestamp.now(tz="UTC"),  # Alpaca answers live
             }
         ]
         holdings = []

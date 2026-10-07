@@ -209,3 +209,36 @@ def test_empty_lake(lake: Lake, classifier: pf.Classifier) -> None:
     assert pf.value_history(lake).empty
     assert pf.external_flows(lake).empty
     assert pf.held_symbols(lake) == []
+
+
+def test_position_changes_since_an_earlier_day_are_the_trades_not_posted_yet(lake: Lake) -> None:
+    acct = [{"account_id": "a", "cash": 1000.0}]
+    store_sync(
+        lake,
+        DAY1,
+        acct,
+        [holding("a", "AAA", 10, 50, cost=40), holding("a", "BBB", 5, 20, cost=18)],
+    )
+    # same day, positions not refreshed: no change
+    store_sync(
+        lake,
+        DAY2.replace(hour=14),
+        acct,
+        [holding("a", "AAA", 10, 50, cost=40), holding("a", "BBB", 5, 20, cost=18)],
+    )
+    # refreshed after trading: bought 5 more AAA at 52, sold all BBB, opened CCC at 9
+    store_sync(lake, DAY2, acct, [holding("a", "AAA", 15, 52, cost=(400 + 5 * 52) / 15),
+                                  holding("a", "CCC", 3, 9, cost=9)])  # fmt: skip
+    changes = pf.position_changes(lake).set_index("symbol")
+    assert changes.loc["AAA", "change"] == pytest.approx(5)
+    assert changes.loc["AAA", "price"] == pytest.approx(52)  # from the change in cost
+    assert changes.loc["BBB", "change"] == pytest.approx(-5)
+    assert np.isnan(changes.loc["BBB", "price"])  # a sale's price isn't in the positions
+    assert changes.loc["CCC", "price"] == pytest.approx(9)
+    assert (changes["date"] == DAY2.date()).all()
+    assert (changes["since"] == pd.Timestamp(DAY1)).all()  # vs the last sync of an earlier day
+
+
+def test_no_position_changes_without_an_earlier_day(lake: Lake) -> None:
+    store_sync(lake, DAY1, [{"account_id": "a", "cash": 1.0}], [holding("a", "AAA", 1, 5)])
+    assert pf.position_changes(lake).empty

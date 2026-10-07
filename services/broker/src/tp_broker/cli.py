@@ -17,6 +17,7 @@ import typer
 
 from tp_broker.base import BrokerSource
 from tp_broker.jobs import run_sync
+from tp_broker.sources import open_source
 from tp_core.config import MissingCredentialsError, Settings
 from tp_core.portfolio import Classifier, holdings_table, latest_snapshot
 from tp_core.storage import Lake
@@ -47,30 +48,9 @@ def _config_error(exc: Exception) -> NoReturn:
     raise typer.Exit(code=2)
 
 
-def latest_close_lookup(lake: Lake) -> dict[str, float]:
-    from tp_core.bars import load_bars
-
-    bars = load_bars(lake)
-    if bars.empty:
-        return {}
-    last = bars.sort_values("session").groupby("symbol")["close"].last()
-    return {str(k): float(v) for k, v in last.items()}
-
-
 def make_source(name: BrokerName, settings: Settings) -> BrokerSource:
     try:
-        if name is BrokerName.fake:
-            from tp_broker.fake import FakeBroker
-
-            closes = latest_close_lookup(Lake(settings.data_root))
-            return FakeBroker(price_of=closes.get, as_of=now_utc().date())
-        if name is BrokerName.alpaca:
-            from tp_broker.alpaca import AlpacaAccountSource
-
-            return AlpacaAccountSource.from_settings(settings)
-        from tp_broker.snaptrade import SnapTradeSource
-
-        return SnapTradeSource.from_settings(settings)
+        return open_source(name.value, settings)
     except MissingCredentialsError as exc:
         _config_error(exc)
 
@@ -102,10 +82,23 @@ def link(
 
 
 @app.command()
-def sync(source: SourceOpt = BrokerName.snaptrade) -> None:
+def sync(
+    source: SourceOpt = BrokerName.snaptrade,
+    refresh: Annotated[
+        bool,
+        typer.Option(
+            help="First have SnapTrade pull fresh positions from Fidelity (otherwise up to a day "
+            "old). SnapTrade charges a small fee per refresh; see its billing page."
+        ),
+    ] = False,
+) -> None:
     """Snapshot balances and positions, and fetch new transactions, into the lake."""
     settings = Settings()
-    result = run_sync(Lake(settings.data_root), make_source(source, settings), now=now_utc())
+    result = run_sync(
+        Lake(settings.data_root), make_source(source, settings), now=now_utc(), refresh=refresh
+    )
+    if result.refresh:
+        typer.echo(f"refresh: {result.refresh}")
     typer.echo(
         f"{result.source}: {result.accounts} accounts, {result.holdings} holdings, "
         f"{result.activities} activities (run {result.run_id})"

@@ -19,7 +19,7 @@ connection page; this project never sees your Fidelity password.
 3. `uv run tp-broker link` prints a connection-portal URL (valid 5 minutes). Open it, pick
    Fidelity, choose **read-only** access, and log in.
 4. `uv run tp-broker sync` stores the first snapshot; `uv run tp-broker show` prints it.
-5. Enable the daily timer (`tp-broker-sync`, weekdays 17:45 ET; see [infra/](../infra/README.md)).
+5. Enable the sync timer (`tp-broker-sync`, hourly on weekdays; see [infra/](../infra/README.md)).
 
 No keys yet? `uv run tp-broker sync --source fake` loads a Fidelity-shaped demo portfolio, and
 `--source alpaca` shows your Alpaca paper account.
@@ -38,6 +38,27 @@ Every market-priced holding (stocks, ETFs) is added to the daily bars job automa
 holdings outside `config/universes.toml` get price history too. Mutual funds (e.g. FXAIX) are not
 on Alpaca's market data, so they are valued at the broker's price but left out of the
 price-based analytics (the dashboard shows how much of the portfolio that covers).
+
+## How fresh is it?
+
+Fidelity data reaches the platform through SnapTrade, which keeps its own copy:
+
+| | SnapTrade refreshes it | So on the platform |
+|---|---|---|
+| **Positions and balances** | once a day (around the close), or on demand | values move live all day (prices stream); quantities change after a sync that has newer positions |
+| **Transactions** | once a day, and never intraday: a trade appears the **next day** | today's trades show on the Trades tab as **pending**, read off the change in your positions, until the transaction posts |
+
+- `tp-broker sync` copies whatever SnapTrade has; it's free, so run it often (hourly in the
+  schedules in [infra/](../infra/README.md)) to pick up SnapTrade's daily refresh soon after
+  it lands.
+- **Refresh from Fidelity** (the button on the Portfolio and Trades tabs, or
+  `tp-broker sync --refresh`) first has SnapTrade re-pull your positions from Fidelity, which
+  takes up to a few minutes. SnapTrade charges a small fee per refresh (see the billing page
+  of your SnapTrade dashboard), so it's on demand rather than scheduled.
+- The tabs say how current the data is: when positions were last pulled from Fidelity, the
+  last day of transactions, and when the platform last synced.
+- A pending trade has the quantity and, for a buy, the price paid (from the change in the
+  position's cost). Its realized P&L comes with the real transaction the next day.
 
 ## Up or down: profit and loss
 

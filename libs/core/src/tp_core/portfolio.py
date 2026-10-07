@@ -171,6 +171,73 @@ def held_symbols(lake: Lake) -> list[str]:
     return sorted({str(s).upper() for s in pd.concat([priced, underlyings]).dropna()})
 
 
+def position_changes(lake: Lake) -> pd.DataFrame:
+    """What changed in each account's positions since its last sync on an earlier day.
+
+    Brokers post transactions the next day, so a trade made today shows here (once the positions
+    have been refreshed) before it reaches the transaction history. ``price`` is the estimated
+    price paid per unit, from the change in the position's cost; unknown for sales.
+    """
+    columns = ["source", "account_id", "symbol", "underlying", "kind", "change", "price",
+               "date", "since", "as_of"]  # fmt: skip
+    accounts, holdings = read_accounts(lake), read_holdings(lake)
+    if accounts.empty:
+        return pd.DataFrame(columns=columns)
+    rows = []
+    for (source, account), syncs in accounts.groupby(["source", "account_id"]):
+        syncs = syncs.sort_values("taken_at")
+        latest = syncs.iloc[-1]
+        earlier = syncs[syncs["snapshot_date"] < latest["snapshot_date"]]
+        if earlier.empty:
+            continue
+        before = earlier.iloc[-1]
+        mine = holdings[(holdings["source"] == source) & (holdings["account_id"] == account)]
+        now = _positions(mine[mine["taken_at"] == latest["taken_at"]])
+        then = _positions(mine[mine["taken_at"] == before["taken_at"]])
+        as_of = latest.get("holdings_as_of")
+        for symbol in sorted(set(now.index) | set(then.index)):
+            q1 = float(now["quantity"].get(symbol, 0.0))
+            q0 = float(then["quantity"].get(symbol, 0.0))
+            change = q1 - q0
+            if abs(change) < 1e-9:
+                continue
+            info = now.loc[symbol] if symbol in now.index else then.loc[symbol]
+            price = math.nan
+            if change > 0:
+                paid = float(now["cost"].get(symbol, math.nan)) - float(
+                    then["cost"].get(symbol, 0.0)
+                )
+                price = paid / change if paid == paid and paid > 0 else math.nan
+            rows.append(
+                {
+                    "source": source,
+                    "account_id": account,
+                    "symbol": symbol,
+                    "underlying": info["underlying"],
+                    "kind": info["kind"],
+                    "change": change,
+                    "price": price,
+                    "date": latest["snapshot_date"],
+                    "since": before["taken_at"],
+                    "as_of": as_of if pd.notna(as_of) else latest["taken_at"],
+                }
+            )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _positions(h: pd.DataFrame) -> pd.DataFrame:
+    """Quantity and total cost per symbol of one account's snapshot."""
+    if h.empty:
+        return pd.DataFrame(columns=["quantity", "cost", "underlying", "kind"])
+    h = h.assign(cost=h["quantity"] * h["cost_basis_per_unit"])
+    return h.groupby("symbol").agg(
+        quantity=("quantity", "sum"),
+        cost=("cost", lambda c: c.sum(min_count=len(c))),
+        underlying=("underlying", "first"),
+        kind=("kind", "first"),
+    )
+
+
 # -- current holdings ---------------------------------------------------------------------------
 
 

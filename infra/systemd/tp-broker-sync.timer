@@ -1,9 +1,11 @@
-# 17:45 New York on weekdays, ahead of tp-bars-daily at 18:30.
+# Hourly on weekdays, 07:30-21:30 New York: SnapTrade refreshes its copy of the Fidelity data
+# once a day (around the close; transactions the next day), and each sync is free, so this picks
+# it up soon after. The dashboard's "Refresh from Fidelity" button forces a fresh pull on demand.
 [Unit]
-Description=trading-platform: brokerage portfolio sync (weekdays 17:45 ET)
+Description=trading-platform: brokerage portfolio sync (weekdays, hourly 07:30-21:30 ET)
 
 [Timer]
-OnCalendar=Mon..Fri 17:45 America/New_York
+OnCalendar=Mon..Fri 07..21:30 America/New_York
 Persistent=true
 
 [Install]

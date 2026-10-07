@@ -145,6 +145,10 @@ RAW_BROKER_ACCOUNTS_SCHEMA = pa.schema(
         ("currency", pa.string()),
         ("ingested_at", _TS),
         ("run_id", pa.string()),
+        # How fresh the broker's data is (the aggregator caches it): when positions were last
+        # pulled from the brokerage, and the last day of transactions it has. Added later.
+        ("holdings_as_of", _TS),
+        ("transactions_as_of", pa.date32()),
     ]
 )
 
