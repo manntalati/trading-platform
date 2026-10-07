@@ -46,6 +46,13 @@ TaskName = Literal["submit", "sync_open", "sync_close", "propose"]
 PROPOSE_AT = time(18, 45)  # New York: after the 18:30 bars job
 RETRY = timedelta(minutes=15)
 MAX_ATTEMPTS = 8  # about two hours of retries before a task is given up for the session
+# No network at all (a laptop that just woke up, Wi-Fi reconnecting): try again soon, and keep
+# trying until the task's window closes rather than giving up after MAX_ATTEMPTS.
+NETWORK_RETRY = timedelta(minutes=2)
+_NETWORK_ERRORS = frozenset(
+    {"ConnectionError", "ConnectTimeout", "NameResolutionError", "NewConnectionError",
+     "MaxRetryError", "ReadTimeout", "Timeout", "gaierror"}
+)  # fmt: skip
 
 BarsRefresher = Callable[[datetime], str]
 
@@ -198,7 +205,14 @@ class Bot:
             self._fail(task, now, attempts, str(exc), retryable=task.name == "propose")
         except Exception as exc:
             log.exception("%s failed", task.key)
-            self._fail(task, now, attempts, f"{type(exc).__name__}: {exc}", retryable=True)
+            self._fail(
+                task,
+                now,
+                attempts,
+                f"{type(exc).__name__}: {exc}",
+                retryable=True,
+                network=is_network_error(exc),
+            )
         else:
             self._finish(task, "done", message)
 
@@ -237,17 +251,28 @@ class Bot:
         return message
 
     def _fail(
-        self, task: Task, now: datetime, attempts: int, message: str, *, retryable: bool
+        self,
+        task: Task,
+        now: datetime,
+        attempts: int,
+        message: str,
+        *,
+        retryable: bool,
+        network: bool = False,
     ) -> None:
-        if not retryable or attempts >= MAX_ATTEMPTS:
+        if not retryable or (attempts >= MAX_ATTEMPTS and not network):
             self._finish(task, "failed", message)
             return
-        after = min(now + RETRY, task.deadline)
+        after = min(now + (NETWORK_RETRY if network else RETRY), task.deadline)
         self.paper.store.put(
             f"bot:retry:{task.key}",
             {"after": after.isoformat(), "attempts": attempts, "error": message},
         )
-        self._log(f"{task.key} attempt {attempts} failed, retrying at {after:%H:%M} UTC: {message}")
+        why = "no network" if network else "failed"
+        self._log(
+            f"{task.key} attempt {attempts} {why}, retrying at {after:%H:%M} UTC "
+            f"({after.astimezone(NEW_YORK):%H:%M} ET): {message}"
+        )
 
     # -- bookkeeping ------------------------------------------------------------------------------
 
@@ -293,3 +318,18 @@ class Bot:
     def _log(self, message: str) -> None:
         log.info(message)
         self.paper.store.log("bot", message)
+
+
+def is_network_error(exc: BaseException) -> bool:
+    """Whether ``exc`` (or what caused it) means the broker or data feed couldn't be reached at
+    all: DNS failing, no route, a connection refused or timing out."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, ConnectionError | TimeoutError):
+            return True
+        if any(t.__name__ in _NETWORK_ERRORS for t in type(current).__mro__):
+            return True
+        current = current.__cause__ or current.__context__
+    return False

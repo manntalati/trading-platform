@@ -33,7 +33,9 @@ It is built to be left alone:
   repeats an order; a task whose window closed while the bot was down is logged as missed, and
   proposals that were never sent expire at the next evening's run.
 - **Failures retry.** A task that fails (broker or data feed down) is retried every 15 minutes
-  for about two hours, then logged as failed; the next session starts clean.
+  for about two hours, then logged as failed; the next session starts clean. With no network at
+  all (a laptop that just woke up and is still reconnecting) it tries again every 2 minutes,
+  until the task's window closes.
 - **It reports in.** A heartbeat every few minutes, the next task, and the last result show on
   the dashboard's Paper tab and in `tp-paper status`; everything it does goes to the activity
   log. Its P&L and latest fills are on the Overview, and every fill is on the Trades tab next to
