@@ -142,6 +142,7 @@ export interface Portfolio {
   synced: boolean;
   total_value?: number;
   cash?: number;
+  cash_detail?: CashSummary;
   accounts: {
     source: string;
     account_name: string | null;
@@ -305,4 +306,174 @@ export interface PaperEvent {
   at: string;
   kind: string;
   message: string;
+}
+
+// /api/positions (services/api/src/tp_api/positions.py)
+
+export interface PositionNote {
+  level: "info" | "warn" | "risk";
+  title: string;
+  text: string;
+}
+
+export interface ScenarioGrid {
+  columns: string[]; // "Now", a date midway, "Expiry <date>"
+  rows: { move: number; price: number; cells: { value: number; pnl: number }[] }[];
+}
+
+/** Per-position figures in dollars for the whole position; per-share ones as brokers quote. */
+export interface OptionStats {
+  right: "call" | "put";
+  strike: number;
+  expiration: string;
+  expires_at: string;
+  days_left: number;
+  spot: Num;
+  mark: Num;
+  mark_source: "mid" | "last trade" | "broker" | "none";
+  bid: Num;
+  ask: Num;
+  quote_at: string | null;
+  cost: Num;
+  value?: Num;
+  pnl?: Num;
+  pnl_pct?: Num;
+  spread?: Num;
+  spread_pct?: Num;
+  exit_value?: Num;
+  intrinsic?: Num;
+  extrinsic?: Num;
+  moneyness?: Num;
+  in_the_money?: boolean;
+  breakeven?: Num;
+  breakeven_move_pct?: Num;
+  iv?: Num;
+  realized_vol?: Num;
+  delta?: Num;
+  gamma?: Num;
+  theta?: Num;
+  vega?: Num;
+  delta_shares?: Num;
+  theta_day?: Num;
+  vega_point?: Num;
+  prob_itm?: Num;
+  prob_profit?: Num;
+  expected_move?: Num;
+  expected_move_pct?: Num;
+  scenarios?: ScenarioGrid;
+}
+
+export interface StockStats {
+  price: Num;
+  prev_close?: Num;
+  day_change?: Num;
+  day_change_pct?: Num;
+  returns?: Record<"1W" | "1M" | "3M" | "6M" | "1Y", Num>;
+  ytd?: Num;
+  high_52w?: Num;
+  low_52w?: Num;
+  from_high_pct?: Num;
+  from_low_pct?: Num;
+  vol_20d?: Num;
+  vol_60d?: Num;
+  max_drawdown_1y?: Num;
+  ma20?: Num;
+  ma50?: Num;
+  ma200?: Num;
+  vs_ma20?: Num;
+  vs_ma50?: Num;
+  vs_ma200?: Num;
+  beta_1y?: Num;
+}
+
+interface PositionBase {
+  symbol: string;
+  label: string;
+  description: string | null;
+  underlying: string;
+  quantity: number;
+  price: Num;
+  price_source: string;
+  broker_price: Num;
+  cost: Num; // per share
+  market_value: Num;
+  pnl: Num;
+  pnl_pct: Num;
+  day_pnl: Num;
+  weight: Num;
+  sector: string;
+  asset_class: string;
+  notes: PositionNote[];
+}
+
+export interface StockPosition extends PositionBase {
+  kind: string; // stock, etf, mutualfund, ...
+  stats: StockStats;
+}
+
+export interface OptionPositionRow extends PositionBase {
+  kind: "option";
+  stats: OptionStats;
+  underlying_stats: Partial<StockStats>;
+}
+
+export type PositionRow = StockPosition | OptionPositionRow;
+
+export function isOption(p: PositionRow): p is OptionPositionRow {
+  return p.kind === "option";
+}
+
+export interface CashSummary {
+  cash: number; // what's really there: the broker's total less the holdings
+  reported_cash: number; // the broker's cash balance
+  unsettled: number; // reported - cash: paying for trades that haven't settled
+  buying_power: Num;
+  holdings_value: number;
+  total_value: number;
+}
+
+export interface Positions {
+  synced: boolean;
+  now?: string;
+  freshness?: BrokerFreshness;
+  total_value?: number;
+  cash?: CashSummary;
+  market_data?: { source: string | null; error: string | null; option_quotes: number; options: number };
+  risk_free_rate?: number;
+  totals?: {
+    value: number;
+    pnl: number;
+    day_pnl: number;
+    options_value: number;
+    options_pnl: number;
+    theta_day: number;
+    expiring_within_7d: number;
+  };
+  exposure?: {
+    underlying: string;
+    shares: number;
+    option_delta_shares: number;
+    net_shares: number;
+    net_value: Num;
+    price: Num;
+    options: number;
+  }[];
+  positions: PositionRow[];
+  ask?: { available: boolean; model: string };
+}
+
+export interface ChatTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface AskReply {
+  answer: string;
+  model: string;
+  stop_reason: string | null;
+  sources: { url: string; title: string }[];
+  searches: number;
+  usage: { input_tokens: number; output_tokens: number };
+  note: string | null;
+  as_of: string;
 }

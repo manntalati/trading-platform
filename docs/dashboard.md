@@ -10,6 +10,11 @@ A web dashboard over everything the platform collects, live while the market is 
   options in their own table, quoted like the broker does (contracts, premium per share), with
   the underlying's live price, breakeven and days to expiry; allocation by sector and asset
   class, concentration, and performance against S&P 500, Nasdaq 100 and 60/40.
+- **Positions**: every open position with its statistics: for stocks, returns, range, moving
+  averages, volatility and beta; for options, the live bid/ask, implied volatility, greeks,
+  time decay in dollars a day, the move needed to break even, the odds, and a scenario grid;
+  plain-language notes on each (exercise at expiry, decay, wide markets); and a chat with Claude
+  about any position ([positions.md](positions.md)).
 - **Trades**: every trade in one list, yours (from the brokerage sync) and the paper bot's
   fills, newest first, each with the profit or loss it realized; filter All / Mine / Paper bot.
 - **Ideas**: the rules-based research ideas ([ideas.md](ideas.md)) with the numbers behind each.
@@ -73,6 +78,7 @@ All JSON. Reads (`GET`):
 | `/api/bars/{symbol}?days=365` | daily bars (raw and adjusted close) |
 | `/api/options/{underlying}` | latest chain snapshot: ATM IV and expected move per expiry, smile |
 | `/api/portfolio` | accounts (masked), holdings with weights, classification and P&L, option terms (premium per share, breakeven, moneyness, days to expiry), exposures, and `pnl`: unrealized, realized, income, total |
+| `/api/positions` | every position with statistics and notes; options with live quotes, greeks, odds and scenarios ([positions.md](positions.md)) |
 | `/api/trades?source=all\|mine\|paper` | your trades (and today's, pending, from position changes) and the paper bot's fills, newest first, with realized P&L; totals; how fresh the brokerage data is |
 | `/api/broker/sync` | the last dashboard-started brokerage sync: running, result |
 | `/api/portfolio/performance?days=365` | current-holdings backtest and account TWR vs benchmarks |
@@ -93,6 +99,7 @@ account):
 | `/api/paper/proposals/{id}/reject` | `{"note": "..."}`: reject, or veto a queued order before it is sent |
 | `/api/paper/approve-all` | `{"strategy": "..."?}`: every pending proposal (of one strategy) |
 | `/api/paper/kill` | `{"reason": "..."}`: engage the kill switch and cancel open paper orders |
+| `/api/positions/ask` | `{"question": "...", "symbol": "..."?, "history": [...]}`: ask Claude about a position (needs `ANTHROPIC_API_KEY`; sends the figures to Anthropic's API) |
 | `/api/broker/sync` | `{"refresh": true?}`: sync the brokerage now (read-only), optionally having SnapTrade re-pull from Fidelity first; runs in the background |
 
 Interactive docs: `http://127.0.0.1:8000/docs`.
@@ -109,7 +116,8 @@ The dashboard shows your brokerage holdings, so:
 - It only answers to the host names in `TP_DASHBOARD_HOSTS` (default `localhost,127.0.0.1`), so
   a web page whose domain points at your machine (DNS rebinding) gets nothing. Add the name you
   use to reach it remotely.
-- The paper-trading writes also need the dashboard's `X-TP-Client: dashboard` header and, when
-  the browser sends one, an `Origin` matching the host. A page you happen to visit can't send
-  that header to another site without a CORS preflight, which this server never grants, so it
-  can't approve trades or trip the kill switch on your behalf.
+- The writes (paper trading, brokerage sync, asking Claude) also need the dashboard's
+  `X-TP-Client: dashboard` header and, when the browser sends one, an `Origin` matching the
+  host. A page you happen to visit can't send that header to another site without a CORS
+  preflight, which this server never grants, so it can't approve trades, trip the kill switch
+  or run up your Claude bill on your behalf.

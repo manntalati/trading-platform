@@ -18,6 +18,7 @@ from alpaca.data.historical.stock import StockHistoricalDataClient
 from alpaca.data.requests import (
     CorporateActionsRequest,
     OptionChainRequest,
+    OptionSnapshotRequest,
     StockBarsRequest,
     StockSnapshotRequest,
 )
@@ -150,6 +151,17 @@ class AlpacaSource:
             expiration_date_lte=expiration_lte,
         )
         raw = cast(dict[str, dict[str, Any]], self._options.get_option_chain(request))
+        return option_chain_from_raw(raw)
+
+    def option_snapshots(self, contracts: Sequence[str]) -> pd.DataFrame:
+        """Latest quote, trade, IV and greeks of specific contracts (OCC symbols): the options
+        you hold, without fetching their whole chains."""
+        if not contracts:
+            return option_chain_from_raw({})
+        request = OptionSnapshotRequest(
+            symbol_or_symbols=list(contracts), feed=OptionsFeed(self.options_feed)
+        )
+        raw = cast(dict[str, dict[str, Any]], self._options.get_option_snapshot(request))
         return option_chain_from_raw(raw)
 
     def option_contracts(self, underlying: str, *, expiration_lte: date) -> pd.DataFrame:

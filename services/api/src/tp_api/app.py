@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from tp_api import __version__, broker, paper, queries
+from tp_api import __version__, broker, paper, positions, queries
 from tp_api.broker import BrokerSync
 from tp_api.dashboard import bundle_state
 from tp_api.deps import Ctx, require_token
@@ -29,6 +29,7 @@ from tp_api.live import (
     Position,
     QuoteSource,
 )
+from tp_api.positions import AlpacaMarketData, ClaudeAdvisor, MarketData
 from tp_core.config import MissingCredentialsError, Settings
 from tp_core.portfolio import MARKET_KINDS, holdings_table, latest_snapshot
 
@@ -81,6 +82,17 @@ def build_hub(settings: Settings, mode: QuoteMode, interval: float = 1.0) -> Liv
     )
     hub.portfolio_as_of = as_of
     return hub
+
+
+def build_market_data(settings: Settings, mode: QuoteMode) -> MarketData | None:
+    """Option quotes and stock prices fetched on demand (with live quotes from Alpaca only:
+    the demo modes stay offline)."""
+    if mode is not QuoteMode.alpaca:
+        return None
+    try:
+        return AlpacaMarketData.from_settings(settings)
+    except MissingCredentialsError:
+        return None
 
 
 def hub_portfolio(
@@ -200,6 +212,9 @@ def create_app(
         return queries.ma_timing_view(c, universe)
 
     app.include_router(paper.router)
+    app.state.market = build_market_data(settings, quotes)
+    app.state.advisor = ClaudeAdvisor(settings)
+    app.include_router(positions.router)
     app.state.broker_sync = BrokerSync(settings, on_done=lambda: update_hub_portfolio(app))
     app.include_router(broker.router)
 

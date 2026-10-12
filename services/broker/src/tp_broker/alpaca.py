@@ -52,6 +52,10 @@ class AlpacaAccountSource:
                 "total_value": _num(account.get("equity") or account.get("portfolio_value")),
                 "currency": account.get("currency") or "USD",
                 "holdings_as_of": pd.Timestamp.now(tz="UTC"),  # Alpaca answers live
+                # without margin: what a cash account could spend
+                "buying_power": _num(
+                    account.get("non_marginable_buying_power") or account.get("buying_power")
+                ),
             }
         ]
         holdings = []
