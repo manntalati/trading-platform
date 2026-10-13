@@ -34,7 +34,9 @@ from tp_core.macro import load_macro
 from tp_core.storage import Lake, parquet_files
 
 NAMES = ("fundamentals", "valuation", "earnings", "macro")
-_CACHE: dict[tuple[str, str, float], Any] = {}
+# (lake root, table) -> (the files' latest modification time, the table): one entry per table,
+# replaced when the files change, so a long-running process (the API) doesn't accumulate them
+_CACHE: dict[tuple[str, str], tuple[float, Any]] = {}
 
 
 def _stamp(directory: Path) -> float:
@@ -47,10 +49,13 @@ class LakeReference:
         self.lake = lake
 
     def _cached(self, key: str, directory: Path, build: Any) -> Any:
-        k = (str(self.lake.root.resolve()), key, _stamp(directory))
-        if k not in _CACHE:
-            _CACHE[k] = build()
-        return _CACHE[k]
+        k = (str(self.lake.root.resolve()), key)
+        stamp = _stamp(directory)
+        hit = _CACHE.get(k)
+        if hit is None or hit[0] != stamp:
+            hit = (stamp, build())
+            _CACHE[k] = hit
+        return hit[1]
 
     # -- tables ----------------------------------------------------------------------------------
 
