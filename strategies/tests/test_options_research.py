@@ -12,8 +12,12 @@ from tp_core.testing import synthetic_chain
 from tp_strategies.options_research import (
     Rules,
     analyze,
+    calendar_pick,
+    cash_secured_put_pick,
     covered_call_pick,
+    credit_spread_pick,
     holding_actions,
+    iron_condor_pick,
     leaps_pick,
     leaps_view,
     rank_ideas,
@@ -130,6 +134,57 @@ def test_analyze_and_rank_ideas() -> None:
     assert ideas["leaps"][0]["pick"]["dte"] >= 270
     assert [i["symbol"] for i in ideas["bearish"]] == ["ABC"]
     assert ideas["bearish"][0]["pick"]["long"]["right"] == "put"
+
+    # options are expensive on XYZ and it's rising: sell a put, or a put spread to cap the risk
+    assert {"cash_secured_put", "put_credit_spread", "iron_condor", "calendar"} <= set(ups["picks"])
+    assert ups["vol"]["skew_25d"] == pytest.approx(0.0, abs=0.01)  # the synthetic smile is flat
+    assert [i["symbol"] for i in ideas["income"]] == ["XYZ"]  # never the downtrend
+    income = ideas["income"][0]
+    assert income["pick"]["cash_required"] == income["pick"]["strike"] * 100
+    assert income["alternative"]["kind"] == "put credit spread"
+    assert any("the seller's" in w for w in income["why"])
+    assert any("caps the gain" in r for r in income["risks"])
+
+
+def test_premium_selling_structures() -> None:
+    c = chain()
+    csp = cash_secured_put_pick(c, 100.0, NOW, 0.04, RULES)
+    assert csp is not None
+    assert csp["dte"] == 46
+    assert 0.15 <= abs(csp["delta"]) <= 0.35
+    assert csp["strike"] < 100
+    assert csp["premium"] == pytest.approx(csp["bid"] * 100)
+    assert csp["net_entry"] == pytest.approx(csp["strike"] - csp["bid"])
+
+    puts = credit_spread_pick(c, 100.0, NOW, 0.04, "P", RULES)
+    calls = credit_spread_pick(c, 100.0, NOW, 0.04, "C", RULES)
+    assert puts is not None
+    assert calls is not None
+    for s, sign in ((puts, -1), (calls, 1)):
+        assert (s["long"]["strike"] - s["short"]["strike"]) * sign > 0  # the wing is further out
+        assert 0 < s["credit"] < s["width"]
+        assert s["max_loss"] == pytest.approx((s["width"] - s["credit"]) * 100)
+        assert s["breakeven"] == pytest.approx(s["short"]["strike"] + sign * s["credit"])
+        assert 0.5 < s["prob_profit"] < 0.95
+        assert s["theta_day"] > 0  # the seller earns the decay
+
+    condor = iron_condor_pick(c, 100.0, NOW, 0.04, RULES)
+    assert condor is not None
+    assert condor["put_spread"]["short"]["strike"] < 100 < condor["call_spread"]["short"]["strike"]
+    assert condor["put_spread"]["dte"] == condor["call_spread"]["dte"]
+    assert condor["lower_breakeven"] < 100 < condor["upper_breakeven"]
+    assert 0 < condor["prob_profit"] < 1
+
+    cal = calendar_pick(c, 100.0, NOW, 0.04, RULES)
+    assert cal is not None
+    assert cal["front"]["dte"] < cal["back"]["dte"]
+    assert cal["front"]["strike"] == cal["back"]["strike"] == 100
+    assert cal["debit"] > 0
+    assert cal["theta_day"] > 0
+    assert cal["vega"] > 0  # long the later expiry's volatility
+    lo, hi = cal["profit_range"]
+    assert lo < 100 < hi
+    assert cal["max_profit_est"] > 0
 
 
 def test_event_in_the_term_structure_is_a_risk() -> None:

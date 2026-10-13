@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
-import type { ContractPick, ResearchIdea, SpreadPick } from "../types";
-import { IdeaCard, PickSummary } from "./Research";
+import type { CalendarPick, ContractPick, CreditSpreadPick, IronCondorPick, OptionSummary, ResearchIdea, SpreadPick } from "../types";
+import { fitLabel, skewLine } from "./Options";
+import { IdeaCard, PickLine, PickSummary } from "./Research";
 
 const call: ContractPick = {
   contract: "XYZ260313C00100000",
@@ -78,5 +79,96 @@ describe("PickSummary", () => {
     expect(screen.getByText("acts like 80 shares")).toBeInTheDocument();
     expect(screen.getByText("$7,500")).toBeInTheDocument();
     expect(screen.getByText("3.1%/yr")).toBeInTheDocument();
+  });
+});
+
+const put: ContractPick = { ...call, contract: "XYZ260313P00095000", label: "XYZ Mar 13 '26 $95 Put", right: "put", strike: 95, price: 1.8, delta: -0.25, theta_day: -4.2 };
+
+const putSpread: CreditSpreadPick = {
+  kind: "put credit spread",
+  short: put,
+  long: { ...put, strike: 90, label: "XYZ Mar 13 '26 $90 Put" },
+  credit: 1.1,
+  premium: 110,
+  width: 5,
+  max_loss: 390,
+  return_on_risk: 0.28,
+  breakeven: 93.9,
+  breakeven_move_pct: -0.08,
+  prob_profit: 0.71,
+  theta_day: 2.2,
+  dte: 35,
+};
+
+describe("selling premium", () => {
+  it("shows a cash-secured put as a sale with the cash it ties up", () => {
+    const csp = { ...put, premium: 180, cash_required: 9500, yield_pct: 0.019, annualized_pct: 0.2, net_entry: 93.2, net_entry_discount_pct: -0.086, prob_assigned: 0.24 };
+    render(<PickSummary pick={csp} />);
+    expect(screen.getByText(/\$9,500 set aside/)).toBeInTheDocument();
+    expect(screen.getByText("+$4.20/day")).toBeInTheDocument(); // the seller earns the decay
+    expect(screen.getByText("24%")).toBeInTheDocument();
+  });
+
+  it("shows a credit spread's credit, maximum loss and odds, not a debit spread's", () => {
+    render(<PickSummary pick={putSpread} />);
+    expect(screen.getByText("$390.00")).toBeInTheDocument();
+    expect(screen.getByText("71%")).toBeInTheDocument();
+    render(<PickLine pick={putSpread} />);
+    expect(screen.getByText(/put credit spread \$95\/\$90/)).toBeInTheDocument();
+  });
+
+  it("shows an iron condor's range and a calendar's best case", () => {
+    const condor: IronCondorPick = {
+      kind: "iron condor",
+      put_spread: putSpread,
+      call_spread: { ...putSpread, kind: "call credit spread", short: { ...call, strike: 110 }, long: { ...call, strike: 115 } },
+      credit: 2.0,
+      premium: 200,
+      max_loss: 300,
+      return_on_risk: 0.67,
+      lower_breakeven: 93,
+      upper_breakeven: 112,
+      range_pct: [-0.09, 0.1],
+      prob_profit: 0.55,
+      theta_day: 4.1,
+      dte: 35,
+    };
+    render(<PickSummary pick={condor} />);
+    expect(screen.getByText("$93.00–$112.00")).toBeInTheDocument();
+    const cal: CalendarPick = {
+      kind: "calendar",
+      front: call,
+      back: { ...call, expiration: "2026-05-15" },
+      strike: 100,
+      debit: 1.9,
+      cost: 190,
+      max_profit_est: 250,
+      profit_range: [93, 108],
+      prob_profit: 0.45,
+      theta_day: 2.7,
+      vega: 5,
+      front_iv: 0.34,
+      back_iv: 0.31,
+    };
+    render(<PickSummary pick={cal} />);
+    expect(screen.getByText("$250.00")).toBeInTheDocument();
+    expect(screen.getByText("34% / 31%")).toBeInTheDocument();
+  });
+});
+
+describe("smile in words", () => {
+  it("describes skew, term structure and bad quotes", () => {
+    const v = {
+      underlying: "XYZ",
+      snapshot_at: null,
+      term: [],
+      smile: [],
+      skew: { skew_25d: -0.052, butterfly_25d: 0.004, iv30: 0.3, iv90: 0.27, ratio: 0.9, shape: "backwardation" },
+      quote_arbitrage: { vertical: 1, butterfly: 0 },
+    } as OptionSummary;
+    expect(skewLine(v)).toBe(
+      "25-delta puts trade 5.2 volatility points over calls; 90-day IV 0.90x the 30-day (near-term options dearer: the market expects a rough few weeks); 1 call quotes inconsistent with each other (stale or bad quotes).",
+    );
+    expect(fitLabel(null)).toBe("too few quotes");
   });
 });

@@ -358,7 +358,17 @@ function OptionMetrics({ o }: { o: OptionPositionRow }) {
       <Metric label="Time decay" value={s.theta_day != null ? `${signedMoney(s.theta_day)}/day` : "—"} sub={s.extrinsic != null ? `${money(s.extrinsic, true)} of the price is time value` : null} />
       <Metric label="Odds of profit at expiry" value={pct(s.prob_profit, 0)} sub={`in the money: ${pct(s.prob_itm, 0)}`} />
       <Metric label="Market-implied move" value={s.expected_move_pct != null ? `±${pct(s.expected_move_pct, 1)}` : "—"} sub={s.expected_move != null ? `±${money(s.expected_move, true)} by expiry (1σ)` : null} />
-      <Metric label="Implied volatility" value={pct(s.iv, 0)} sub={s.realized_vol != null ? `stock's 20-day: ${pct(s.realized_vol, 0)}` : null} />
+      <Metric
+        label="Implied volatility"
+        value={pct(s.iv, 0)}
+        sub={
+          s.early_exercise_value != null && s.early_exercise_value >= 0.05
+            ? `American: ${money(s.early_exercise_value, true)} a share is the right to exercise early`
+            : s.realized_vol != null
+              ? `stock's 20-day: ${pct(s.realized_vol, 0)}`
+              : null
+        }
+      />
       <Metric label="Delta" value={num(s.delta, 2)} sub={s.delta_shares != null ? `acts like ${num(s.delta_shares, 0)} shares` : null} />
       <Metric label="Gamma" value={num(s.gamma, 3)} sub="delta change per $1" />
       <Metric label="Vega" value={s.vega_point != null ? signedMoney(s.vega_point) : "—"} sub="per 1-point IV change" />

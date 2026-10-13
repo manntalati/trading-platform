@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from datetime import UTC, date, datetime
 
@@ -60,9 +61,14 @@ def synthetic_chain(
     strikes: Sequence[float] | None = None,
     half_spread: float = 0.02,
     open_interest: float = 1000.0,
+    skew: float = 0.0,
+    curvature: float = 0.0,
+    rate: float = 0.0,
 ) -> pd.DataFrame:
     """A chain snapshot priced by Black-Scholes at ``iv`` (one per expiration, or the same for
-    all), with a bid/ask ``half_spread`` (a share of the price) around the model price."""
+    all), with a bid/ask ``half_spread`` (a share of the price) around the model price. A smile:
+    each strike's volatility is ``iv + skew * x + curvature * x^2`` with ``x = ln(strike /
+    spot)`` (negative ``skew``: puts dearer, as for stocks)."""
     from tp_core import greeks as bs
     from tp_core.occ import format_occ
     from tp_core.schemas import RAW_OPTION_CHAIN_SCHEMA
@@ -74,10 +80,12 @@ def synthetic_chain(
     for expiration, vol in zip(expirations, vols, strict=True):
         dte = (expiration - day).days
         for strike in strikes:
+            x = math.log(strike / spot)
+            smile = max(float(vol) + skew * x + curvature * x * x, 0.02)
             for right in ("C", "P"):
                 call = right == "C"
-                price = bs.price(spot, strike, dte / 365, float(vol), call=call)
-                g = bs.greeks(spot, strike, dte / 365, float(vol), call=call)
+                price = bs.price(spot, strike, dte / 365, smile, call=call, rate=rate)
+                g = bs.greeks(spot, strike, dte / 365, smile, call=call, rate=rate)
                 rows.append(
                     {
                         "snapshot_at": pd.Timestamp(snapshot_at),
@@ -90,7 +98,7 @@ def synthetic_chain(
                         "underlying_price": spot,
                         "bid": round(max(price * (1 - half_spread), 0.0), 2),
                         "ask": round(max(price * (1 + half_spread), 0.01), 2),
-                        "implied_volatility": float(vol),
+                        "implied_volatility": smile,
                         "delta": g.delta,
                         "open_interest": open_interest,
                         "feed": "synthetic",

@@ -151,13 +151,22 @@ export function PriceChart(props: { data: { date: string; close: number }[]; hei
 }
 
 /** Implied vol by strike (out-of-the-money side): puts left of spot, calls right of it. */
-export function SmileChart(props: { data: { strike: number; iv: number | null; right: "C" | "P" }[]; spot?: number | null }) {
+function noDot() {
+  return <g />;
+}
+
+export function SmileChart(props: {
+  data: { strike: number; iv: number | null; right: "C" | "P" }[];
+  spot?: number | null;
+  fit?: { strike: number; iv: number }[];
+}) {
   const theme = useThemeColors();
   const calls = props.data.filter((d) => d.right === "C" && d.iv != null);
   const puts = props.data.filter((d) => d.right === "P" && d.iv != null);
+  const fit = props.fit ?? [];
   return (
     <div>
-      <Legend names={["Calls", "Puts"]} colors={theme.series} />
+      <Legend names={fit.length ? ["Calls", "Puts", "SVI fit"] : ["Calls", "Puts"]} colors={theme.series} />
       <ResponsiveContainer width="100%" height={260}>
         <ScatterChart margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
           <CartesianGrid stroke={theme.grid} vertical={false} />
@@ -183,6 +192,7 @@ export function SmileChart(props: { data: { strike: number; iv: number | null; r
           )}
           <Scatter name="Calls" data={calls} fill={theme.series[0]} isAnimationActive={false} />
           <Scatter name="Puts" data={puts} fill={theme.series[1]} isAnimationActive={false} />
+          {fit.length > 0 && <Scatter name="SVI fit" data={fit} fill="none" line={{ stroke: theme.series[2], strokeWidth: 2 }} shape={noDot} isAnimationActive={false} />}
         </ScatterChart>
       </ResponsiveContainer>
     </div>

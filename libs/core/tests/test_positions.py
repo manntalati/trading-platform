@@ -191,3 +191,38 @@ def test_stock_stats_and_notes() -> None:
     # Without a live price, the last two closes give the day's change.
     assert stock_stats(closes)["day_change"] == pytest.approx(last - closes.iloc[-2])
     assert stock_stats(pd.Series(dtype=float), price=10.0) == {"price": 10.0}
+
+
+def test_deep_in_the_money_put_is_read_as_american() -> None:
+    from tp_core import american
+
+    far = date(2026, 12, 18)
+    years = years_until(far, NOW)
+    price = american.price(100.0, 140.0, years, 0.30, call=False, rate=0.05)
+    pos = OptionPosition(
+        symbol="XYZ261218P00140000",
+        label="XYZ Dec 18 '26 $140 Put",
+        underlying="XYZ",
+        quantity=1.0,
+        strike=140.0,
+        expiration=far,
+        call=False,
+        cost=30.0,
+        broker_price=price,
+    )
+    quote = OptionQuote(bid=price - 0.05, ask=price + 0.05, last=price)
+    s = option_stats(pos, spot=100.0, quote=quote, now=NOW, rate=0.05, realized_vol=0.3)
+    european = bs.implied_vol(price, 100.0, 140.0, years, call=False, rate=0.05)
+    assert european is not None
+    assert european > 0.33  # Black-Scholes reads the early-exercise right as volatility
+    assert s["iv"] == pytest.approx(0.30, abs=0.01)
+    assert s["early_exercise_value"] > 0.5
+    # an out-of-the-money put is barely affected
+    otm = option_stats(
+        OptionPosition(**{**pos.__dict__, "strike": 90.0, "broker_price": 2.0}),
+        spot=100.0, quote=OptionQuote(bid=1.95, ask=2.05, last=2.0), now=NOW, rate=0.05,
+        realized_vol=0.3,
+    )  # fmt: skip
+    euro_otm = bs.implied_vol(2.0, 100.0, 90.0, years, call=False, rate=0.05)
+    assert euro_otm is not None
+    assert otm["iv"] == pytest.approx(euro_otm, abs=0.01)

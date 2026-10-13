@@ -17,6 +17,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from tp_core import american
 from tp_core import greeks as bs
 from tp_core.calendar import NEW_YORK, is_session, session_close
 
@@ -59,6 +60,22 @@ def expiry_time(expiration: date) -> datetime:
     except ValueError:  # beyond the calendar: assume a regular close
         pass
     return datetime.combine(expiration, time(16), tzinfo=NEW_YORK)
+
+
+def _american_put_iv(
+    mark: float, spot: float, strike: float, years: float, rate: float, european: float | None
+) -> float | None:
+    """A put's implied volatility read with the right to exercise early. Black-Scholes counts
+    that right as extra volatility, which overstates it for puts deep in the money; when the
+    early-exercise value is more than a cent or 1% of the price, the American model's figure is
+    used instead."""
+    if european is not None:
+        premium = american.early_exercise_premium(
+            spot, strike, years, european, call=False, rate=rate, steps=100
+        )
+        if premium < max(0.01, 0.01 * mark):
+            return european
+    return american.implied_vol(mark, spot, strike, years, call=False, rate=rate) or european
 
 
 def years_until(expiration: date, now: datetime) -> float:
@@ -244,12 +261,18 @@ def option_stats(
     iv = None
     if mark is not None and years > 0:
         iv = bs.implied_vol(mark, spot, pos.strike, years, call=pos.call, rate=rate)
+        if not pos.call and mark > intrinsic:
+            iv = _american_put_iv(mark, spot, pos.strike, years, rate, iv)
     if iv is None and quote is not None and quote.implied_volatility:
         iv = quote.implied_volatility
     out["iv"] = iv
     if iv is None or years <= 0:
         return out
     g = bs.greeks(spot, pos.strike, years, iv, call=pos.call, rate=rate)
+    if not pos.call:
+        out["early_exercise_value"] = american.early_exercise_premium(
+            spot, pos.strike, years, iv, call=False, rate=rate, steps=100
+        )
     above_strike = bs.prob_above(spot, pos.strike, years, iv, rate=rate)
     itm = above_strike if pos.call else 1 - above_strike
     profit = None

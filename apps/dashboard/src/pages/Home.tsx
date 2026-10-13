@@ -105,7 +105,9 @@ export default function Home({ live, pendingApprovals }: { live: LiveState; pend
   const theta = positions.data?.totals?.theta_day;
   const attention = attentionItems(positions.data, s, pendingApprovals, validation.data);
   const now = regime.data?.current;
-  const ideas = research.data ? [...research.data.swing.slice(0, 2), ...research.data.leaps.slice(0, 1), ...research.data.bearish.slice(0, 1)] : [];
+  const ideas = research.data
+    ? [...research.data.swing.slice(0, 2), ...research.data.leaps.slice(0, 1), ...research.data.bearish.slice(0, 1), ...(research.data.income ?? []).slice(0, 1)]
+    : [];
 
   return (
     <div className="grid">
@@ -182,7 +184,7 @@ export default function Home({ live, pendingApprovals }: { live: LiveState; pend
               {ideas.map((i) => (
                 <a key={`${i.kind}-${i.symbol}`} href={`#/research/lookup/${encodeURIComponent(i.symbol)}`} className={`note idea attention-item ${i.kind === "bearish" ? "attention" : "info"}`}>
                   <strong>
-                    {i.symbol} · {i.kind === "swing" ? "swing" : i.kind === "leaps" ? "LEAPS" : "bearish"}
+                    {i.symbol} · {i.kind === "swing" ? "swing" : i.kind === "leaps" ? "LEAPS" : i.kind === "income" ? "sell premium" : "bearish"}
                   </strong>
                   <div>{i.pick ? <PickLine pick={i.pick} /> : i.why[0]}</div>
                 </a>

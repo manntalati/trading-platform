@@ -114,9 +114,11 @@ def implied_vol(
     rate: float = 0.0,
     div: float = 0.0,
 ) -> float | None:
-    """The volatility at which the model price equals ``value`` (bisection: slow but it never
-    diverges). None when no volatility fits: a price at or below intrinsic value, or above the
-    most an option can be worth."""
+    """The volatility at which the model price equals ``value``. Newton's method on vega from a
+    Brenner-Subrahmanyam first guess, kept inside a bracket that shrinks every step and falling
+    back to bisection when a Newton step would leave it (deep in or out of the money, where vega
+    is tiny), so it is fast and never diverges. None when no volatility fits: a price at or below
+    intrinsic value, or above the most an option can be worth."""
     if years <= 0 or value <= 0 or spot <= 0 or strike <= 0:
         return None
     lo, hi = MIN_VOL, MAX_VOL
@@ -124,15 +126,67 @@ def implied_vol(
         return None
     if value >= price(spot, strike, years, hi, call=call, rate=rate, div=div):
         return None
+    vol = min(max(math.sqrt(2.0 * math.pi / years) * value / spot, 0.05), 2.0)
     for _ in range(100):
-        mid = 0.5 * (lo + hi)
-        if price(spot, strike, years, mid, call=call, rate=rate, div=div) < value:
-            lo = mid
+        diff = price(spot, strike, years, vol, call=call, rate=rate, div=div) - value
+        if abs(diff) < 1e-10:
+            return vol
+        if diff > 0:
+            hi = vol
         else:
-            hi = mid
-        if hi - lo < 1e-7:
-            break
-    return 0.5 * (lo + hi)
+            lo = vol
+        vega = _vega(spot, strike, years, vol, rate, div)
+        step = vol - diff / vega if vega > 1e-12 else math.nan
+        nxt = step if lo < step < hi else 0.5 * (lo + hi)
+        if abs(nxt - vol) < 1e-10 or hi - lo < 1e-10:
+            return nxt
+        vol = nxt
+    return vol
+
+
+def _vega(spot: float, strike: float, years: float, vol: float, rate: float, div: float) -> float:
+    """Per unit (1.00) of volatility."""
+    d1, _ = _d1_d2(spot, strike, years, vol, rate, div)
+    return spot * math.exp(-div * years) * norm_pdf(d1) * math.sqrt(years)
+
+
+@dataclass(frozen=True)
+class HigherGreeks:
+    """Per share. Second-order effects that matter for holding options through time and
+    volatility changes."""
+
+    rho: float  # value change per 1 point (0.01) of the interest rate
+    vanna: float  # delta change per 1 point of implied volatility
+    charm: float  # delta change per calendar day, all else equal
+    vomma: float  # vega change per 1 point of implied volatility
+
+
+def higher_greeks(
+    spot: float,
+    strike: float,
+    years: float,
+    vol: float,
+    *,
+    call: bool,
+    rate: float = 0.0,
+    div: float = 0.0,
+) -> HigherGreeks:
+    if years <= 0 or vol <= 0:
+        return HigherGreeks(0.0, 0.0, 0.0, 0.0)
+    d1, d2 = _d1_d2(spot, strike, years, vol, rate, div)
+    df, qf = math.exp(-rate * years), math.exp(-div * years)
+    root = math.sqrt(years)
+    if call:
+        rho = strike * years * df * norm_cdf(d2) / 100.0
+    else:
+        rho = -strike * years * df * norm_cdf(-d2) / 100.0
+    vanna = -qf * norm_pdf(d1) * d2 / vol / 100.0
+    drift = qf * norm_pdf(d1) * (2.0 * (rate - div) * years - d2 * vol * root)
+    drift /= 2.0 * years * vol * root
+    # delta's change as a day passes: minus its derivative in time to expiry
+    charm = (div * qf * norm_cdf(d1) - drift) if call else (-div * qf * norm_cdf(-d1) - drift)
+    vomma = _vega(spot, strike, years, vol, rate, div) * d1 * d2 / vol / 10_000.0
+    return HigherGreeks(rho, vanna, charm / YEAR_DAYS, vomma)
 
 
 def prob_above(

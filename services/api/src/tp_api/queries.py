@@ -45,7 +45,9 @@ from tp_core.portfolio import (
     time_weighted_returns,
     value_history,
 )
+from tp_core.smile import fit_chain, quote_arbitrage, smile_curve, term_shape
 from tp_core.storage import Lake, parquet_files
+from tp_core.volatility import iv_at
 from tp_paper.store import PaperStore
 from tp_strategies.ideas import ideas_from_lake
 from tp_strategies.ma_timing import equal_weight_monthly, ma_timing
@@ -310,6 +312,17 @@ def option_summary(ctx: Context, underlying: str) -> dict[str, Any]:
             }
         )
     monthly = [t for t in term if t["dte"] >= 20] or term
+    when = pd.Timestamp(latest["snapshot_at"].iloc[0]).to_pydatetime()
+    rate = ctx.risk_free_rate(when.date())
+    fits = fit_chain(latest, spot, when, rate) if not math.isnan(spot) else []
+    by_expiry = {f.expiration.isoformat(): f for f in fits}
+    for row in term:
+        f = by_expiry.get(row["expiration"])
+        row["fit"] = (
+            {k: v for k, v in f.to_dict().items() if k not in ("expiration", "dte", "years")}
+            if f
+            else None
+        )
     smile: list[dict[str, Any]] = []
     if monthly and not math.isnan(spot):
         target = date.fromisoformat(monthly[0]["expiration"])
@@ -322,12 +335,36 @@ def option_summary(ctx: Context, underlying: str) -> dict[str, Any]:
                 {"strike": float(k), "iv": clean(float(v)), "right": right}
                 for k, v in zip(side["strike"], side["implied_volatility"], strict=True)
             ]
+    smile_fit = by_expiry.get(monthly[0]["expiration"]) if monthly else None
+    iv30 = iv_at(pd.DataFrame([{"dte": f.dte, "iv": f.atm_iv} for f in fits])) if fits else None
+    iv90 = (
+        iv_at(pd.DataFrame([{"dte": f.dte, "iv": f.atm_iv} for f in fits]), 90.0)
+        if fits and max(f.dte for f in fits) >= 60
+        else None
+    )
     return {
         "underlying": underlying.upper(),
         "snapshot_at": clean(latest["snapshot_at"].iloc[0]),
         "spot": clean(spot),
-        "term": term,
+        "rate": rate,
+        "term": clean(term),
         "smile": smile,
+        "smile_expiration": monthly[0]["expiration"] if monthly else None,
+        "smile_fit": smile_curve(smile_fit, spot, rate) if smile_fit else [],
+        "quote_arbitrage": (
+            quote_arbitrage(latest, date.fromisoformat(monthly[0]["expiration"]))
+            if monthly
+            else None
+        ),
+        "skew": clean(
+            {
+                "skew_25d": smile_fit.skew_25d if smile_fit else None,
+                "butterfly_25d": smile_fit.butterfly_25d if smile_fit else None,
+                "iv30": iv30,
+                "iv90": iv90,
+                **term_shape(iv30, iv90),
+            }
+        ),
     }  # fmt: skip
 
 

@@ -28,7 +28,11 @@ funds have no market data, so they show the broker's price and P&L only.
 
 The maths is Black-Scholes (`tp_core.greeks`): close enough for reading a position's risk, not
 for making a market. US equity options are American; for calls on stocks without a dividend
-before expiry, and near expiry, the difference is cents. Time runs to 4:00 PM New York on the
+before expiry, and near expiry, the difference is cents. Puts are checked on a binomial tree
+(`tp_core.american`): when the right to exercise early is worth more than a cent or 1% of the
+price (deep in the money, months to run), implied volatility is read with the American model,
+because Black-Scholes would count that right as extra volatility, and the position shows what
+the right is worth. Time runs to 4:00 PM New York on the
 expiration day. The risk-free rate is the 3-month Treasury yield from FRED (`tp-data macro daily`), or
 `TP_RISK_FREE_RATE` (default 4%) until that has been downloaded.
 
