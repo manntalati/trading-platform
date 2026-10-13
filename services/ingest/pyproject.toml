@@ -5,6 +5,7 @@ description = "Market data ingest jobs: vendor adapters, daily bars, option chai
 requires-python = ">=3.12"
 dependencies = [
     "alpaca-py>=0.40",
+    "requests>=2.31",
     "tp-core",
     "typer>=0.12",
 ]

@@ -5,7 +5,7 @@ sections, each answering one question (the line under the tabs says which):
 
 | Section | The question | Inside |
 |---|---|---|
-| **Home** | What's going on today, and what needs me? | Account value and today's P&L (live), total P&L, options time decay, the paper bot, the market clock; **Needs your attention** (options about to be exercised or expire, actions the rules flag on positions, paper orders waiting, stale data), each linking to where you act; the top research ideas; live prices; recent trades |
+| **Home** | What's going on today, and what needs me? | Account value and today's P&L (live), total P&L, options time decay, the paper bot, the market (trend, VIX, breadth) and rates (10-year and 3-month yields, the curve); **Needs your attention** (options about to be exercised or expire, actions the rules flag on positions, paper orders waiting, stale data), each linking to where you act; the top research ideas; live prices; recent trades |
 | **Portfolio** | What do I own, and what should I do about it? | The account's numbers on top, then three views. **Positions**: every holding with its statistics, options first by expiry; open one for live bid/ask, greeks, odds, scenarios, plain-language notes, **What you could do** (rolls, taking profits, covered calls, LEAPS in place of shares, protective puts, priced from the latest chain) and a Claude chat ([positions.md](positions.md)). **Allocation**: by sector and asset class, concentration, exposure per underlying (shares plus option delta). **Performance**: your account's time-weighted return and today's mix against the S&P 500, Nasdaq 100 and 60/40. **Risk**: the whole book's beta, volatility, Value at Risk and expected shortfall, option Greeks in dollars, a scenario grid (S&P 500 ±10% with implied volatility ±5 points, options repriced) and how correlated the largest positions are ([risk.md](risk.md#portfolio-risk)) |
 | **Research** | What should I look at next? | **Options ideas**: ranked swing calls, LEAPS and bearish puts with the contract each would use ([research.md](research.md)). **Look up a symbol**: any ticker in depth (trend, option pricing, every structure's contract, scenarios, price chart, term structure and smile, Claude); a ticker the platform doesn't have yet can be fetched from there. **Portfolio checks**: the rules-based checks on your portfolio ([ideas.md](ideas.md)) |
 | **Trades** | What did I (and the bot) trade, and how did it go? | Every trade, yours and the paper bot's, newest first, with the P&L each realized; today's trades as pending until the transaction posts |
@@ -62,7 +62,8 @@ All JSON. Reads (`GET`):
 | Endpoint | What |
 |---|---|
 | `/api/health` | liveness |
-| `/api/status` | market clock, bars freshness, latest validation and options reports, broker syncs, live feed, dashboard build |
+| `/api/status` | market clock, bars freshness, latest validation and options reports, VIX and Treasury yields with the last FRED run, broker syncs, live feed, dashboard build |
+| `/api/market/regime` | today's trend, volatility (VIX), breadth, rates and yield-curve labels with the numbers behind them, and the last year of labels |
 | `/api/bars/{symbol}?days=365` | daily bars (raw and adjusted close) |
 | `/api/options/{underlying}` | latest chain snapshot: ATM IV and expected move per expiry, smile |
 | `/api/portfolio` | accounts (masked), holdings with weights, classification and P&L, option terms (premium per share, breakeven, moneyness, days to expiry), exposures, and `pnl`: unrealized, realized, income, total |

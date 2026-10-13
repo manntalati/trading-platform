@@ -14,6 +14,9 @@ REPO=/home/YOU/trading-platform
 # regular hours either way (the systemd timer keeps it at 15:45 New York all year).
 45 19 *   *   1-5    cd $REPO && .venv/bin/tp-data options snapshot >> $REPO/data/logs/options.log 2>&1
 
+# VIX and Treasury yields from FRED (no key), before the open: 12:30 UTC = 07:30 EST / 08:30 EDT.
+30 12 *   *   1-5    cd $REPO && .venv/bin/tp-data macro daily >> $REPO/data/logs/macro.log 2>&1
+
 # Fidelity through SnapTrade: free, so hourly on weekdays (SnapTrade refreshes its copy once a
 # day; this picks it up soon after). Add --refresh to make SnapTrade re-pull from Fidelity first
 # (a small SnapTrade fee each time); the dashboard's "Refresh from Fidelity" button does that

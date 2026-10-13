@@ -46,6 +46,10 @@ export interface Status {
   validation: (Record<string, unknown> & { ok?: boolean; counts?: Record<string, number>; generated_at?: string }) | null;
   options: { files: number; latest_report: (Record<string, unknown> & { snapshot_date?: string; ok?: boolean; skipped?: string | null }) | null };
   broker: { source: string; institution: string; account: string; synced_at: string }[];
+  macro?: {
+    series: Record<string, { value: Num; date: string; name: string }>;
+    latest_report: (Record<string, unknown> & { ok?: boolean; errors?: Record<string, string> }) | null;
+  };
   universe: { bars: number; options: number; watchlist: string[] };
   live: { source: string; symbols: string[]; error: string | null };
   dashboard?: { built_at: string | null; source_changed_at: string | null; stale: boolean };
@@ -689,7 +693,7 @@ export interface ValidationReport {
     passed: boolean | null;
   };
   monte_carlo: { paths?: number; cagr_p5?: number; cagr_p50?: number; cagr_p95?: number; max_drawdown_p5?: number; max_drawdown_p50?: number; sharpe_p5?: number; prob_loss?: number };
-  regimes: Partial<Record<"trend" | "volatility" | "breadth", RegimeRow[]>>;
+  regimes: Partial<Record<"trend" | "volatility" | "breadth" | "rates" | "curve", RegimeRow[]>>;
   test_touches: number;
   gate: { passed: boolean; checks: GateCheck[] };
 }
@@ -718,9 +722,17 @@ export interface MarketRegime {
     spy_vs_ma200: Num;
     realized_vol: Num;
     breadth_pct: Num;
+    rates?: "rising" | "steady" | "falling" | null;
+    curve?: "normal" | "flat" | "inverted" | null;
+    volatility_source?: "vix" | "realized";
+    vix?: Num;
+    vix_ratio?: Num;
+    rate_10y?: Num; // percent
+    rate_3m?: Num;
+    curve_10y_3m?: Num; // percentage points
     summary: string;
   } | null;
-  history: { date: string; trend: string | null; volatility: string | null; breadth: string | null }[];
+  history: { date: string; trend: string | null; volatility: string | null; breadth: string | null; rates?: string | null; curve?: string | null }[];
 }
 
 // /api/positions/risk (libs/core/src/tp_core/portfolio_risk.py)

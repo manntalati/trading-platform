@@ -251,7 +251,7 @@ function ReportDetail({ report: r, onRerun, busy }: { report: ValidationReport; 
             <div className="table-wrap">
               <table>
                 <tbody>
-                  {(["trend", "volatility", "breadth"] as const).flatMap((dim) =>
+                  {(["trend", "volatility", "breadth", "rates", "curve"] as const).flatMap((dim) =>
                     (r.regimes[dim] ?? []).map((row, i) => (
                       <tr key={`${dim}-${row.label}`}>
                         <td className="muted">{i === 0 ? dim : ""}</td>

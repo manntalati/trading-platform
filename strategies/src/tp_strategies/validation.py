@@ -34,6 +34,7 @@ import pandas as pd
 
 from tp_core import metrics
 from tp_core.bars import close_matrix, load_bars
+from tp_core.macro import load_macro
 from tp_core.regime import current, market_regimes, performance_by_regime
 from tp_core.significance import block_bootstrap, deflated_sharpe
 from tp_core.storage import Lake, new_run_id, write_json
@@ -342,7 +343,8 @@ def validate(
     periods = split_periods(returns, bench, config)
     stress = stress_tests(returns, bench, config)
     closes = close_matrix(load_bars(lake, end=engine.end))
-    regimes = market_regimes(closes) if "SPY" in closes.columns else pd.DataFrame()
+    macro = load_macro(lake, end=engine.end)
+    regimes = market_regimes(closes, macro=macro) if "SPY" in closes.columns else pd.DataFrame()
     by_regime = performance_by_regime(returns, regimes, bench) if len(regimes) else {}
     folder = lake.reports_dir("validation") / name
     touches = (

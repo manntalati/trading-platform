@@ -80,7 +80,7 @@ def research_view(ctx: queries.Context, now: datetime) -> dict[str, Any]:
         classifier=ctx.classifier,
         chains=chains,
         now=now,
-        rate=ctx.settings.risk_free_rate,
+        rate=ctx.risk_free_rate(),
         held=held_summary(ctx),
     )
     out: dict[str, Any] = queries.clean(report)
@@ -104,7 +104,7 @@ def symbol_view(ctx: queries.Context, symbol: str, now: datetime) -> dict[str, A
         benchmark=closes.get("SPY"),
         iv_hist=mine,
         now=now,
-        rate=ctx.settings.risk_free_rate,
+        rate=ctx.risk_free_rate(),
     )
     age = None
     if chain is not None and not chain.empty:

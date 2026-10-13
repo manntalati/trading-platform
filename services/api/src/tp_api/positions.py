@@ -216,7 +216,7 @@ def positions_view(
     )
     for p in rows:
         p["actions"] = holding_actions(
-            p, chains.get(str(p["underlying"])), now=now, rate=ctx.settings.risk_free_rate
+            p, chains.get(str(p["underlying"])), now=now, rate=ctx.risk_free_rate()
         )
     view: dict[str, Any] = queries.clean(
         {
@@ -231,7 +231,7 @@ def positions_view(
                 "option_quotes": len(quotes),
                 "options": len(contracts),
             },
-            "risk_free_rate": ctx.settings.risk_free_rate,
+            "risk_free_rate": ctx.risk_free_rate(),
             "totals": _totals(rows),
             "exposure": _exposure(rows),
             "positions": rows,
@@ -338,7 +338,7 @@ def _option_row(
         spot=spot,
         quote=quotes.get(symbol),
         now=now,
-        rate=ctx.settings.risk_free_rate,
+        rate=ctx.risk_free_rate(),
         realized_vol=_float(under.get("vol_20d")),
     )
     value = _float(stats.get("value"))
@@ -564,7 +564,7 @@ def risk_view(ctx: queries.Context, view: dict[str, Any], now: datetime) -> dict
         total_value=float(view.get("total_value") or 0.0),
         options=legs,
         now=now,
-        rate=ctx.settings.risk_free_rate,
+        rate=ctx.risk_free_rate(),
     )
     result: dict[str, Any] = queries.clean({"synced": True, **out})
     return result

@@ -3,7 +3,8 @@
 ``GET /api/strategies/validation``: every library strategy, whether it paper-trades, and its
 latest validation report (the plan's stage-1 gate). ``POST`` runs validations in the background
 (a few seconds to a couple of minutes per strategy). ``GET /api/market/regime``: today's trend,
-volatility and breadth labels, and the last year of them.
+volatility, breadth, rates and yield-curve labels (VIX and Treasury yields once ``tp-data macro``
+has run), and the last year of them.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from tp_api import queries
 from tp_api.deps import Ctx, require_dashboard_client, require_token
 from tp_core.bars import close_matrix, load_bars
 from tp_core.config import Settings
+from tp_core.macro import load_macro
 from tp_core.portfolio import Classifier
 from tp_core.regime import DIMENSIONS, current, market_regimes
 from tp_core.storage import Lake
@@ -153,7 +155,7 @@ def regime_view(ctx: queries.Context) -> dict[str, Any]:
     bars = load_bars(ctx.lake)
     if bars.empty or "SPY" not in set(bars["symbol"]):
         return {"current": None, "history": []}
-    regimes = market_regimes(close_matrix(bars))
+    regimes = market_regimes(close_matrix(bars), macro=load_macro(ctx.lake))
     recent = regimes.dropna(subset=["trend"]).tail(252)
     history = [
         {"date": pd.Timestamp(str(idx)).date().isoformat(), **{k: row[k] for k in DIMENSIONS}}

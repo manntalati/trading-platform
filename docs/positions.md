@@ -29,7 +29,8 @@ funds have no market data, so they show the broker's price and P&L only.
 The maths is Black-Scholes (`tp_core.greeks`): close enough for reading a position's risk, not
 for making a market. US equity options are American; for calls on stocks without a dividend
 before expiry, and near expiry, the difference is cents. Time runs to 4:00 PM New York on the
-expiration day. The risk-free rate is `TP_RISK_FREE_RATE` (default 4%).
+expiration day. The risk-free rate is the 3-month Treasury yield from FRED (`tp-data macro daily`), or
+`TP_RISK_FREE_RATE` (default 4%) until that has been downloaded.
 
 The odds are **risk-neutral**: what the market is charging for, not a forecast. That's the right
 yardstick for "hold or sell": at today's implied volatility, holding and selling have about the
