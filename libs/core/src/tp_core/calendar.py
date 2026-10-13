@@ -18,7 +18,9 @@ CALENDAR_START = "2000-01-01"
 
 @cache
 def xnys() -> xcals.ExchangeCalendar:
-    return xcals.get_calendar("XNYS", start=CALENDAR_START)
+    # Out to four years ahead (the library's default is one): LEAPS expire up to ~2.5 years out.
+    end = datetime.now(NEW_YORK).date().replace(month=12, day=31)
+    return xcals.get_calendar("XNYS", start=CALENDAR_START, end=end.replace(year=end.year + 4))
 
 
 def sessions(start: date, end: date) -> list[date]:

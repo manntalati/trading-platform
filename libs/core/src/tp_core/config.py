@@ -118,15 +118,23 @@ class MissingCredentialsError(RuntimeError):
 
 @dataclass(frozen=True)
 class Universes:
-    """Named symbol lists from ``config/universes.toml``."""
+    """Named symbol lists from ``config/universes.toml`` (plus your ``universes.local.toml``)."""
 
     bars: tuple[str, ...]
     options_underlyings: tuple[str, ...] = ()
     options_max_dte: int = 365
     watchlist: tuple[str, ...] = ()
+    research: tuple[str, ...] = ()  # names the options research scans (beyond the options list)
 
 
-def load_universes(path: Path) -> Universes:
+def load_universes(path: Path, *, local: bool = True) -> Universes:
+    """Read ``path`` and, unless ``local`` is False, ``<name>.local.toml`` next to it.
+
+    The local file (git-ignored) is for your own tickers. Its ``[research] symbols`` get daily
+    bars, daily option chains and a place in the options research; it can also extend
+    ``[bars] stocks``, ``[options] underlyings`` and ``[dashboard] watchlist``. Symbols already
+    in the shared file are skipped.
+    """
     with path.open("rb") as f:
         raw = tomllib.load(f)
     bars_section = raw.get("bars", {})
@@ -138,9 +146,27 @@ def load_universes(path: Path) -> Universes:
     underlyings = list(options.get("underlyings", []))
     if len(set(underlyings)) != len(underlyings):
         raise ValueError(f"duplicate symbols in [options] of {path}")
+    watchlist = list(raw.get("dashboard", {}).get("watchlist", []))
+    research: list[str] = []
+    mine = path.with_name(f"{path.stem}.local.toml")
+    if local and mine.exists():
+        with mine.open("rb") as f:
+            extra = tomllib.load(f)
+        own = [str(s).upper() for s in extra.get("research", {}).get("symbols", [])]
+        research = list(dict.fromkeys(own))
+        bars += [s for s in [*extra.get("bars", {}).get("stocks", []), *own] if s not in bars]
+        underlyings += [
+            s for s in [*extra.get("options", {}).get("underlyings", []), *own]
+            if s not in underlyings
+        ]  # fmt: skip
+        watchlist += [
+            s for s in extra.get("dashboard", {}).get("watchlist", []) if s not in watchlist
+        ]
+        bars, underlyings = list(dict.fromkeys(bars)), list(dict.fromkeys(underlyings))
     return Universes(
         bars=tuple(bars),
         options_underlyings=tuple(underlyings),
         options_max_dte=int(options.get("max_dte", 365)),
-        watchlist=tuple(raw.get("dashboard", {}).get("watchlist", [])),
+        watchlist=tuple(dict.fromkeys(watchlist)),
+        research=tuple(research),
     )

@@ -53,8 +53,11 @@ class OptionPosition:
 
 def expiry_time(expiration: date) -> datetime:
     """Options stop trading at the close of their expiration day (4:00 PM New York)."""
-    if is_session(expiration):
-        return session_close(expiration)
+    try:
+        if is_session(expiration):
+            return session_close(expiration)
+    except ValueError:  # beyond the calendar: assume a regular close
+        pass
     return datetime.combine(expiration, time(16), tzinfo=NEW_YORK)
 
 

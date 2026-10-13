@@ -52,6 +52,13 @@ def test_expiry_is_the_close_of_the_expiration_day() -> None:
     assert years_until(FRIDAY, datetime(2026, 1, 17, tzinfo=UTC)) == 0.0
 
 
+def test_leaps_expiries_years_out_have_a_close() -> None:
+    far = datetime.now(UTC).date().replace(month=1, day=15)
+    far = far.replace(year=far.year + 3)
+    assert expiry_time(far).astimezone(UTC).hour in (20, 21)  # 4 PM New York
+    assert years_until(far, NOW) > 2
+
+
 def test_out_of_the_money_call_a_few_days_out() -> None:
     pos = call()
     quote = OptionQuote(bid=1.00, ask=1.10, last=1.02)

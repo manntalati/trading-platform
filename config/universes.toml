@@ -1,5 +1,10 @@
 # Symbol universes used by the ingest jobs. Alpaca symbols (class shares use a dot: BRK.B).
 #
+# Your own tickers go in config/universes.local.toml (git-ignored), for example:
+#     [research]
+#     symbols = ["PLTR", "SHOP"]
+# Those get daily bars, daily option chains and a place in the options research.
+#
 # Survivorship warning: these are today's large, liquid names chosen with hindsight. Backtests on
 # this list overstate what a strategy would have earned picking from the universe as it looked at
 # the time (delisted and shrunken companies are missing). Fine for learning and plumbing; not
@@ -36,8 +41,9 @@ underlyings = [
     "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AMD", "AVGO", "NFLX",
     "JPM", "BAC", "XOM", "COIN", "UBER",
 ]
-# Expirations further out than this are skipped (bounds file size; LEAPS rarely matter here).
-max_dte = 365
+# Expirations further out than this are skipped. Two years covers LEAPS (the January expiries
+# one and two years out) for the options research.
+max_dte = 800
 
 [dashboard]
 # Always streamed live on the dashboard, alongside your market-priced holdings. Alpaca's free

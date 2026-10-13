@@ -170,7 +170,9 @@ def bars_daily(symbols: SymbolsOpt = None, source: SourceOpt = SourceName.alpaca
 def options_snapshot(
     underlyings: Annotated[
         str | None,
-        typer.Option(help="Comma-separated underlyings. Defaults to the [options] universe."),
+        typer.Option(
+            help="Comma-separated underlyings. Defaults to the [options] universe plus holdings."
+        ),
     ] = None,
     max_dte: Annotated[
         int | None, typer.Option(min=0, help="Skip expirations further out than this.")
@@ -183,11 +185,11 @@ def options_snapshot(
         universes = load_universes(settings.universes_file)
     except (OSError, ValueError) as exc:
         _config_error(exc)
-    symbols = (
-        [s.strip().upper() for s in underlyings.split(",") if s.strip()]
-        if underlyings
-        else list(universes.options_underlyings)
-    )
+    if underlyings:
+        symbols = [s.strip().upper() for s in underlyings.split(",") if s.strip()]
+    else:  # the options universe, plus what you hold (for rolls and covered calls)
+        held = held_symbols(Lake(settings.data_root))
+        symbols = list(dict.fromkeys([*universes.options_underlyings, *held]))
     result = options_jobs.run_snapshot(
         Lake(settings.data_root),
         make_source(source, settings),

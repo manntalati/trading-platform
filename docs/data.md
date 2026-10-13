@@ -11,7 +11,7 @@ uv run tp-data bars backfill --years 5     # one-off: 5y of bars + corporate act
 uv run tp-data bars daily                  # scheduled: latest sessions (+ new symbols)
 uv run tp-data bars rebuild                # re-derive clean/ from raw/ (no network)
 uv run tp-data bars backfill --source fake # the whole pipeline on synthetic data, no keys
-uv run tp-data options snapshot            # today's chains for the [options] universe
+uv run tp-data options snapshot            # today's chains: [options] universe + holdings
 ```
 
 ```python
@@ -110,8 +110,11 @@ which is exactly the case the jump check exists for.
 ## Option chain snapshots
 
 Free historical options chains are scarce, so we build our own: every trading day at 15:45 ET
-`tp-data options snapshot` stores the full chain (expirations up to `max_dte`, default 365 days)
-for each underlying in the `[options]` section of `config/universes.toml`.
+`tp-data options snapshot` stores the full chain (expirations up to `max_dte`: 800 days, so LEAPS
+are included) for each underlying in the `[options]` section of `config/universes.toml`, your
+`[research] symbols` in `config/universes.local.toml`, and everything you hold (stocks and the
+underlyings of your options). The 30-day implied volatility of each snapshot is kept in
+`clean/option_iv_daily` for the options research's IV rank ([research.md](research.md)).
 
 Each row is one contract at one moment (`RAW_OPTION_CHAIN_SCHEMA`): OCC symbol plus parsed
 `expiration`/`right`/`strike`/`dte`; the underlying's last trade and quote; the option's bid/ask
