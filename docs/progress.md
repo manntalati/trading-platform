@@ -38,9 +38,9 @@ plan's phase table didn't survive the import, so the phases here follow the bran
 | ✓ | Options: Black-Scholes, IV, greeks, IV rank, events, odds, scenarios | [positions.md](positions.md), [research.md](research.md) |
 | ✓ | Options research: swing and LEAPS ideas, actions on held positions, Claude | [research.md](research.md) |
 | ○ | Strategies 6 to 10: pairs (cointegration), factor portfolios, post-earnings drift, volatility risk premium (covered calls, cash-secured puts), opening-range breakout | 7 needs fundamentals and 8 earnings data, neither in the lake yet; 10 needs intraday bars |
-| ○ | Position sizing methods to compare: fixed fractional, volatility targeting, quarter Kelly | |
-| ○ | Portfolio risk monitoring: correlation, beta, aggregate Greeks, VaR | |
-| ○ | Rest of the options module: American (binomial) pricing, SVI smile fits, 25-delta skew, portfolio Greek scenarios (±1-3σ, ±5 vol points), options backtesting | |
+| ✓ | Position sizing methods to compare: fixed fractional, volatility targeting, quarter Kelly | `tp-backtest sizing`, `--sizing`, per sleeve in paper.toml, [risk.md](risk.md#position-sizing) |
+| ✓ | Portfolio risk monitoring: correlation, beta, aggregate Greeks, VaR | Portfolio → Risk, with a scenario grid (S&P ±10%, IV ±5 points), [risk.md](risk.md#portfolio-risk) |
+| ○ | Rest of the options module: American (binomial) pricing, SVI smile fits, 25-delta skew, options backtesting | the portfolio Greek scenarios are on Portfolio → Risk |
 | ○ | Rate regime from FRED, VIX for the volatility regime | |
 | ◐ | Experiment tracking | every backtest and validation run is saved with its git commit, data version and config; MLflow not yet |
 
@@ -75,14 +75,15 @@ plan's phase table didn't survive the import, so the phases here follow the bran
 
 ## Next, in order
 
-1. **Sizing and portfolio risk** (`step2/sizing-and-portfolio-risk`): the three sizing methods
-   side by side in the backtester, and correlation, beta, aggregate Greeks and VaR on the
-   dashboard. Finishes the plan's risk section.
-2. **More strategies** (`step2/more-strategies`): pairs trading (6), a price-only low-volatility
-   factor (part of 7), and the volatility risk premium (9) on the collected chains; post-earnings
-   drift (8) and opening-range breakout (10) once earnings dates and intraday bars are in the
-   lake.
-3. **The platform** (`step3/…`): Docker images first, then the message bus, then k3s with
+1. **Macro data** (`step2/macro-data`): VIX and Treasury rates from FRED, for the volatility
+   regime and a rate regime.
+2. **The rest of the options module** (`step2/options-module`): American pricing, SVI smile
+   fits, skew and term-structure measures, more structures, options backtesting notes.
+3. **Fundamentals** (`step2/fundamentals`): SEC EDGAR company facts, point in time, for the
+   factor portfolios and post-earnings drift.
+4. **Strategies 6 to 10** (`step2/more-strategies`): pairs, factor portfolios, post-earnings
+   drift, the volatility risk premium, opening-range breakout.
+5. **The platform** (`step3/…`): Docker images first, then the message bus, then k3s with
    monitoring and Discord alerts. The plan puts this ahead of ML: "cut scope from ML experiments
    before cutting infrastructure".
-4. **Machine learning** (`step4/…`), starting with meta-labeling.
+6. **Machine learning** (`step4/…`), starting with meta-labeling.

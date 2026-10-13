@@ -26,6 +26,7 @@ from tp_core.calendar import is_last_session_of_month
 from tp_trading.data import Field
 from tp_trading.events import Fill, OrderIntent, OrderType, Side
 from tp_trading.portfolio import EPSILON, Position
+from tp_trading.sizing import Sizing
 
 
 @dataclass(frozen=True)
@@ -65,9 +66,12 @@ class Context(ABC):
         fractional: bool = False,
         sectors: Mapping[str, str] | None = None,
         catch_up: bool = False,
+        sizing: Sizing | None = None,
     ) -> None:
         self.strategy = strategy
         self.fractional = fractional
+        # How much of each target weight to actually take (tp_trading.sizing); None: all of it.
+        self.sizing = sizing
         self._sectors = dict(sectors or {})
         # True when a strategy starts trading part-way through its cycle (a new paper sleeve):
         # it should take the positions its rules call for now, not wait for the next rebalance.
@@ -179,6 +183,8 @@ class Context(ABC):
         """
         if any(w < 0 for w in targets.values()):
             raise ValueError("target weights must be >= 0 (no shorting)")
+        if self.sizing is not None:
+            targets = self.sizing.resize(targets, self)
         if sum(targets.values()) > 1 + 1e-9:
             raise ValueError("target weights must sum to at most 1 (no leverage)")
         equity = self.equity

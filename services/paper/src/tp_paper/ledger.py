@@ -18,6 +18,7 @@ from tp_paper.store import FillRecord, SleeveDay
 from tp_trading.data import Field, MarketData
 from tp_trading.events import Fill, Side
 from tp_trading.portfolio import Portfolio, Position
+from tp_trading.sizing import Sizing
 from tp_trading.strategy import Context, Strategy
 
 
@@ -142,8 +143,11 @@ class PaperContext(Context):
         sectors: Mapping[str, str] | None = None,
         *,
         catch_up: bool = False,
+        sizing: Sizing | None = None,
     ) -> None:
-        super().__init__(strategy.name, fractional=False, sectors=sectors, catch_up=catch_up)
+        super().__init__(
+            strategy.name, fractional=False, sectors=sectors, catch_up=catch_up, sizing=sizing
+        )
         self._data = data
         self._t = t
         self._portfolio = portfolio
