@@ -49,6 +49,37 @@ session t
 A signal therefore never trades on its own bar, and `ctx.history()` cannot return a later
 session (tested, together with "rewriting future prices never changes earlier orders").
 
+## Validation: the backtest gate
+
+A good backtest is a hypothesis. Before a strategy earns paper money, the plan's stage-1 gate asks
+five questions, and `tp-backtest validate` answers them:
+
+```bash
+uv run tp-backtest validate ma-timing      # one strategy (its paper parameters, if it paper-trades)
+uv run tp-backtest validate --all          # every strategy; exits 1 unless all pass
+```
+
+It backtests the strategy's parameter variants (`[variants]` in `config/validation.toml`) through
+the same engine, costs and risk limits as `tp-backtest run`, then checks:
+
+| Check | Passes when | Why |
+|---|---|---|
+| **Locked test set** | Sharpe above 0 after costs on the data after `validation_end` | the only data nothing was tuned on. Every look is counted and shown: look often and it becomes another validation set |
+| **Walk-forward** | the stitched out-of-sample returns have a positive Sharpe | every six months it re-picks the variant with the best Sharpe over the last two years and trades it for the next six: what you'd have earned choosing as you went |
+| **Deflated Sharpe** | the Sharpe beats what the best of every variant ever tried would show by luck | try 20 versions and the best looks good by chance alone (Bailey and López de Prado). Every variant run is logged in `reports/validation/<strategy>/trials.jsonl` and counts |
+| **Stress periods** | in each crash in the data, the drawdown stays under 15% or is no worse than SPY's | COVID 2020, the 2022 rate shock, Aug 2024 (`[stress]`); periods before the data are skipped, so backfill more years to include them |
+| **Parameter stability** | every nearby variant keeps at least half the Sharpe | a result that falls off a cliff one step away from the chosen parameters is a lucky spike |
+
+Also reported, not gated:
+- **Returns by market regime** (`tp_core.regime`): trend (SPY vs its 200-day), volatility (SPY's 20-day realized: calm under 12%, stressed over 25%) and breadth (share of the universe above its 50-day). Each day's return goes to the regime known at the previous close.
+- **Monte Carlo**: 1,000 block-bootstrap resamples of the daily returns: the 5th to 95th percentile CAGR, the bad-tail drawdown and the share of paths that lose money.
+
+Periods: train up to `train_end`, validation up to `validation_end`, locked test after, each from
+the first day the strategy held anything (warm-up days would flatter it). Reports are saved under
+`data/reports/validation/<strategy>/` and shown under **Paper trading → Strategies and the
+backtest gate**, which can also run them. A weekly cron entry keeps them current
+([infra](../infra/README.md)).
+
 ## Realism
 
 | | Default | Why |

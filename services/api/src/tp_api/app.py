@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from tp_api import __version__, broker, paper, positions, queries, research
+from tp_api import __version__, broker, paper, positions, queries, research, strategies
 from tp_api.broker import BrokerSync
 from tp_api.claude import ClaudeAdvisor
 from tp_api.dashboard import bundle_state
@@ -223,6 +223,9 @@ def create_app(
     app.state.research_cache = research.ResearchCache()
     app.state.ticker_fetch = research.TickerFetch(settings, on_done=app.state.research_cache.clear)
     app.include_router(research.router)
+    app.state.validation_job = strategies.ValidationJob(settings)
+    app.state.regime_cache = {}
+    app.include_router(strategies.router)
     app.state.broker_sync = BrokerSync(settings, on_done=lambda: update_hub_portfolio(app))
     app.include_router(broker.router)
 

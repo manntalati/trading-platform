@@ -100,20 +100,26 @@ Library strategies implement one contract that both backtests and paper-trades
 ```bash
 uv run tp-backtest list
 uv run tp-backtest run ma-timing --start 2018-01-01      # tear sheet vs SPY; saved under data/reports/backtests
+uv run tp-backtest validate --all                       # the plan's backtest gate before paper trading
 ```
 
 Every order passes the plan's pre-trade limits (`config/risk.toml`), which strategies cannot see
 or change: position, sector and gross caps, daily loss limit, stale data, liquidity, no shorts,
 plus a kill switch and a per-strategy drawdown limit. See [docs/risk.md](docs/risk.md).
 
-| # | Strategy | Spec | Status |
-|---|---|---|---|
-| 1 | 10-month MA timing (Faber) | [01-ma-timing.md](docs/strategies/01-ma-timing.md) | backtest |
-| 2 | Time-series momentum (Moskowitz, Ooi, Pedersen) | [02-ts-momentum.md](docs/strategies/02-ts-momentum.md) | backtest |
-| 3 | Cross-sectional momentum 12-1 (Jegadeesh, Titman) | [03-xs-momentum.md](docs/strategies/03-xs-momentum.md) | backtest |
-| 4 | Dual momentum (Antonacci) | [04-dual-momentum.md](docs/strategies/04-dual-momentum.md) | backtest |
-| 5 | RSI(2) mean reversion (Connors, Alvarez) | [05-rsi2.md](docs/strategies/05-rsi2.md) | backtest |
-| 6 | Leveraged ETF momentum rotation, daily (high risk by design) | [06-leveraged-momentum.md](docs/strategies/06-leveraged-momentum.md) | paper |
+All six paper-trade (`config/paper.toml`); by the plan each is an experiment until it passes the
+backtest gate (`tp-backtest validate`, shown under Paper trading in the dashboard).
+
+| # | Strategy | Spec |
+|---|---|---|
+| 1 | 10-month MA timing (Faber) | [01-ma-timing.md](docs/strategies/01-ma-timing.md) |
+| 2 | Time-series momentum (Moskowitz, Ooi, Pedersen) | [02-ts-momentum.md](docs/strategies/02-ts-momentum.md) |
+| 3 | Cross-sectional momentum 12-1 (Jegadeesh, Titman) | [03-xs-momentum.md](docs/strategies/03-xs-momentum.md) |
+| 4 | Dual momentum (Antonacci) | [04-dual-momentum.md](docs/strategies/04-dual-momentum.md) |
+| 5 | RSI(2) mean reversion (Connors, Alvarez) | [05-rsi2.md](docs/strategies/05-rsi2.md) |
+| 6 | Leveraged ETF momentum rotation, daily (high risk by design) | [06-leveraged-momentum.md](docs/strategies/06-leveraged-momentum.md) |
+
+Where the project stands against the plan, and what's next: [docs/progress.md](docs/progress.md).
 
 ## Paper trading
 

@@ -3,7 +3,18 @@ import { useApi } from "../api";
 import { Card, Delta, Empty, ErrorBanner, Stat } from "../components/ui";
 import { money, nyTime, signedMoney, timeAgo } from "../format";
 import type { LiveState } from "../live";
-import { isOption, type PaperStatus, type Portfolio, type Positions, type Quote, type Research, type Status, type Trades } from "../types";
+import {
+  isOption,
+  type MarketRegime,
+  type PaperStatus,
+  type Portfolio,
+  type Positions,
+  type Quote,
+  type Research,
+  type Status,
+  type Trades,
+  type Validation,
+} from "../types";
 import { PickLine } from "./Research";
 import { TradeTable } from "./Trades";
 
@@ -16,7 +27,12 @@ export interface AttentionItem {
 
 /** Everything that wants a decision or a fix, most urgent first: options about to be exercised
  * or expire, actions the rules flag on positions, paper orders waiting, data gone stale. */
-export function attentionItems(positions: Positions | null, status: Status | null, pendingApprovals: number): AttentionItem[] {
+export function attentionItems(
+  positions: Positions | null,
+  status: Status | null,
+  pendingApprovals: number,
+  validation: Validation | null = null,
+): AttentionItem[] {
   const items: AttentionItem[] = [];
   for (const p of positions?.positions ?? []) {
     const href = `#/portfolio/positions/${encodeURIComponent(p.symbol)}`;
@@ -36,6 +52,15 @@ export function attentionItems(positions: Positions | null, status: Status | nul
       title: `${pendingApprovals} paper order${pendingApprovals === 1 ? "" : "s"} waiting for your approval`,
       text: "Approve or reject them before the next open.",
       href: "#/paper",
+    });
+  }
+  const unproven = (validation?.strategies ?? []).filter((v) => v.on_paper && !v.report?.gate.passed);
+  if (unproven.length) {
+    items.push({
+      level: "info",
+      title: `${unproven.length} paper strateg${unproven.length === 1 ? "y hasn't" : "ies haven't"} passed the backtest gate`,
+      text: `${unproven.map((v) => v.name).join(", ")}: validate them to see what the plan's stage-1 checks say.`,
+      href: "#/paper/strategies",
     });
   }
   if (status?.bars.stale) {
@@ -59,6 +84,8 @@ export default function Home({ live, pendingApprovals }: { live: LiveState; pend
   const positions = useApi<Positions>("/api/positions", 60_000);
   const research = useApi<Research>("/api/research", 600_000);
   const trades = useApi<Trades>("/api/trades?limit=8", 60_000);
+  const regime = useApi<MarketRegime>("/api/market/regime", 600_000);
+  const validation = useApi<Validation>("/api/strategies/validation", 600_000);
   const paper = useApi<PaperStatus>("/api/paper", 60_000);
   const s = status.data;
   const lp = live.portfolio;
@@ -66,7 +93,8 @@ export default function Home({ live, pendingApprovals }: { live: LiveState; pend
   const bot = paper.data?.bot;
   const paperPnl = trades.data?.paper?.pnl;
   const theta = positions.data?.totals?.theta_day;
-  const attention = attentionItems(positions.data, s, pendingApprovals);
+  const attention = attentionItems(positions.data, s, pendingApprovals, validation.data);
+  const now = regime.data?.current;
   const ideas = research.data ? [...research.data.swing.slice(0, 2), ...research.data.leaps.slice(0, 1), ...research.data.bearish.slice(0, 1)] : [];
 
   return (
@@ -106,8 +134,13 @@ export default function Home({ live, pendingApprovals }: { live: LiveState; pend
         />
         <Stat
           label="Market"
-          value={s ? (s.market.is_open ? "Open" : "Closed") : "—"}
-          sub={s ? (s.market.is_open ? `Closes ${nyTime(s.market.next_close)} ET` : `Opens ${nyTime(s.market.next_open)} ET`) : null}
+          value={now?.trend ? (now.trend === "up" ? "Uptrend" : "Downtrend") : s ? (s.market.is_open ? "Open" : "Closed") : "—"}
+          sub={
+            <>
+              {now ? `${now.volatility ?? "—"} volatility · ${now.breadth === "broad" ? "most stocks rising" : now.breadth === "narrow" ? "few stocks rising" : "mixed breadth"} · ` : ""}
+              {s ? (s.market.is_open ? `closes ${nyTime(s.market.next_close)} ET` : `opens ${nyTime(s.market.next_open)} ET`) : null}
+            </>
+          }
         />
       </div>
 

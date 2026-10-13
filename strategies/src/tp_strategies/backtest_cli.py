@@ -3,6 +3,8 @@
 tp-backtest list
 tp-backtest run ma-timing --start 2018-01-01
 tp-backtest run ma-timing -p assets=SPY --fill next_close --slippage-bps 10
+tp-backtest validate ma-timing          # the plan's stage-1 gate (see docs/backtesting.md)
+tp-backtest validate --all
 """
 
 from __future__ import annotations
@@ -17,11 +19,11 @@ import typer
 from tp_core.config import Settings
 from tp_core.portfolio import Classifier
 from tp_core.storage import Lake
-from tp_risk.limits import Limits
 from tp_risk.manager import RiskManager
-from tp_risk.state import MemoryRiskState
-from tp_strategies.backtest import run_backtest
+from tp_strategies.backtest import risk_gate, run_backtest
 from tp_strategies.library import REGISTRY, build, parameters
+from tp_strategies.validation import ValidationConfig, paper_params
+from tp_strategies.validation import validate as run_validation
 from tp_trading.costs import CostModel
 from tp_trading.engine import EngineConfig
 from tp_trading.execution import ExecutionConfig, FillAt
@@ -103,21 +105,7 @@ def run(
     )
     settings = Settings()
     classifier = Classifier.load(settings.classifications_file)
-    gate = None
-    if risk:
-        if not settings.risk_file.exists():
-            typer.echo(
-                f"risk limits file {settings.risk_file} not found: run from the repo root, set "
-                "TP_RISK_FILE, or pass --no-risk",
-                err=True,
-            )
-            raise typer.Exit(2)
-        gate = RiskManager(
-            Limits.load(settings.risk_file),
-            classifier,
-            MemoryRiskState(),
-            enforce_drawdown=enforce_drawdown,
-        )
+    gate = _risk_gate(settings, classifier, enforce_drawdown) if risk else None
     try:
         outcome = run_backtest(
             Lake(settings.data_root), built, config, risk=gate, sectors=classifier.sectors,
@@ -159,6 +147,109 @@ def run(
         )
     if outcome.path:
         typer.echo(f"\nsaved to {outcome.path}")
+
+
+def _risk_gate(settings: Settings, classifier: Classifier, enforce_drawdown: bool) -> RiskManager:
+    if not settings.risk_file.exists():
+        typer.echo(
+            f"risk limits file {settings.risk_file} not found: run from the repo root, set "
+            "TP_RISK_FILE, or pass --no-risk",
+            err=True,
+        )
+        raise typer.Exit(2)
+    return risk_gate(settings.risk_file, classifier, enforce_drawdown=enforce_drawdown)
+
+
+MARK = {True: "PASS", False: "FAIL", None: " n/a"}
+
+
+@app.command()
+def validate(
+    strategy: Annotated[
+        str | None, typer.Argument(help="Strategy name (see `tp-backtest list`).")
+    ] = None,
+    every: Annotated[bool, typer.Option("--all", help="Validate every strategy.")] = False,
+    param: Annotated[
+        list[str] | None,
+        typer.Option("--param", "-p", help="Strategy parameter as key=value; repeatable."),
+    ] = None,
+    capital: Annotated[float, typer.Option(help="Starting cash.")] = 100_000.0,
+    slippage_bps: Annotated[float, typer.Option(help="Per-fill slippage, basis points.")] = 5.0,
+    risk: Annotated[
+        bool, typer.Option(help="Apply the pre-trade limits in config/risk.toml.")
+    ] = True,
+    save: Annotated[bool, typer.Option(help="Write the report under reports/validation/.")] = True,
+) -> None:
+    """Run the plan's backtest validation: locked test set, walk-forward, Deflated Sharpe,
+    stress periods and parameter stability (config/validation.toml). Pass all five and the
+    strategy is ready for paper trading."""
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
+    if every == (strategy is not None):
+        raise typer.BadParameter("name one strategy, or pass --all")
+    names = sorted(REGISTRY) if every else [str(strategy)]
+    settings = Settings()
+    on_paper = paper_params(settings.paper_file)
+    config = (
+        ValidationConfig.load(settings.validation_file)
+        if settings.validation_file.exists()
+        else ValidationConfig()
+    )
+    classifier = Classifier.load(settings.classifications_file)
+    engine = EngineConfig(
+        initial_cash=capital,
+        execution=ExecutionConfig(costs=CostModel(slippage_bps=slippage_bps)),
+    )
+    failed = False
+    for name in names:
+        try:
+            report = run_validation(
+                Lake(settings.data_root), name, engine=engine,
+                params=_params(param or []) if param else on_paper.get(name, {}),
+                config=config, sectors=classifier.sectors, now=datetime.now(UTC), save=save,
+                risk=(lambda: _risk_gate(settings, classifier, False)) if risk else (lambda: None),
+                progress=lambda m: typer.echo(f"  {m}", err=True),
+            )  # fmt: skip
+        except (KeyError, ValueError) as exc:
+            typer.echo(f"{name}: {exc.args[0] if exc.args else exc}", err=True)
+            failed = True
+            continue
+        _print_report(report)
+        failed |= not report["gate"]["passed"]
+    if failed:
+        raise typer.Exit(1)
+
+
+def _print_report(r: dict[str, Any]) -> None:
+    g = r["gate"]
+    typer.echo(f"\n{r['title']} ({r['strategy']})  {r['params']}")
+    typer.echo(
+        f"stage-1 gate: {'PASSED: ready for paper trading' if g['passed'] else 'not passed'}"
+    )
+    for c in g["checks"]:
+        typer.echo(f"  [{MARK[c['passed']]}] {c['name']}: {c['detail']}")
+    typer.echo(f"\n{'':12}{'sessions':>9}{'CAGR':>9}{'Sharpe':>8}{'max DD':>9}{'SPY CAGR':>10}")
+    for label, p in [("full", r["full"]), *r["periods"].items()]:
+        bench = p.get("benchmark") or {}
+        typer.echo(
+            f"{label:12}{p.get('sessions', 0):>9}{_fmt(p.get('cagr'), 'pct'):>9}"
+            f"{_fmt(p.get('sharpe'), 'num'):>8}{_fmt(p.get('max_drawdown'), 'pct'):>9}"
+            f"{_fmt(bench.get('cagr'), 'pct'):>10}"
+        )
+    mc = r.get("monte_carlo") or {}
+    if mc:
+        typer.echo(
+            f"\nMonte Carlo ({mc['paths']} resampled paths): CAGR {_fmt(mc['cagr_p5'], 'pct')} to "
+            f"{_fmt(mc['cagr_p95'], 'pct')} (5th-95th), bad-tail drawdown "
+            f"{_fmt(mc['max_drawdown_p5'], 'pct')}, {mc['prob_loss']:.0%} of paths lose money"
+        )
+    for dim, rows in (r.get("regimes") or {}).items():
+        parts = [f"{x['label']} {_fmt(x['ann_return'], 'pct')}/yr" for x in rows]
+        typer.echo(f"by {dim:10} " + ", ".join(parts))
+    if r.get("test_touches", 1) > 1:
+        typer.echo(
+            f"note: the locked test set has now been looked at {r['test_touches']} times for "
+            "these parameters"
+        )
 
 
 def _params(pairs: list[str]) -> dict[str, str]:
