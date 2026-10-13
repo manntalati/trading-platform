@@ -4,9 +4,16 @@ import { Card, Delta, Empty, ErrorBanner, go, Loading, Stat, SubNav } from "../c
 import { money, num, pct, qty, signedMoney } from "../format";
 import type { LiveState } from "../live";
 import {
+  isCalendar,
+  isCondor,
+  isCreditSpread,
   isSpread,
+  type CalendarPick,
   type ChatTurn,
+  type ContractPick,
+  type CreditSpreadPick,
   type FetchState,
+  type IronCondorPick,
   type Pick,
   type Research as ResearchData,
   type ResearchIdea,
@@ -25,8 +32,8 @@ const VIEWS = [
   { key: "checks", label: "Portfolio checks" },
 ];
 
-/** What to look at next: ranked swing, LEAPS and bearish setups with the contract each would
- * use; any symbol in depth (and fetched if it's new); and rules-based checks on the portfolio. */
+/** What to look at next: ranked swing, LEAPS, bearish and premium-selling setups with the
+ * contract each would use; any symbol in depth (and fetched if it's new); and rules-based checks on the portfolio. */
 export default function Research({ live, sub, detail }: { live: LiveState; sub: string | null; detail: string | null }) {
   const current = VIEWS.some((v) => v.key === sub) ? sub! : "ideas";
   return (
@@ -56,6 +63,11 @@ const KINDS = [
     key: "bearish",
     label: "Bearish puts",
     rule: "Downtrends lagging the S&P 500. Contract: 30 to 100 days out, delta about −0.55; a debit spread when options are expensive.",
+  },
+  {
+    key: "income",
+    label: "Selling premium",
+    rule: "Expensive options (high IV rank, or implied well above realized volatility) on stocks not in a downtrend, richest first. Uptrends: a cash-secured put about 0.25 delta, 25 to 50 days out (a put credit spread caps the risk). No trend: an iron condor. The gain is capped at the premium; size for the maximum loss.",
   },
 ] as const;
 type Kind = (typeof KINDS)[number]["key"];
@@ -110,7 +122,7 @@ function OptionsIdeas() {
 
 export function IdeaCard({ idea }: { idea: ResearchIdea }) {
   return (
-    <article className={`card idea ${idea.kind === "bearish" ? "attention" : "info"}`}>
+    <article className={`card idea ${idea.kind === "bearish" ? "attention" : idea.kind === "income" ? "consider" : "info"}`}>
       <div className="idea-head">
         <a href={`#/research/lookup/${encodeURIComponent(idea.symbol)}`} className="idea-symbol">
           {idea.symbol}
@@ -157,7 +169,12 @@ export function IdeaCard({ idea }: { idea: ResearchIdea }) {
 function VolTag({ vol }: { vol: VolContext }) {
   if (vol.iv30 == null) return null;
   const label = vol.rank != null ? `IV rank ${pct(vol.rank, 0)}` : vol.iv_hv != null ? `IV ${num(vol.iv_hv, 1)}x realized` : `IV ${pct(vol.iv30, 0)}`;
-  return <span className={`pill ${vol.rich ? "rich" : ""}`}>{vol.rich ? `options expensive · ${label}` : label}</span>;
+  return (
+    <>
+      <span className={`pill ${vol.rich ? "rich" : ""}`}>{vol.rich ? `options expensive · ${label}` : label}</span>
+      {vol.term_shape === "backwardation" && <span className="pill">near-term IV dearer</span>}
+    </>
+  );
 }
 
 function strike(k: number): string {
@@ -166,11 +183,41 @@ function strike(k: number): string {
 
 /** One line: what you'd buy (or the spread) and what it costs. */
 export function PickLine({ pick }: { pick: Pick }) {
+  if (isCreditSpread(pick)) {
+    return (
+      <>
+        {pick.kind} ${strike(pick.short.strike)}/${strike(pick.long.strike)} {pick.short.expiration} for a {money(pick.credit, true)} credit (risk{" "}
+        {money(pick.max_loss)})
+      </>
+    );
+  }
+  if (isCondor(pick)) {
+    return (
+      <>
+        iron condor ${strike(pick.put_spread.long.strike)}/${strike(pick.put_spread.short.strike)}/${strike(pick.call_spread.short.strike)}/$
+        {strike(pick.call_spread.long.strike)} {pick.put_spread.short.expiration} for a {money(pick.credit, true)} credit (risk {money(pick.max_loss)})
+      </>
+    );
+  }
+  if (isCalendar(pick)) {
+    return (
+      <>
+        ${strike(pick.strike)} {pick.front.right} calendar {pick.front.expiration}/{pick.back.expiration} for {money(pick.debit, true)} ({money(pick.cost)})
+      </>
+    );
+  }
   if (isSpread(pick)) {
     return (
       <>
         {pick.long.right} spread ${strike(pick.long.strike)}/${strike(pick.short.strike)} {pick.long.expiration} for{" "}
         {money(pick.debit, true)} ({money(pick.cost)})
+      </>
+    );
+  }
+  if (pick.cash_required != null) {
+    return (
+      <>
+        sell {pick.label} for {money(pick.price, true)} ({money(pick.premium)}; {money(pick.cash_required)} set aside)
       </>
     );
   }
@@ -182,7 +229,11 @@ export function PickLine({ pick }: { pick: Pick }) {
 }
 
 export function PickSummary({ pick }: { pick: Pick }) {
+  if (isCreditSpread(pick)) return <CreditSpreadSummary s={pick} />;
+  if (isCondor(pick)) return <CondorSummary c={pick} />;
+  if (isCalendar(pick)) return <CalendarSummary c={pick} />;
   if (isSpread(pick)) return <SpreadSummary s={pick} />;
+  if (pick.cash_required != null) return <CashSecuredPutSummary p={pick} />;
   const leaps = pick.capital_freed != null;
   return (
     <div className="pick">
@@ -221,6 +272,79 @@ function SpreadSummary({ s }: { s: SpreadPick }) {
         <Fact label="Breakeven" value={money(s.breakeven, true)} sub={pct(s.breakeven_move_pct, 1, true)} />
         <Fact label="Odds of profit" value={pct(s.prob_profit, 0)} sub="at expiry" />
         <Fact label="Decay" value={`${signedMoney(s.theta_day)}/day`} sub={`${s.long.dte} days`} />
+      </div>
+    </div>
+  );
+}
+
+function CashSecuredPutSummary({ p }: { p: ContractPick }) {
+  return (
+    <div className="pick">
+      <div className="pick-title">
+        Sell <strong>{p.label}</strong> at {money(p.price, true)} <span className="muted">({money(p.premium)} collected, {money(p.cash_required)} set aside)</span>
+      </div>
+      <div className="pick-facts">
+        <Fact label="Yield" value={pct(p.yield_pct, 1)} sub={`${pct(p.annualized_pct, 0)} a year`} />
+        <Fact label="If assigned" value={money(p.net_entry, true)} sub={`${pct(p.net_entry_discount_pct, 1, true)} vs now`} />
+        <Fact label="Odds assigned" value={pct(p.prob_assigned, 0)} sub={`${p.dte} days`} />
+        <Fact label="Decay earned" value={`${signedMoney(-p.theta_day)}/day`} sub={`IV ${pct(p.iv, 0)}`} />
+      </div>
+    </div>
+  );
+}
+
+function CreditSpreadSummary({ s }: { s: CreditSpreadPick }) {
+  return (
+    <div className="pick">
+      <div className="pick-title">
+        Sell <strong>{s.short.label}</strong>, buy the ${strike(s.long.strike)} for a {money(s.credit, true)} credit{" "}
+        <span className="muted">({money(s.premium)} a spread)</span>
+      </div>
+      <div className="pick-facts">
+        <Fact label="Max loss" value={money(s.max_loss)} sub={`${pct(s.return_on_risk, 0)} return on it`} />
+        <Fact label="Breakeven" value={money(s.breakeven, true)} sub={pct(s.breakeven_move_pct, 1, true)} />
+        <Fact label="Odds of profit" value={pct(s.prob_profit, 0)} sub="at expiry" />
+        <Fact label="Decay earned" value={`${signedMoney(s.theta_day)}/day`} sub={`${s.dte} days`} />
+      </div>
+    </div>
+  );
+}
+
+function CondorSummary({ c }: { c: IronCondorPick }) {
+  return (
+    <div className="pick">
+      <div className="pick-title">
+        Sell the <strong>${strike(c.put_spread.short.strike)} put and ${strike(c.call_spread.short.strike)} call</strong>, {c.put_spread.short.expiration}, wings at $
+        {strike(c.put_spread.long.strike)}/${strike(c.call_spread.long.strike)}, for a {money(c.credit, true)} credit{" "}
+        <span className="muted">({money(c.premium)})</span>
+      </div>
+      <div className="pick-facts">
+        <Fact label="Max loss" value={money(c.max_loss)} sub={`${pct(c.return_on_risk, 0)} return on it`} />
+        <Fact
+          label="Profit range"
+          value={`${money(c.lower_breakeven, true)}–${money(c.upper_breakeven, true)}`}
+          sub={`${pct(c.range_pct[0], 1, true)} to ${pct(c.range_pct[1], 1, true)}`}
+        />
+        <Fact label="Odds of profit" value={pct(c.prob_profit, 0)} sub="at expiry" />
+        <Fact label="Decay earned" value={`${signedMoney(c.theta_day)}/day`} sub={`${c.dte} days`} />
+      </div>
+    </div>
+  );
+}
+
+function CalendarSummary({ c }: { c: CalendarPick }) {
+  const [lo, hi] = c.profit_range;
+  return (
+    <div className="pick">
+      <div className="pick-title">
+        Sell <strong>{c.front.label}</strong>, buy the {c.back.expiration} ${strike(c.strike)} {c.back.right} for {money(c.debit, true)}{" "}
+        <span className="muted">({money(c.cost)})</span>
+      </div>
+      <div className="pick-facts">
+        <Fact label="Best case" value={money(c.max_profit_est)} sub="at the strike when the front expires" />
+        <Fact label="Profit range" value={lo != null && hi != null ? `${money(lo, true)}–${money(hi, true)}` : "—"} sub={`odds ${pct(c.prob_profit, 0)}`} />
+        <Fact label="Decay earned" value={`${signedMoney(c.theta_day)}/day`} sub={`vega ${signedMoney(c.vega)}/pt`} />
+        <Fact label="IV" value={`${pct(c.front_iv, 0)} / ${pct(c.back_iv, 0)}`} sub="front / back" />
       </div>
     </div>
   );
@@ -306,7 +430,9 @@ function SymbolDepth({ symbol, live }: { symbol: string; live: LiveState }) {
           sub={
             v.iv30 == null
               ? "no chain yet"
-              : `${v.rank != null ? `rank ${pct(v.rank, 0)} · ` : ""}${v.iv_hv != null ? `${num(v.iv_hv, 1)}x realized ${pct(v.hv20, 0)}` : ""}${v.rich ? " · expensive" : ""}`
+              : `${v.rank != null ? `rank ${pct(v.rank, 0)} · ` : ""}${v.iv_hv != null ? `${num(v.iv_hv, 1)}x realized ${pct(v.hv20, 0)}` : ""}${v.rich ? " · expensive" : ""}${
+                  v.skew_25d != null ? ` · put skew ${num(-v.skew_25d * 100, 1)} pts` : ""
+                }${v.term_shape ? ` · ${v.term_shape}` : ""}`
           }
         />
       </div>
@@ -327,7 +453,22 @@ function SymbolDepth({ symbol, live }: { symbol: string; live: LiveState }) {
           {p.swing_put && <PickCard title="Swing put" hint="if you're bearish" pick={p.swing_put} />}
           {p.put_spread && <PickCard title="Put debit spread" pick={p.put_spread} />}
         </div>
-      ) : (
+      ) : null}
+      {p.cash_secured_put || p.put_credit_spread || p.iron_condor || p.calendar ? (
+        <>
+          <p className="muted small" style={{ margin: 0 }}>
+            Selling premium and time spreads{v.rich ? ": options are expensive here, which is when the seller's side pays" : ": options aren't expensive here, so the premium is thin"}.
+          </p>
+          <div className="grid cols-2 top">
+            {p.cash_secured_put && <PickCard title="Cash-secured put" hint="paid to wait for a lower entry" pick={p.cash_secured_put} />}
+            {p.put_credit_spread && <PickCard title="Put credit spread" hint="bullish; loss capped at the width" pick={p.put_credit_spread} />}
+            {p.call_credit_spread && <PickCard title="Call credit spread" hint="bearish; loss capped at the width" pick={p.call_credit_spread} />}
+            {p.iron_condor && <PickCard title="Iron condor" hint="paid while it stays in a range" pick={p.iron_condor} />}
+            {p.calendar && <PickCard title="Calendar" hint="paid by the front month's faster decay" pick={p.calendar} />}
+          </div>
+        </>
+      ) : null}
+      {Object.keys(p).length ? null : (
         <FetchTicker symbol={symbol} onDone={() => setTick((t) => t + 1)} reason="No option chain stored for it yet." />
       )}
       {p.swing_call?.scenarios && <Scenarios grid={p.swing_call.scenarios} cost={p.swing_call.price} quantity={1} />}
@@ -341,6 +482,7 @@ function SymbolDepth({ symbol, live }: { symbol: string; live: LiveState }) {
         suggestions={[
           `Is ${symbol} a good swing trade here, and which structure?`,
           `Would a LEAPS on ${symbol} make sense instead of shares?`,
+          `Is selling premium on ${symbol} worth it here (cash-secured put or credit spread)?`,
           `Any earnings or news before these expiries?`,
         ]}
       />

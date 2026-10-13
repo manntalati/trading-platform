@@ -59,7 +59,9 @@ def test_research_ranks_ideas_with_contracts(client: tuple[TestClient, Any]) -> 
     body = c.get("/api/research").json()
     assert body["scanned"] >= 10
     assert body["with_chains"] >= 5
-    assert "TLT" not in {i["symbol"] for k in ("swing", "leaps", "bearish") for i in body[k]}
+    assert "TLT" not in {
+        i["symbol"] for k in ("swing", "leaps", "bearish", "income") for i in body[k]
+    }
     ideas = [*body["swing"], *body["leaps"], *body["bearish"]]
     assert ideas, "the fake market should produce some ideas"
     for idea in ideas:

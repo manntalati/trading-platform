@@ -64,3 +64,41 @@ def test_probabilities_and_expected_move() -> None:
     assert bs.prob_above(100, 90, 0.0, 0.3) == 1.0
     assert bs.expected_move(100, 0.25, 0.3) == pytest.approx(15.0)
     assert bs.expected_move(100, 0.0, 0.3) == 0.0
+
+
+@pytest.mark.parametrize("strike", [40.0, 70.0, 95.0, 100.0, 110.0, 160.0, 250.0])
+@pytest.mark.parametrize("call", [True, False])
+@pytest.mark.parametrize("years", [3 / 365, 0.25, 2.0])
+def test_newton_implied_vol_recovers_the_volatility(
+    strike: float, call: bool, years: float
+) -> None:
+    for vol in (0.08, 0.3, 1.2):
+        value = bs.price(100.0, strike, years, vol, call=call, rate=0.04)
+        floor = bs.price(100.0, strike, years, bs.MIN_VOL, call=call, rate=0.04)
+        if value - floor < 1e-6:
+            continue  # no time value left: the volatility can't be read from the price
+        iv = bs.implied_vol(value, 100.0, strike, years, call=call, rate=0.04)
+        assert iv is not None
+        back = bs.price(100.0, strike, years, iv, call=call, rate=0.04)
+        assert back == pytest.approx(value, abs=1e-7)
+
+
+def test_higher_greeks_match_finite_differences() -> None:
+    s, k, t, v, r = 100.0, 105.0, 0.4, 0.3, 0.05
+    for call in (True, False):
+        h = bs.higher_greeks(s, k, t, v, call=call, rate=r, div=0.01)
+
+        def delta(vol: float = v, years: float = t, call: bool = call) -> float:
+            return bs.greeks(s, k, years, vol, call=call, rate=r, div=0.01).delta
+
+        def vega(vol: float, call: bool = call) -> float:
+            return bs.greeks(s, k, t, vol, call=call, rate=r, div=0.01).vega
+
+        up = bs.price(s, k, t, v, call=call, rate=r + 1e-4, div=0.01)
+        down = bs.price(s, k, t, v, call=call, rate=r - 1e-4, div=0.01)
+        assert h.rho == pytest.approx((up - down) / 2e-4 / 100, rel=1e-4)
+        assert h.vanna == pytest.approx((delta(v + 1e-4) - delta(v - 1e-4)) / 2e-4 / 100, rel=1e-4)
+        day = 1 / bs.YEAR_DAYS
+        assert h.charm == pytest.approx(delta(years=t - day) - delta(), rel=1e-2)
+        assert h.vomma == pytest.approx((vega(v + 1e-4) - vega(v - 1e-4)) / 2e-4 / 100, rel=1e-4)
+    assert bs.higher_greeks(s, k, 0.0, v, call=True) == bs.HigherGreeks(0.0, 0.0, 0.0, 0.0)

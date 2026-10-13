@@ -94,6 +94,12 @@ def test_options_summary(client: TestClient) -> None:
     assert first["expected_move"] > 0
     assert {p["right"] for p in body["smile"]} == {"C", "P"}
     assert all((p["strike"] >= body["spot"]) == (p["right"] == "C") for p in body["smile"])
+    fitted = [t for t in body["term"] if t["fit"]]
+    assert fitted  # SVI per expiration
+    assert fitted[0]["fit"]["rmse_iv"] < 0.02
+    assert body["smile_fit"]
+    assert body["skew"]["skew_25d"] is not None
+    assert body["quote_arbitrage"] == {"vertical": 0, "butterfly": 0}
     assert client.get("/api/options/QQQ").json()["term"] == []
 
 

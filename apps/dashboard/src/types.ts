@@ -226,8 +226,36 @@ export interface OptionSummary {
   underlying: string;
   snapshot_at: string | null;
   spot?: Num;
-  term: { expiration: string; dte: number; atm_strike: number; atm_iv: Num; expected_move: Num; expected_move_pct: Num; contracts: number }[];
+  term: {
+    expiration: string;
+    dte: number;
+    atm_strike: number;
+    atm_iv: Num;
+    expected_move: Num;
+    expected_move_pct: Num;
+    contracts: number;
+    fit?: SmileFit | null;
+  }[];
   smile: { strike: number; iv: Num; right: "C" | "P" }[];
+  rate?: number;
+  smile_expiration?: string | null;
+  smile_fit?: { strike: number; iv: number }[];
+  quote_arbitrage?: { vertical: number; butterfly: number } | null;
+  skew?: { skew_25d: Num; butterfly_25d: Num; iv30: Num; iv90: Num; ratio: Num; shape: "contango" | "flat" | "backwardation" | null };
+}
+
+// tp_core.smile.ExpiryFit: SVI per expiration
+export interface SmileFit {
+  points: number;
+  svi: { a: number; b: number; rho: number; m: number; sigma: number };
+  rmse_iv: number;
+  atm_iv: number;
+  skew_25d: Num;
+  butterfly_25d: Num;
+  butterfly_arbitrage: boolean;
+  calendar_arbitrage: boolean;
+  k_min: number;
+  k_max: number;
 }
 
 export interface PaperCheck {
@@ -347,6 +375,7 @@ export interface OptionStats {
   exit_value?: Num;
   intrinsic?: Num;
   extrinsic?: Num;
+  early_exercise_value?: Num; // puts: what exercising early adds per share (binomial tree)
   moneyness?: Num;
   in_the_money?: boolean;
   breakeven?: Num;
@@ -525,6 +554,59 @@ export interface ContractPick {
   annualized_pct?: number;
   upside_to_strike_pct?: number;
   prob_assigned?: Num;
+  // cash-secured put
+  cash_required?: number;
+  net_entry?: number;
+  net_entry_discount_pct?: number;
+}
+
+/** Selling a vertical: the short leg nearer the money, bought back further out. */
+export interface CreditSpreadPick {
+  kind: "put credit spread" | "call credit spread";
+  short: ContractPick;
+  long: ContractPick;
+  credit: number;
+  premium: number;
+  width: number;
+  max_loss: number;
+  return_on_risk: number;
+  breakeven: number;
+  breakeven_move_pct: number;
+  prob_profit: Num;
+  theta_day: number;
+  dte: number;
+}
+
+export interface IronCondorPick {
+  kind: "iron condor";
+  put_spread: CreditSpreadPick;
+  call_spread: CreditSpreadPick;
+  credit: number;
+  premium: number;
+  max_loss: number;
+  return_on_risk: number;
+  lower_breakeven: number;
+  upper_breakeven: number;
+  range_pct: [number, number];
+  prob_profit: Num;
+  theta_day: number;
+  dte: number;
+}
+
+export interface CalendarPick {
+  kind: "calendar";
+  front: ContractPick;
+  back: ContractPick;
+  strike: number;
+  debit: number;
+  cost: number;
+  max_profit_est: number;
+  profit_range: [Num, Num];
+  prob_profit: Num;
+  theta_day: number;
+  vega: number;
+  front_iv: number;
+  back_iv: number;
 }
 
 export interface SpreadPick {
@@ -540,10 +622,23 @@ export interface SpreadPick {
   theta_day: number;
 }
 
-export type Pick = ContractPick | SpreadPick;
+export type Pick = ContractPick | SpreadPick | CreditSpreadPick | IronCondorPick | CalendarPick;
 
+/** A debit spread (the structures with a ``kind`` are the premium-selling and time spreads). */
 export function isSpread(p: Pick): p is SpreadPick {
-  return "long" in p;
+  return "long" in p && !("kind" in p);
+}
+
+export function isCreditSpread(p: Pick): p is CreditSpreadPick {
+  return "kind" in p && (p.kind === "put credit spread" || p.kind === "call credit spread");
+}
+
+export function isCondor(p: Pick): p is IronCondorPick {
+  return "kind" in p && p.kind === "iron condor";
+}
+
+export function isCalendar(p: Pick): p is CalendarPick {
+  return "kind" in p && p.kind === "calendar";
 }
 
 export interface VolContext {
@@ -558,6 +653,11 @@ export interface VolContext {
   event: { by: string; after: string | null; iv: number; iv_after: number } | null;
   rich: boolean;
   as_of: string | null;
+  skew_25d?: Num; // 25-delta call IV minus put IV (negative: puts dearer)
+  butterfly_25d?: Num;
+  smile_arbitrage?: boolean | null;
+  term_ratio?: Num; // 90-day over 30-day IV
+  term_shape?: "contango" | "flat" | "backwardation" | null;
 }
 
 export interface Setup {
@@ -568,7 +668,7 @@ export interface Setup {
 
 export interface ResearchIdea {
   symbol: string;
-  kind: "swing" | "leaps" | "bearish";
+  kind: "swing" | "leaps" | "bearish" | "income";
   score: number;
   spot: Num;
   setup: Setup;
@@ -591,6 +691,7 @@ export interface Research {
   swing: ResearchIdea[];
   leaps: ResearchIdea[];
   bearish: ResearchIdea[];
+  income: ResearchIdea[];
   disclaimer: string;
 }
 
@@ -600,8 +701,12 @@ export interface SymbolResearch {
   stock: StockStats;
   setup: Setup;
   vol: VolContext;
-  picks: Partial<Record<"swing_call" | "swing_put" | "leaps_call", ContractPick>> &
-    Partial<Record<"call_spread" | "put_spread", SpreadPick>>;
+  picks: Partial<Record<"swing_call" | "swing_put" | "leaps_call" | "cash_secured_put", ContractPick>> &
+    Partial<Record<"call_spread" | "put_spread", SpreadPick>> &
+    Partial<Record<"put_credit_spread" | "call_credit_spread", CreditSpreadPick>> & {
+      iron_condor?: IronCondorPick;
+      calendar?: CalendarPick;
+    };
   chain_age_days: Num;
   held: string | null;
   disclaimer: string;

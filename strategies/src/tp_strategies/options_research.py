@@ -36,14 +36,17 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, Literal
 
+import numpy as np
 import pandas as pd
 
+from tp_core import american
 from tp_core import greeks as bs
 from tp_core.bars import load_bars, missing_symbols
 from tp_core.calendar import NEW_YORK
 from tp_core.pnl import option_label
 from tp_core.portfolio import Classifier
 from tp_core.positions import OptionPosition, scenarios, stock_stats, years_until
+from tp_core.smile import ExpiryFit, fit_expiry, term_shape
 from tp_core.storage import Lake
 from tp_core.volatility import atm_term, chain_spot, event_expiry, iv_at, iv_history, iv_rank
 
@@ -82,6 +85,15 @@ class Rules:
     roll_swing_dte: tuple[int, int, int] = (40, 100, 60)
     leaps_roll_below_dte: int = 180  # LEAPS decay picks up under ~6 months
     swing_decide_dte: int = 21
+    # selling premium: 25-50 days out, where time decay is fastest relative to the risk
+    income_dte: tuple[int, int, int] = (25, 50, 35)
+    csp_delta: tuple[float, float, float] = (0.15, 0.35, 0.25)
+    credit_short_delta: float = 0.30
+    credit_long_delta: float = 0.15
+    condor_short_delta: float = 0.20
+    condor_long_delta: float = 0.10
+    calendar_front_dte: tuple[int, int, int] = (20, 50, 30)
+    calendar_back_dte: tuple[int, int, int] = (50, 120, 75)
     take_profit: float = 0.5  # +50%
     cut_loss: float = -0.5
     low_odds: float = 0.2
@@ -124,6 +136,13 @@ def priced(
         years = years_until(exp, now)
         call = right == "C"
         iv = bs.implied_vol(float(r["mid"]), spot, float(r["strike"]), years, call=call, rate=rate)
+        if (
+            iv is None
+            and not call
+            and float(r["mid"]) > bs.intrinsic(spot, float(r["strike"]), False)
+        ):
+            iv = american.implied_vol(float(r["mid"]), spot, float(r["strike"]), years,
+                                      call=False, rate=rate)  # fmt: skip
         if iv is None and pd.notna(r["implied_volatility"]) and r["implied_volatility"] > 0:
             iv = float(r["implied_volatility"])
         g = bs.greeks(spot, float(r["strike"]), years, iv, call=call, rate=rate) if iv else None
@@ -325,14 +344,229 @@ def covered_call_pick(
     }
 
 
+# -- selling premium and time spreads -------------------------------------------------------------
+
+
+def _income_side(
+    chain: pd.DataFrame,
+    spot: float,
+    now: datetime,
+    rate: float,
+    right: Right,
+    rules: Rules,
+    dte: tuple[int, int] | None = None,
+) -> pd.DataFrame:
+    """Out-of-the-money contracts of one side in the premium-selling window, liquid enough."""
+    lo, hi, _ = rules.income_dte
+    c = priced(chain, spot, now, rate, right=right, dte=dte or (lo, hi), strikes=(0.5, 1.5))
+    otm = c["strike"] < spot if right == "P" else c["strike"] > spot
+    return c[otm & (c["bid"] >= 0.05) & (c["spread_pct"] <= MAX_SPREAD)]
+
+
+def _nearest_expiry(c: pd.DataFrame, target: int) -> pd.DataFrame:
+    if c.empty:
+        return c
+    gap = (c["dte"] - target).abs()
+    out: pd.DataFrame = c[gap == gap.min()]
+    return out
+
+
+def cash_secured_put_pick(
+    chain: pd.DataFrame, spot: float, now: datetime, rate: float, rules: Rules
+) -> dict[str, Any] | None:
+    """Sell a ~0.25-delta put 25-50 days out with the cash to buy the shares set aside: paid to
+    wait for a lower entry price, or to keep the premium."""
+    _, _, target = rules.income_dte
+    dlo, dhi, dtarget = rules.csp_delta
+    c = _nearest_expiry(_income_side(chain, spot, now, rate, "P", rules), target)
+    c = c[c["delta"].abs().between(dlo, dhi)]
+    row = _closest(c, (c["delta"].abs() - dtarget).abs())
+    if row is None:
+        return None
+    v = contract_view(row, spot, rate, side="sell")
+    strike, bid = float(row["strike"]), float(row["bid"])
+    return v | {
+        "premium": bid * 100,
+        "cash_required": strike * 100,
+        "yield_pct": bid / strike,
+        "annualized_pct": bid / strike * 365 / max(int(row["dte"]), 1),
+        "net_entry": strike - bid,
+        "net_entry_discount_pct": (strike - bid) / spot - 1,
+        "prob_assigned": v["prob_itm"],
+    }
+
+
+def credit_spread_pick(
+    chain: pd.DataFrame,
+    spot: float,
+    now: datetime,
+    rate: float,
+    right: Right,
+    rules: Rules,
+    *,
+    short_delta: float | None = None,
+    long_delta: float | None = None,
+    dte: tuple[int, int] | None = None,
+) -> dict[str, Any] | None:
+    """Sell a vertical: the ~0.30-delta contract, bought back with the ~0.15-delta one further
+    out of the money, same expiry. A put spread is bullish (keeps the credit above the short
+    strike), a call spread bearish. The loss is capped at the width minus the credit."""
+    _, _, target = rules.income_dte
+    sd = short_delta if short_delta is not None else rules.credit_short_delta
+    ld = long_delta if long_delta is not None else rules.credit_long_delta
+    c = _nearest_expiry(_income_side(chain, spot, now, rate, right, rules, dte), target)
+    short = _closest(c, (c["delta"].abs() - sd).abs())
+    if short is None:
+        return None
+    beyond = c["strike"] < short["strike"] if right == "P" else c["strike"] > short["strike"]
+    wings = c[beyond]
+    long = _closest(wings, (wings["delta"].abs() - ld).abs())
+    if long is None:
+        return None
+    credit = float(short["bid"]) - float(long["ask"])
+    width = abs(float(short["strike"]) - float(long["strike"]))
+    if credit <= 0 or credit >= width:
+        return None
+    k = float(short["strike"])
+    breakeven = k - credit if right == "P" else k + credit
+    years, iv = float(short["years"]), short["iv"]
+    above = bs.prob_above(spot, breakeven, years, iv, rate=rate) if iv else None
+    return {
+        "kind": "put credit spread" if right == "P" else "call credit spread",
+        "short": contract_view(short, spot, rate, side="sell"),
+        "long": contract_view(long, spot, rate),
+        "credit": credit,
+        "premium": credit * 100,
+        "width": width,
+        "max_loss": (width - credit) * 100,
+        "return_on_risk": credit / (width - credit),
+        "breakeven": breakeven,
+        "breakeven_move_pct": breakeven / spot - 1,
+        "prob_profit": (above if right == "P" else 1 - above) if above is not None else None,
+        "theta_day": (float(long["theta"]) - float(short["theta"])) * 100,
+        "dte": int(short["dte"]),
+    }
+
+
+def iron_condor_pick(
+    chain: pd.DataFrame, spot: float, now: datetime, rate: float, rules: Rules
+) -> dict[str, Any] | None:
+    """A put credit spread and a call credit spread on the same expiry: paid if the stock stays
+    between the two short strikes. For a range-bound stock with expensive options."""
+    puts = credit_spread_pick(chain, spot, now, rate, "P", rules,
+                              short_delta=rules.condor_short_delta,
+                              long_delta=rules.condor_long_delta)  # fmt: skip
+    if puts is None:
+        return None
+    days = puts["dte"]
+    calls = credit_spread_pick(chain, spot, now, rate, "C", rules,
+                               short_delta=rules.condor_short_delta,
+                               long_delta=rules.condor_long_delta, dte=(days, days))  # fmt: skip
+    if calls is None:
+        return None
+    credit = puts["credit"] + calls["credit"]
+    width = max(puts["width"], calls["width"])
+    if credit >= width:
+        return None
+    lower = puts["short"]["strike"] - credit
+    upper = calls["short"]["strike"] + credit
+    years = years_until(date.fromisoformat(puts["short"]["expiration"]), now)
+    p_lower = bs.prob_above(spot, lower, years, puts["short"]["iv"], rate=rate)
+    p_upper = bs.prob_above(spot, upper, years, calls["short"]["iv"], rate=rate)
+    return {
+        "kind": "iron condor",
+        "put_spread": puts,
+        "call_spread": calls,
+        "credit": credit,
+        "premium": credit * 100,
+        "max_loss": (width - credit) * 100,
+        "return_on_risk": credit / (width - credit),
+        "lower_breakeven": lower,
+        "upper_breakeven": upper,
+        "range_pct": (lower / spot - 1, upper / spot - 1),
+        "prob_profit": max(p_lower - p_upper, 0.0),
+        "theta_day": puts["theta_day"] + calls["theta_day"],
+        "dte": days,
+    }
+
+
+def calendar_pick(
+    chain: pd.DataFrame,
+    spot: float,
+    now: datetime,
+    rate: float,
+    rules: Rules,
+    right: Right = "C",
+) -> dict[str, Any] | None:
+    """Sell the ~30-day at-the-money option and buy the same strike ~75 days out: paid by the
+    front month's faster decay while the stock sits near the strike. It also gains if implied
+    volatility rises, and most when the front month's is the richer one."""
+    flo, fhi, ftarget = rules.calendar_front_dte
+    blo, bhi, btarget = rules.calendar_back_dte
+    front = priced(chain, spot, now, rate, right=right, dte=(flo, fhi), strikes=(0.85, 1.15))
+    back = priced(chain, spot, now, rate, right=right, dte=(blo, bhi), strikes=(0.85, 1.15))
+    front = _nearest_expiry(front[front["spread_pct"] <= MAX_SPREAD], ftarget)
+    back = _nearest_expiry(back[back["spread_pct"] <= MAX_SPREAD], btarget)
+    common = sorted(set(front["strike"]) & set(back["strike"]), key=lambda k: abs(k - spot))
+    if not common:
+        return None
+    k = common[0]
+    f = front[front["strike"] == k].iloc[0]
+    b = back[back["strike"] == k].iloc[0]
+    debit = float(b["ask"]) - float(f["bid"])
+    if debit <= 0 or not f["iv"] or not b["iv"]:
+        return None
+    left = float(b["years"]) - float(f["years"])
+    call = right == "C"
+
+    def at_front_expiry(level: float) -> float:
+        return bs.price(level, k, left, float(b["iv"]), call=call, rate=rate) - bs.intrinsic(
+            level, k, call
+        )
+
+    levels = np.linspace(spot * 0.7, spot * 1.3, 241)
+    pnl = np.array([at_front_expiry(x) - debit for x in levels])
+    winning = levels[pnl > 0]
+    lo, hi = (float(winning.min()), float(winning.max())) if len(winning) else (None, None)
+    years_f, iv_f = float(f["years"]), float(f["iv"])
+    prob = (
+        bs.prob_above(spot, lo, years_f, iv_f, rate=rate)
+        - bs.prob_above(spot, hi, years_f, iv_f, rate=rate)
+        if lo is not None and hi is not None
+        else 0.0
+    )
+    return {
+        "kind": "calendar",
+        "front": contract_view(f, spot, rate, side="sell"),
+        "back": contract_view(b, spot, rate),
+        "strike": k,
+        "debit": debit,
+        "cost": debit * 100,
+        "max_profit_est": (at_front_expiry(k) - debit) * 100,
+        "profit_range": (lo, hi),
+        "prob_profit": max(prob, 0.0),
+        "theta_day": (float(b["theta"]) - float(f["theta"])) * 100,
+        "vega": (float(b["vega"]) - float(f["vega"])) * 100,
+        "front_iv": iv_f,
+        "back_iv": float(b["iv"]),
+    }
+
+
 # -- vol context ----------------------------------------------------------------------------------
 
 
 def vol_context(
-    chain: pd.DataFrame | None, hv20: float | None, history: pd.Series | None
+    chain: pd.DataFrame | None,
+    hv20: float | None,
+    history: pd.Series | None,
+    *,
+    spot: float | None = None,
+    now: datetime | None = None,
+    rate: float = 0.0,
 ) -> dict[str, Any]:
     """Implied volatility 30 days out, its rank in its own history, against realized
-    volatility, and any event the term structure shows."""
+    volatility, and any event the term structure shows; with ``spot`` and ``now``, also the
+    skew of the ~30-day smile (SVI fit) and the term structure's slope (``tp_core.smile``)."""
     if chain is None or chain.empty:
         return {
             "iv30": None,
@@ -344,9 +578,23 @@ def vol_context(
             "event": None,
             "rich": False,
             "as_of": None,
+            "skew_25d": None,
+            "butterfly_25d": None,
+            "term_ratio": None,
+            "term_shape": None,
         }
     term = atm_term(chain)
     iv30 = iv_at(term)
+    shape = term_shape(iv30, iv_at(term, 90.0) if len(term) and term["dte"].max() >= 60 else None)
+    skew: dict[str, Any] = {"skew_25d": None, "butterfly_25d": None, "smile_arbitrage": None}
+    if spot and now is not None:
+        fit = _fit_near(chain, spot, now, rate, 30)
+        if fit is not None:
+            skew = {
+                "skew_25d": fit.skew_25d,
+                "butterfly_25d": fit.butterfly_25d,
+                "smile_arbitrage": fit.butterfly_arbitrage,
+            }
     rank = iv_rank(history if history is not None else pd.Series(dtype=float), iv30)
     ratio = iv30 / hv20 if iv30 and hv20 else None
     rich = bool(
@@ -365,7 +613,25 @@ def vol_context(
         "event": event_expiry(term),
         "rich": rich,
         "as_of": chain["snapshot_at"].max().isoformat(),
+        **skew,
+        "term_ratio": shape["ratio"],
+        "term_shape": shape["shape"],
     }
+
+
+def _fit_near(
+    chain: pd.DataFrame, spot: float, now: datetime, rate: float, days: int
+) -> ExpiryFit | None:
+    """The SVI fit of the expiration nearest ``days`` out (at least a week) that fits."""
+    exps = sorted(
+        {e for e in chain["expiration"] if 7 <= years_until(e, now) * bs.YEAR_DAYS <= 120},
+        key=lambda e: abs(years_until(e, now) * bs.YEAR_DAYS - days),
+    )
+    for exp in exps[:3]:
+        out = fit_expiry(chain, spot, exp, now, rate)
+        if out is not None:
+            return out[0]
+    return None
 
 
 # -- one symbol -----------------------------------------------------------------------------------
@@ -422,7 +688,7 @@ def analyze(
     spot = spot_now or _num(stats.get("price"))
     rs = _relative_strength(closes, benchmark)
     setup = stock_setup(stats, rs)
-    vol = vol_context(chain, _num(stats.get("vol_20d")), iv_hist)
+    vol = vol_context(chain, _num(stats.get("vol_20d")), iv_hist, spot=spot, now=now, rate=rate)
     out: dict[str, Any] = {
         "symbol": symbol,
         "spot": spot,
@@ -463,6 +729,14 @@ def analyze(
     leaps = leaps_pick(chain, spot, now, rate, "C", rules)
     if leaps is not None:
         picks["leaps_call"] = leaps_view(leaps, spot, rate)
+    income = {
+        "cash_secured_put": cash_secured_put_pick(chain, spot, now, rate, rules),
+        "put_credit_spread": credit_spread_pick(chain, spot, now, rate, "P", rules),
+        "call_credit_spread": credit_spread_pick(chain, spot, now, rate, "C", rules),
+        "iron_condor": iron_condor_pick(chain, spot, now, rate, rules),
+        "calendar": calendar_pick(chain, spot, now, rate, rules),
+    }
+    picks |= {k: v for k, v in income.items() if v is not None}
     out["picks"] = picks
     return out
 
@@ -505,12 +779,15 @@ def _scenarios(row: pd.Series, spot: float, now: datetime, rate: float) -> dict[
 def rank_ideas(
     analyses: list[dict[str, Any]], held: Mapping[str, str], rules: Rules | None = None
 ) -> dict[str, list[dict[str, Any]]]:
-    """Swing calls, LEAPS and bearish puts, best first, each with why and what to watch.
+    """Swing calls, LEAPS, bearish puts and premium selling, best first, each with why and
+    what to watch.
 
     Scores are percentile ranks within the scanned names (so they compare names with each
     other, not with an absolute bar): swing favours 6-month momentum, strength against the
     S&P 500 and a pullback entry; LEAPS favours a long, steady uptrend with shallow drawdowns;
-    bearish mirrors swing for downtrends.
+    bearish mirrors swing for downtrends. Income takes names whose options are expensive (IV
+    rank or IV against realized volatility) and that aren't in a downtrend, richest first: a
+    cash-secured put on an uptrend, an iron condor on a stock going nowhere.
     """
     rules = rules or Rules()
     df = pd.DataFrame(
@@ -527,9 +804,9 @@ def rank_ideas(
         ]
     )
     if df.empty:
-        return {"swing": [], "leaps": [], "bearish": []}
+        return {"swing": [], "leaps": [], "bearish": [], "income": []}
     ranks = df.drop(columns="i").rank(pct=True).to_dict("index")
-    out: dict[str, list[dict[str, Any]]] = {"swing": [], "leaps": [], "bearish": []}
+    out: dict[str, list[dict[str, Any]]] = {"swing": [], "leaps": [], "bearish": [], "income": []}
     for idx, a in enumerate(analyses):
         tags = a["setup"]["tags"]
         p = {str(k): float(v) for k, v in ranks[idx].items()}
@@ -542,6 +819,13 @@ def rank_ideas(
         elif a["setup"]["direction"] == "bearish":
             bear = _mean(1 - p["r6"], 1 - p["rs"], 1 - p["v200"])
             out["bearish"].append(_idea(a, "bearish", bear, held))
+        vol = a["vol"]
+        if vol.get("rich") and a["setup"]["direction"] != "bearish":
+            richness = _mean(
+                vol.get("rank") if vol.get("rank") is not None else math.nan,
+                min((vol.get("iv_hv") or 0.0) / 2, 1.0),
+            )
+            out["income"].append(_idea(a, "income", richness, held))
     for k in out:
         out[k] = sorted(out[k], key=lambda x: -x["score"])[: rules.ideas_per_list]
     return out
@@ -559,6 +843,12 @@ def _idea(a: dict[str, Any], kind: str, score: float, held: Mapping[str, str]) -
     r = stock.get("returns") or {}
     if kind in ("swing", "leaps"):
         why.append(_trend_line(stock, up=True))
+    elif kind == "income":
+        why.append(
+            _trend_line(stock, up=True)
+            if setup["direction"] == "bullish"
+            else "No clear trend: a range is what a premium seller wants."
+        )
     else:
         why.append(_trend_line(stock, up=False))
     rs = _num(setup.get("rs_3m"))
@@ -589,13 +879,28 @@ def _idea(a: dict[str, Any], kind: str, score: float, held: Mapping[str, str]) -
             pick, alternative = alternative, pick
     elif kind == "leaps":
         pick = picks.get("leaps_call")
+    elif kind == "income":
+        if setup["direction"] == "bullish":
+            pick, alternative = picks.get("cash_secured_put"), picks.get("put_credit_spread")
+        else:
+            pick, alternative = picks.get("iron_condor"), picks.get("put_credit_spread")
     else:
         pick, alternative = picks.get("swing_put"), picks.get("put_spread")
         if vol.get("rich") and alternative is not None:
             pick, alternative = alternative, pick
     why += _vol_lines(vol, kind)
+    if kind == "income":
+        risks.append(
+            "Selling options caps the gain at the premium; a sharp drop (or for a call spread, "
+            "a rally) costs far more than the premium earned. Size it for the maximum loss."
+        )
     event = vol.get("event")
-    if event and kind != "leaps":
+    if event and kind == "income":
+        risks.append(
+            f"An event (often earnings) is priced before {event['by']}: that is why the premium "
+            "is rich. Selling through it is a bet the move will be smaller than priced."
+        )
+    elif event and kind != "leaps":
         risks.append(
             f"The option market is pricing an event (often earnings) before {event['by']}: implied "
             "volatility usually drops right after, which costs option buyers even when the stock "
@@ -647,6 +952,24 @@ def _vol_lines(vol: Mapping[str, Any], kind: str) -> list[str]:
         else ""
     )
     lines.append(f"Options: 30-day implied volatility {_pct(iv, 0)}{ratio}; {rank_text}.")
+    if kind == "income":
+        lines.append(
+            "Options are expensive by those measures: the side to be on is the seller's, "
+            "collecting the premium that implied volatility above realized pays."
+        )
+    skew = vol.get("skew_25d")
+    if skew is not None and skew < -0.08 and kind in ("income", "bearish"):
+        lines.append(
+            f"Steep put skew: 25-delta puts trade {abs(skew) * 100:.0f} volatility points over "
+            "calls, so selling puts is paid well and buying them costs extra."
+        )
+    if vol.get("term_shape") == "backwardation" and kind != "leaps":
+        lines.append(
+            "Near-term options are dearer than longer ones (backwardation): the market expects "
+            "the next weeks to be rough."
+        )
+    if kind == "income":
+        return lines
     if vol.get("rich") and kind != "leaps":
         lines.append(
             "Options are expensive by those measures, so the debit spread leads: it pays less "
