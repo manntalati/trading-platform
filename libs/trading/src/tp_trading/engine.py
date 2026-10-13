@@ -28,6 +28,7 @@ from tp_trading.events import Fill, Order, OrderStatus
 from tp_trading.execution import ExecutionConfig, SimulatedExecution
 from tp_trading.portfolio import Portfolio, Position
 from tp_trading.risk import AllowAll, Book, RiskGate
+from tp_trading.sizing import Sizing
 from tp_trading.strategy import Context, Strategy
 
 ORDER_COLUMNS = [
@@ -46,6 +47,7 @@ class EngineConfig:
     start: date | None = None  # first session the strategy runs (earlier bars are warm-up history)
     end: date | None = None
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
+    sizing: Sizing | None = None  # how much of each target weight to take (tp_trading.sizing)
 
 
 class BacktestContext(Context):
@@ -56,8 +58,9 @@ class BacktestContext(Context):
         portfolio: Portfolio,
         fractional: bool,
         sectors: Mapping[str, str] | None = None,
+        sizing: Sizing | None = None,
     ):
-        super().__init__(strategy.name, fractional=fractional, sectors=sectors)
+        super().__init__(strategy.name, fractional=fractional, sectors=sectors, sizing=sizing)
         self._data = data
         self._portfolio = portfolio
         self._symbols = strategy.symbols()
@@ -170,7 +173,9 @@ class BacktestEngine:
             raise ValueError("no sessions between start and end")
 
         portfolio = Portfolio(cfg.initial_cash)
-        ctx = BacktestContext(strategy, data, portfolio, cfg.execution.fractional, self.sectors)
+        ctx = BacktestContext(
+            strategy, data, portfolio, cfg.execution.fractional, self.sectors, cfg.sizing
+        )
         execution = SimulatedExecution(data, cfg.execution)
         pending: list[Order] = []
         orders: list[Order] = []

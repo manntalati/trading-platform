@@ -5,6 +5,7 @@ tp-backtest run ma-timing --start 2018-01-01
 tp-backtest run ma-timing -p assets=SPY --fill next_close --slippage-bps 10
 tp-backtest validate ma-timing          # the plan's stage-1 gate (see docs/backtesting.md)
 tp-backtest validate --all
+tp-backtest sizing ts-momentum           # the plan's three sizing methods side by side
 """
 
 from __future__ import annotations
@@ -27,6 +28,8 @@ from tp_strategies.validation import validate as run_validation
 from tp_trading.costs import CostModel
 from tp_trading.engine import EngineConfig
 from tp_trading.execution import ExecutionConfig, FillAt
+from tp_trading.sizing import METHODS as SIZING_METHODS
+from tp_trading.sizing import make as make_sizing
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 log = logging.getLogger("tp_strategies.backtest")
@@ -80,6 +83,9 @@ def run(
         typer.Option(help="Stop opening trades after a drawdown-limit breach, as paper would."),
     ] = False,
     save: Annotated[bool, typer.Option(help="Write the run under reports/backtests/.")] = True,
+    sizing: Annotated[
+        str, typer.Option(help="strategy (its own weights), fixed-fractional, vol-target or kelly.")
+    ] = "strategy",
 ) -> None:
     """Backtest one strategy and print its tear sheet next to buy-and-hold."""
     logging.basicConfig(
@@ -93,6 +99,10 @@ def run(
         typer.echo(str(exc), err=True)
         raise typer.Exit(2) from exc
     fill_at: FillAt = "next_open" if fill == "next_open" else "next_close"
+    try:
+        sizer = make_sizing(sizing)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--sizing") from exc
     config = EngineConfig(
         initial_cash=capital,
         start=start.date() if start else None,
@@ -102,6 +112,7 @@ def run(
             fractional=fractional,
             costs=CostModel(slippage_bps=slippage_bps),
         ),
+        sizing=sizer,
     )
     settings = Settings()
     classifier = Classifier.load(settings.classifications_file)
@@ -121,7 +132,7 @@ def run(
     typer.echo(f"params: {built.params()}")
     typer.echo(
         f"fills at {fill}, {slippage_bps:g} bps slippage, start {capital:,.0f}, "
-        f"risk limits {'on' if risk else 'OFF'}\n"
+        f"risk limits {'on' if risk else 'OFF'}, sizing {sizing}\n"
     )
     typer.echo(f"{'':30}{'strategy':>12}{benchmark + ' hold':>12}")
     for key, label, kind in ROWS:
@@ -158,6 +169,45 @@ def _risk_gate(settings: Settings, classifier: Classifier, enforce_drawdown: boo
         )
         raise typer.Exit(2)
     return risk_gate(settings.risk_file, classifier, enforce_drawdown=enforce_drawdown)
+
+
+@app.command("sizing")
+def compare_sizing(
+    strategy: Annotated[str, typer.Argument(help="Strategy name (see `tp-backtest list`).")],
+    param: Annotated[
+        list[str] | None,
+        typer.Option("--param", "-p", help="Strategy parameter as key=value; repeatable."),
+    ] = None,
+    start: Annotated[
+        datetime | None, typer.Option(formats=["%Y-%m-%d"], help="First session to trade.")
+    ] = None,
+    capital: Annotated[float, typer.Option(help="Starting cash.")] = 100_000.0,
+) -> None:
+    """Backtest one strategy under each sizing method (tp_trading.sizing) and compare."""
+    logging.basicConfig(level=logging.WARNING)
+    settings = Settings()
+    classifier = Classifier.load(settings.classifications_file)
+    rows = []
+    for method in SIZING_METHODS:
+        built = build(strategy, _params(param or []))
+        config = EngineConfig(
+            initial_cash=capital, start=start.date() if start else None, sizing=make_sizing(method)
+        )
+        gate = _risk_gate(settings, classifier, False) if settings.risk_file.exists() else None
+        out = run_backtest(
+            Lake(settings.data_root), built, config, risk=gate, sectors=classifier.sectors,
+            now=datetime.now(UTC), save=False,
+        )  # fmt: skip
+        rows.append((method, out.summary["stats"]))
+    typer.echo(f"\n{strategy}: sizing methods compared (same signals, costs and risk limits)\n")
+    head = f"{'':18}{'CAGR':>8}{'vol':>8}{'Sharpe':>8}{'max DD':>9}{'exposure':>10}{'turnover':>10}"
+    typer.echo(head)
+    for method, st in rows:
+        typer.echo(
+            f"{method:18}{_fmt(st.get('cagr'), 'pct'):>8}{_fmt(st.get('ann_volatility'), 'pct'):>8}"
+            f"{_fmt(st.get('sharpe'), 'num'):>8}{_fmt(st.get('max_drawdown'), 'pct'):>9}"
+            f"{_fmt(st.get('avg_exposure'), 'pct'):>10}{_fmt(st.get('annual_turnover'), 'pct'):>10}"
+        )
 
 
 MARK = {True: "PASS", False: "FAIL", None: " n/a"}

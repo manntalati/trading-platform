@@ -50,6 +50,7 @@ from tp_risk.manager import RiskManager
 from tp_trading.costs import CostModel
 from tp_trading.events import OrderIntent, RiskDecision
 from tp_trading.risk import Book
+from tp_trading.sizing import make as make_sizing
 
 log = logging.getLogger(__name__)
 GATE_DAYS = 60  # paper gate: trading days ...
@@ -340,7 +341,13 @@ def propose(paper: Paper, now: datetime, *, force: bool = False) -> ProposeRepor
             store.sleeve_days(name), max(f.session for f in mine)
         )
         ctx = PaperContext(
-            sleeve.strategy, data, t, portfolio, paper.classifier.sectors, catch_up=catch_up
+            sleeve.strategy,
+            data,
+            t,
+            portfolio,
+            paper.classifier.sectors,
+            catch_up=catch_up,
+            sizing=make_sizing(sleeve.sizing),
         )
         try:
             sleeve.strategy.on_bar(ctx)

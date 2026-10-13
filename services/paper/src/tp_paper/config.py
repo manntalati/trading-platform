@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from tp_strategies.library import build
+from tp_trading.sizing import make as make_sizing
 from tp_trading.strategy import Strategy
 
 Approval = Literal["manual", "auto"]
@@ -22,6 +23,7 @@ class Sleeve:
     capital: float
     approval: Approval = "manual"
     params: Mapping[str, Any] = field(default_factory=dict)
+    sizing: str | None = None  # tp_trading.sizing method; None: the strategy's own weights
 
     @property
     def name(self) -> str:
@@ -51,7 +53,7 @@ class PaperBook:
             raise ValueError(f"{path}: unknown section(s) {sorted(unknown)}")
         sleeves = []
         for name, entry in raw.get("strategies", {}).items():
-            extra = set(entry) - {"capital", "approval", "params"}
+            extra = set(entry) - {"capital", "approval", "params", "sizing"}
             if extra:
                 raise ValueError(f"{path}: [strategies.{name}] has unknown key(s) {sorted(extra)}")
             capital = float(entry.get("capital", 0))
@@ -61,5 +63,10 @@ class PaperBook:
             if approval not in ("manual", "auto"):
                 raise ValueError(f"{path}: [strategies.{name}] approval must be manual or auto")
             params = dict(entry.get("params", {}))
-            sleeves.append(Sleeve(build(name, params), capital, approval, params))
+            sizing = entry.get("sizing")
+            try:
+                make_sizing(sizing)
+            except ValueError as exc:
+                raise ValueError(f"{path}: [strategies.{name}] {exc}") from None
+            sleeves.append(Sleeve(build(name, params), capital, approval, params, sizing))
         return cls(tuple(sleeves))

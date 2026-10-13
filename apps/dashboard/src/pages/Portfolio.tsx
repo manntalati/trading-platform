@@ -7,10 +7,12 @@ import { money, pct, signedMoney } from "../format";
 import type { LiveState } from "../live";
 import type { Performance, Portfolio as PortfolioData, Positions as PositionsData } from "../types";
 import PositionsView, { CashNote, ExposureCard } from "./Positions";
+import RiskView from "./Risk";
 
 const VIEWS = [
   { key: "positions", label: "Positions" },
   { key: "allocation", label: "Allocation" },
+  { key: "risk", label: "Risk" },
   { key: "performance", label: "Performance" },
 ];
 
@@ -80,6 +82,7 @@ export default function Portfolio({ live, sub, detail }: { live: LiveState; sub:
           <Loading />
         ))}
       {current === "allocation" && <Allocation p={p} positions={pos} />}
+      {current === "risk" && <RiskView />}
       {current === "performance" && <PerformanceView />}
     </div>
   );

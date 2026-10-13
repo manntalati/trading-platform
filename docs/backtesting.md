@@ -20,6 +20,8 @@ uv run tp-backtest run ma-timing                          # GTAA, from the first
 uv run tp-backtest run ma-timing -p assets=SPY --start 2018-01-01
 uv run tp-backtest run ma-timing --slippage-bps 15        # stress the cost assumption
 uv run tp-backtest run ma-timing --fill next_close        # research timing
+uv run tp-backtest run ma-timing --sizing vol-target      # size positions (risk.md)
+uv run tp-backtest sizing ma-timing                       # every sizing method side by side
 ```
 
 The command prints the plan's tear sheet next to buy-and-hold of the benchmark (`--benchmark`,

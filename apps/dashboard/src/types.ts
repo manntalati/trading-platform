@@ -722,3 +722,23 @@ export interface MarketRegime {
   } | null;
   history: { date: string; trend: string | null; volatility: string | null; breadth: string | null }[];
 }
+
+// /api/positions/risk (libs/core/src/tp_core/portfolio_risk.py)
+
+export interface PortfolioRisk {
+  synced: boolean;
+  exposure?: number;
+  gross_exposure?: number;
+  coverage?: Num;
+  value?: number;
+  sessions?: number;
+  beta?: Num;
+  beta_dollars?: Num;
+  volatility?: Num;
+  var?: { historical_95: number; historical_99: number; parametric_95: number; parametric_99: number; expected_shortfall_95: Num };
+  worst_days?: { date: string; pnl: number }[];
+  betas?: Record<string, number>;
+  correlation?: { symbols: string[]; matrix: (number | null)[][]; average: Num; most_correlated: { a: string; b: string; correlation: number }[] } | null;
+  greeks?: { delta_dollars: number; gamma_1pct: number; theta_day: number; vega_point: number };
+  scenarios?: { vol_shifts: number[]; rows: { move: number; pnl: number[] }[] };
+}

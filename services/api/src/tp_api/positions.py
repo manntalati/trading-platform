@@ -29,11 +29,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from tp_api import queries
 from tp_api.claude import AskRequest, ask_claude, rounded
 from tp_api.deps import Ctx, require_dashboard_client, require_token
-from tp_core.bars import load_bars, missing_symbols
+from tp_core.bars import close_matrix, load_bars, missing_symbols
 from tp_core.calendar import NEW_YORK
 from tp_core.config import Settings
 from tp_core.pnl import option_label
 from tp_core.portfolio import CASH_KIND, MARKET_KINDS, holdings_table, latest_snapshot
+from tp_core.portfolio_risk import OptionLeg, portfolio_risk
 from tp_core.positions import (
     OptionPosition,
     OptionQuote,
@@ -392,8 +393,16 @@ def _exposure(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     for p in rows:
         u = str(p["underlying"])
-        e = out.setdefault(u, {"underlying": u, "shares": 0.0, "option_delta_shares": 0.0,
-                               "price": None, "options": 0})  # fmt: skip
+        e = out.setdefault(
+            u,
+            {
+                "underlying": u,
+                "shares": 0.0,
+                "option_delta_shares": 0.0,
+                "price": None,
+                "options": 0,
+            },
+        )
         if p["kind"] == "option":
             e["options"] += 1
             e["option_delta_shares"] += p["stats"].get("delta_shares") or 0.0
@@ -461,8 +470,18 @@ def ask_system_prompt(view: dict[str, Any], symbol: str | None, now: datetime) -
 
 
 def _brief(p: dict[str, Any]) -> dict[str, Any]:
-    keep = ("symbol", "label", "kind", "quantity", "price", "cost", "market_value", "pnl",
-            "pnl_pct", "weight")  # fmt: skip
+    keep = (
+        "symbol",
+        "label",
+        "kind",
+        "quantity",
+        "price",
+        "cost",
+        "market_value",
+        "pnl",
+        "pnl_pct",
+        "weight",
+    )
     out = {k: p.get(k) for k in keep}
     s = p.get("stats") or {}
     if p["kind"] == "option":
@@ -501,3 +520,58 @@ def ask(c: Ctx, request: Request, body: AskRequest) -> dict[str, Any]:
     if symbol and not any(p["symbol"] == symbol for p in view["positions"]):
         raise HTTPException(404, f"no open position in {symbol}")
     return ask_claude(request, ask_system_prompt(view, symbol, now), body, now)
+
+
+# -- portfolio risk -------------------------------------------------------------------------------
+
+
+def risk_view(ctx: queries.Context, view: dict[str, Any], now: datetime) -> dict[str, Any]:
+    """Beta, volatility, VaR, correlation, option Greeks and a scenario grid for the whole book
+    (``tp_core.portfolio_risk``), from the positions view's live figures."""
+    if not view.get("synced"):
+        return {"synced": False}
+    exposures: dict[str, float] = {}
+    legs: list[OptionLeg] = []
+    for p in view["positions"]:
+        s = p.get("stats") or {}
+        if p["kind"] == "option":
+            spot, delta, iv = s.get("spot"), s.get("delta_shares"), s.get("iv")
+            if spot and delta is not None:
+                exposures[p["underlying"]] = exposures.get(p["underlying"], 0.0) + delta * spot
+            if spot and iv:
+                legs.append(
+                    OptionLeg(
+                        underlying=p["underlying"],
+                        quantity=p["quantity"],
+                        strike=float(s["strike"]),
+                        expiration=date.fromisoformat(s["expiration"]),
+                        call=s.get("right") == "call",
+                        iv=float(iv),
+                        spot=float(spot),
+                    )
+                )
+        elif p.get("market_value") is not None:
+            exposures[p["symbol"]] = exposures.get(p["symbol"], 0.0) + float(p["market_value"])
+    today = now.astimezone(NEW_YORK).date()
+    wanted = [s for s in [*exposures, "SPY"] if s not in missing_symbols(ctx.lake, [s])]
+    bars = (
+        load_bars(ctx.lake, wanted, start=today - timedelta(days=HISTORY_DAYS)) if wanted else None
+    )
+    closes = close_matrix(bars) if bars is not None and len(bars) else pd.DataFrame()
+    out = portfolio_risk(
+        exposures,
+        closes,
+        total_value=float(view.get("total_value") or 0.0),
+        options=legs,
+        now=now,
+        rate=ctx.settings.risk_free_rate,
+    )
+    result: dict[str, Any] = queries.clean({"synced": True, **out})
+    return result
+
+
+@router.get("/risk")
+def risk(c: Ctx, request: Request) -> dict[str, Any]:
+    now = now_utc()
+    view = positions_view(c, now, market=_market(request), live=_live(request))
+    return risk_view(c, view, now)

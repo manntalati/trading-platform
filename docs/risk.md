@@ -69,3 +69,60 @@ trading's `tp-paper kill` also cancels the ones already at the broker.
 `tp-backtest run` applies the limits by default (`--no-risk` to compare against an unconstrained
 run). Rejections appear in the output with their reasons and in `orders.parquet`; the run's
 `summary.json` records the limits in force and any drawdown breaches.
+
+`tp-backtest run --sizing METHOD` changes how much of each position the strategy's signal turns
+into (below).
+
+## Position sizing
+
+A strategy says what to hold and the most it wants in each name (its target weights). A sizing
+policy (`tp_trading.sizing`) then decides how much, from trailing prices only. It applies at
+`order_target_weights`, the one place every order is sized, so a backtest and the paper bot size
+the same way. The plan's three methods:
+
+| Method | Weight per position | What it does |
+|---|---|---|
+| `strategy` (default) | the strategy's own | nothing |
+| `fixed-fractional` | `risk / stop distance`: 1% of equity lost if a stop 2 ATR (14 days) below the price is hit | volatile names get less, quiet ones more |
+| `vol-target` | inverse to each name's 60-day volatility, then the whole book scaled down if its estimated volatility (with correlations) is above 12% a year | each position carries about the same risk; the book's risk is capped |
+| `kelly` | a quarter of the Kelly bet `mu / sigma^2` from the last year's returns; nothing if the trailing edge is negative | bets more on what has been working |
+
+Every method only reallocates: no name gets more than the strategy's largest single weight, the
+total never exceeds the strategy's total, and there's never leverage. The risk limits still
+apply afterwards.
+
+```bash
+uv run tp-backtest sizing ts-momentum            # all four side by side
+uv run tp-backtest run ts-momentum --sizing vol-target
+```
+
+`tp-backtest sizing` runs the same signals, costs and risk limits under each method and prints
+CAGR, volatility, Sharpe, maximum drawdown, exposure and turnover. Kelly with a year of trailing
+returns is noisy: that it is a quarter Kelly at most is the point. To paper-trade a sleeve with
+a method, add `sizing = "vol-target"` (or another) to its block in `config/paper.toml`.
+
+## Portfolio risk
+
+`tp_core.portfolio_risk`, shown on **Portfolio → Risk** and served by `/api/positions/risk`,
+looks at the whole Fidelity book at once:
+
+- **Exposure per underlying** in dollars: shares at market value plus options by delta, so a
+  call and the stock on one name add up.
+- **Beta to the S&P 500** (one year of daily returns): how many dollars the book moves for a 1%
+  move in SPY; and the book's annualized **volatility**.
+- **Value at Risk**: the one-day loss exceeded on 5% (and 1%) of days, from replaying the last
+  year's daily returns on today's exposures (historical) and from the book's volatility
+  (parametric, normal); and the **expected shortfall**, the average loss on the days beyond the
+  95% VaR. The worst five replayed days are listed.
+- **Correlation** between the ten largest exposures, their average pairwise correlation and the
+  most correlated pairs: diversification that isn't there.
+- **Option Greeks** across the book in dollars: delta, gamma per 1% move, theta per day, vega per
+  volatility point.
+- **Scenario grid**: the book's P&L if the S&P 500 moved -10% to +10% (each name by its beta)
+  with implied volatility 5 points lower, unchanged or higher. Stocks move linearly; options are
+  fully repriced (Black-Scholes), so the grid shows gamma and vega that delta alone misses.
+
+VaR uses option deltas (first order); the grid is exact at today's implied volatility. Figures
+built from history cover only what has daily bars in the lake: funds without bars and cash are
+left out, and the page says how much of the exposure is covered. VaR measures ordinary days: it
+says nothing about a gap through a stop or an earnings move, which is what the grid is for.

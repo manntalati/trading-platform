@@ -283,3 +283,16 @@ def test_market_data_is_cached_briefly_and_failures_reported() -> None:
     assert market.option_quotes(wanted)["XYZ260116C00100000"].bid == 1.0  # stale beats nothing
     assert market.error == "ConnectionError: offline"
     assert market.stock_prices(["XYZ"]) == {"XYZ": 10.0}
+
+
+def test_portfolio_risk(app_client: tuple[TestClient, Any]) -> None:
+    client, _ = app_client
+    risk = client.get("/api/positions/risk").json()
+    assert risk["synced"] is True
+    assert risk["beta"] is not None
+    assert 0 < risk["var"]["historical_95"] <= risk["var"]["historical_99"]
+    assert risk["greeks"]["theta_day"] < 0  # long options decay
+    assert len(risk["scenarios"]["rows"]) == 7
+    assert risk["scenarios"]["vol_shifts"] == [-0.05, 0.0, 0.05]
+    assert 0 < risk["coverage"] < 1  # FXAIX has no bars
+    assert risk["correlation"]["symbols"]

@@ -122,6 +122,9 @@ equity.
   Its returns, Sharpe and the dashboard's growth curve leave the move out, and its drawdown
   peak moves in proportion. The next evening the strategy rebalances to the new amount instead
   of waiting for its next scheduled rebalance. The activity log records the move.
+- **Sizing**: `sizing = "vol-target"` (or `"fixed-fractional"`, `"kelly"`) in a strategy's
+  block sizes its positions with that method instead of the strategy's own weights
+  ([risk.md](risk.md#position-sizing)); `tp-backtest sizing <name>` compares them first.
 
 Each strategy's positions and cash are rebuilt from its own fills, so two strategies can hold
 the same ETF and each knows its share. After every sync the sum of all sleeves is compared with
