@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { vi } from "vitest";
 import type { ChatTurn, OptionPositionRow, Positions as PositionsData } from "../types";
-import Positions, { AskPanel, CashNote, Scenarios } from "./Positions";
+import PositionsView, { AskPanel, CashNote, Scenarios } from "./Positions";
 
 const call: OptionPositionRow = {
   symbol: "XYZ260116C00100000",
@@ -97,19 +97,31 @@ describe("Scenarios", () => {
   });
 });
 
-describe("Positions page", () => {
-  it("lists options with their odds and opens one with its notes", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify(view)))));
+describe("Positions view", () => {
+  it("lists options with their odds and opens one with its notes and actions", async () => {
+    const withAction: OptionPositionRow = {
+      ...call,
+      actions: [
+        {
+          level: "consider",
+          title: "Close or roll before the decay speeds up",
+          text: "Rolling out costs about $150 net.",
+          trade: null,
+        },
+      ],
+    };
     function Harness() {
       const [selected, setSelected] = useState<string | null>(null);
-      return <Positions selected={selected} onSelect={setSelected} />;
+      return <PositionsView data={{ ...view, positions: [withAction] }} selected={selected} onSelect={setSelected} />;
     }
     render(<Harness />);
-    const link = await screen.findByRole("button", { name: "XYZ Jan 16 '26 $100 Call" });
-    expect(screen.getByText("action needed")).toBeInTheDocument();
+    const link = screen.getByRole("button", { name: "XYZ Jan 16 '26 $100 Call" });
+    expect(screen.getByText("act before expiry")).toBeInTheDocument();
     expect(screen.getByText("12%")).toBeInTheDocument(); // odds of profit
     fireEvent.click(link);
     expect(await screen.findByText("Losing about $48 a day to time alone.")).toBeInTheDocument();
+    expect(screen.getByText("What you could do")).toBeInTheDocument();
+    expect(screen.getByText("Rolling out costs about $150 net.")).toBeInTheDocument();
     expect(screen.getByText("Should I hold this to expiry or sell now?")).toBeInTheDocument();
     expect(screen.getByText("Breakeven at expiry")).toBeInTheDocument();
   });

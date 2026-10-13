@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { postJson, useApi } from "../api";
-import { FidelityFreshness } from "../components/broker";
-import { Card, Delta, Empty, ErrorBanner, Loading, Stat } from "../components/ui";
+import { postJson } from "../api";
+import { Card, Delta, Empty } from "../components/ui";
 import { money, num, pct, qty, signedMoney, timeAgo } from "../format";
 import {
   isOption,
   type AskReply,
+  type HoldingAction,
   type CashSummary,
   type ChatTurn,
   type OptionPositionRow,
@@ -16,46 +16,22 @@ import {
   type StockPosition,
 } from "../types";
 
-/** Every open position with its statistics; options with greeks, odds and scenarios; and Claude
- * to talk any of them through. ``#/positions/<symbol>`` opens one directly. */
-export default function Positions({ selected, onSelect }: { selected: string | null; onSelect: (symbol: string | null) => void }) {
-  const data = useApi<PositionsData>("/api/positions", 30_000);
+/** Every open position: options first (soonest expiry), then stocks and funds, and one opened in
+ * full (``#/portfolio/positions/<symbol>``): statistics, notes, what you could do, scenarios,
+ * and Claude to talk it through. The Portfolio section fetches the data. */
+export default function PositionsView(props: {
+  data: PositionsData;
+  selected: string | null;
+  onSelect: (symbol: string | null) => void;
+}) {
+  const { data: p, selected, onSelect } = props;
   const [threads, setThreads] = useState<Record<string, ChatTurn[]>>({});
-  const p = data.data;
-  if (data.loading && !p) return <Loading />;
-  if (!p?.synced) {
-    return (
-      <Card title="Positions">
-        <ErrorBanner error={data.error} />
-        <Empty>
-          No brokerage synced yet: <code>uv run tp-broker sync</code>.
-        </Empty>
-      </Card>
-    );
-  }
   const options = p.positions.filter(isOption).sort((a, b) => a.stats.days_left - b.stats.days_left);
   const others = p.positions.filter((x): x is StockPosition => !isOption(x));
   const current = p.positions.find((x) => x.symbol === selected) ?? null;
-  const t = p.totals;
   return (
     <div className="grid">
-      <ErrorBanner error={data.error} />
-      <FidelityFreshness freshness={p.freshness} onSynced={data.reload} />
       <QuotesNote market={p.market_data} />
-      {p.cash && <CashNote cash={p.cash} />}
-      <div className="grid tiles">
-        <Stat label="Positions" value={money(t?.value)} sub={`${p.positions.length} open · cash ${money(p.cash?.cash)}`} />
-        <Stat label="Open P&L" value={<Delta value={t?.pnl} kind="money" />} sub="vs what you paid, at current prices" />
-        <Stat label="Today" value={<Delta value={t?.day_pnl} kind="money" />} sub="stocks and funds" />
-        {options.length > 0 && (
-          <Stat
-            label="Options time decay"
-            value={t ? signedMoney(t.theta_day) : "—"}
-            sub={`a day, all ${options.length} contracts · ${t?.expiring_within_7d ?? 0} expire within 7 days`}
-          />
-        )}
-      </div>
-
       {current && (
         <PositionDetail
           key={current.symbol}
@@ -68,14 +44,12 @@ export default function Positions({ selected, onSelect }: { selected: string | n
       )}
 
       {options.length > 0 && (
-        <Card title="Options" hint="soonest expiry first · click one for the full picture">
+        <Card title="Options" hint="soonest expiry first · click one for the full picture and what you could do">
           <OptionsTable rows={options} selected={selected} onSelect={onSelect} />
         </Card>
       )}
 
-      {p.exposure && p.exposure.length > 0 && <ExposureCard exposure={p.exposure} />}
-
-      <Card title="Stocks and funds" hint="click one for its statistics">
+      <Card title="Stocks and funds" hint="click one for its statistics and what you could do">
         <StocksTable rows={others} selected={selected} onSelect={onSelect} />
       </Card>
 
@@ -102,7 +76,7 @@ function QuotesNote({ market }: { market: PositionsData["market_data"] }) {
     return (
       <div className="banner">
         Option prices are the broker's last ones (can be a day old). For live bid/ask, start the API with live quotes:{" "}
-        <code>uv run tp-api serve</code> with Alpaca keys in <code>.env</code>.
+        <code>uv run tp-api</code> with Alpaca keys in <code>.env</code>.
       </div>
     );
   }
@@ -151,7 +125,11 @@ function OptionsTable({ rows, selected, onSelect }: { rows: OptionPositionRow[];
                   <button className="link strong" onClick={() => onSelect(o.symbol)}>
                     {o.label}
                   </button>
-                  {o.notes.some((n) => n.level === "risk") && <span className="source-tag risk">action needed</span>}
+                  {o.notes.some((n) => n.level === "risk") ? (
+                    <span className="source-tag risk">act before expiry</span>
+                  ) : (o.actions?.length ?? 0) > 0 ? (
+                    <span className="source-tag">{o.actions!.length} to consider</span>
+                  ) : null}
                 </td>
                 <td className="num">{qty(o.quantity)}</td>
                 <td className="num" title={`from ${o.price_source}`}>
@@ -231,6 +209,7 @@ function StocksTable({ rows, selected, onSelect }: { rows: StockPosition[]; sele
                   <button className="link strong" onClick={() => onSelect(r.symbol)}>
                     {r.symbol}
                   </button>
+                  {(r.actions?.length ?? 0) > 0 && <span className="source-tag">{r.actions!.length} to consider</span>}
                 </td>
                 <td className="num">{qty(r.quantity)}</td>
                 <td className="num">{money(r.price, true)}</td>
@@ -259,7 +238,7 @@ function StocksTable({ rows, selected, onSelect }: { rows: StockPosition[]; sele
   );
 }
 
-function ExposureCard({ exposure }: { exposure: NonNullable<PositionsData["exposure"]> }) {
+export function ExposureCard({ exposure }: { exposure: NonNullable<PositionsData["exposure"]> }) {
   return (
     <Card title="Exposure by underlying" hint="shares plus what the options behave like (delta), for names you hold options on">
       <div className="table-wrap">
@@ -322,9 +301,16 @@ function PositionDetail(props: {
         {option ? <OptionMetrics o={p} /> : <StockMetrics s={p} />}
       </Card>
       <div className="grid cols-2 top">
-        <Card title="What to know" hint="computed from the figures above; not advice">
-          <Notes notes={p.notes} />
-        </Card>
+        <div className="grid">
+          <Card title="What to know" hint="computed from the figures above; not advice">
+            <Notes notes={p.notes} />
+          </Card>
+          {(p.actions?.length ?? 0) > 0 && (
+            <Card title="What you could do" hint="priced from the latest option chain; you decide">
+              <Actions actions={p.actions!} />
+            </Card>
+          )}
+        </div>
         <AskPanel
           symbol={p.symbol}
           title={`Ask Claude about ${option ? "this contract" : p.symbol}`}
@@ -400,6 +386,25 @@ function StockMetrics({ s }: { s: StockPosition }) {
   );
 }
 
+export function Actions({ actions }: { actions: HoldingAction[] }) {
+  const kind = { attention: "attention", consider: "consider", info: "info" } as const;
+  return (
+    <div className="notes">
+      {actions.map((a) => (
+        <div key={a.title} className={`note idea ${kind[a.level]}`}>
+          <strong>{a.title}</strong>
+          <div>{a.text}</div>
+          {a.trade && (
+            <div className="small muted">
+              {a.trade.label} · bid {money(a.trade.bid, true)} / ask {money(a.trade.ask, true)} · delta {num(a.trade.delta, 2)} · {a.trade.dte} days
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Notes({ notes }: { notes: PositionNote[] }) {
   if (!notes.length) return <Empty>Nothing stands out.</Empty>;
   const kind = { risk: "attention", warn: "consider", info: "info" } as const;
@@ -455,6 +460,7 @@ export function Scenarios({ grid, cost, quantity }: { grid: ScenarioGrid; cost: 
 // -- asking Claude ------------------------------------------------------------------------------
 
 export function AskPanel(props: {
+  endpoint?: string; // /api/positions/ask (a holding) or /api/research/ask (an idea)
   symbol: string | null;
   title: string;
   ask: PositionsData["ask"];
@@ -471,8 +477,8 @@ export function AskPanel(props: {
     return (
       <Card title={props.title}>
         <Empty>
-          Put an Anthropic API key in <code>.env</code> as <code>ANTHROPIC_API_KEY=…</code> and restart <code>tp-api</code> to ask Claude about your positions.
-          Each question sends that position's figures and your portfolio summary to Anthropic's API and is billed to your account.
+          Put an Anthropic API key in <code>.env</code> as <code>ANTHROPIC_API_KEY=…</code> and restart <code>tp-api</code> to ask Claude. Each question
+          sends the figures on this page and a summary of your portfolio to Anthropic's API, and is billed to your account.
         </Empty>
       </Card>
     );
@@ -484,7 +490,11 @@ export function AskPanel(props: {
     setBusy(true);
     setError(null);
     try {
-      const reply = await postJson<AskReply>("/api/positions/ask", { question: q, symbol: props.symbol, history: props.thread });
+      const reply = await postJson<AskReply>(props.endpoint ?? "/api/positions/ask", {
+        question: q,
+        symbol: props.symbol,
+        history: props.thread,
+      });
       props.onThread([...props.thread, { role: "user", content: q }, { role: "assistant", content: reply.answer }]);
       setMeta(reply);
       setQuestion("");

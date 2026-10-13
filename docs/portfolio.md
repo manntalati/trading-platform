@@ -51,7 +51,7 @@ Fidelity data reaches the platform through SnapTrade, which keeps its own copy:
 - `tp-broker sync` copies whatever SnapTrade has; it's free, so run it often (hourly in the
   schedules in [infra/](../infra/README.md)) to pick up SnapTrade's daily refresh soon after
   it lands.
-- **Refresh from Fidelity** (the button on the Portfolio and Trades tabs, or
+- **Refresh from Fidelity** (the button on the Portfolio and Trades sections, or
   `tp-broker sync --refresh`) first has SnapTrade re-pull your positions from Fidelity, which
   takes up to a few minutes. SnapTrade charges a small fee per refresh (see the billing page
   of your SnapTrade dashboard), so it's on demand rather than scheduled.
@@ -62,7 +62,7 @@ Fidelity data reaches the platform through SnapTrade, which keeps its own copy:
 
 ## Up or down: profit and loss
 
-The Portfolio tab answers "how much am I up or down" three ways:
+The Portfolio section answers "how much am I up or down" three ways:
 
 | | What | From |
 |---|---|---|
@@ -128,5 +128,5 @@ shared file, so your positions never end up in the public repo.
 
 - SnapTrade's daily plans cache positions once a day. Quantities rarely change intraday; live
   values come from the dashboard's quote stream.
-- Crypto positions are stored and valued but not analysed. Options are, on the Positions tab
+- Crypto positions are stored and valued but not analysed. Options are, under Portfolio → Positions
   ([positions.md](positions.md)).

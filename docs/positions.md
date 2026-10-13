@@ -1,6 +1,6 @@
 # Positions: statistics and Claude
 
-The **Positions** tab shows every open position with the numbers you need to decide what to do
+**Portfolio → Positions** shows every open position with the numbers you need to decide what to do
 with it, and lets you ask Claude about any of them. It's read-only: nothing here can trade.
 
 ## What each position shows
@@ -54,6 +54,13 @@ Each position gets a short list of plain-language notes (`tp_core.positions`), f
 - **Price below exercise value**: a stale price (the broker's, usually).
 
 These lay out the trade-offs; they aren't advice.
+
+## What you could do
+
+Under the notes, **What you could do** prices concrete choices from the latest option chain:
+rolling a contract out (or up), taking profits, cutting a low-odds loser, a covered call on 100+
+shares, a LEAPS in place of 100 shares, a protective put on a large winner. Each says what it
+costs or brings in. The rules are in [research.md](research.md#what-you-could-do-with-what-you-hold).
 
 ## Ask Claude
 

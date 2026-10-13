@@ -132,3 +132,21 @@ export function StatsTable(props: { stats: Record<string, Record<string, number 
     </div>
   );
 }
+
+/** Tabs within a section (``#/<base>/<key>``). The first item is the section's default. */
+export function SubNav(props: { base: string; current: string; items: { key: string; label: string }[] }) {
+  return (
+    <nav className="subnav" aria-label="Views">
+      {props.items.map((i) => (
+        <a key={i.key} href={`#/${props.base}/${i.key}`} aria-current={i.key === props.current ? "page" : undefined}>
+          {i.label}
+        </a>
+      ))}
+    </nav>
+  );
+}
+
+/** Where the dashboard goes: set the URL hash (the app re-renders on hashchange). */
+export function go(path: string) {
+  window.location.hash = `#/${path}`;
+}

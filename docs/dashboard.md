@@ -1,32 +1,20 @@
 # Dashboard
 
-A web dashboard over everything the platform collects, live while the market is open:
+A web dashboard over everything the platform collects, live while the market is open. Six
+sections, each answering one question (the line under the tabs says which):
 
-- **Overview**: portfolio value and today's P&L ticking in real time, your total P&L, the paper
-  bot's P&L and whether it's running, the latest trades (yours and the bot's), market clock,
-  live watchlist.
-- **Portfolio**: Fidelity holdings (read-only) with what you're up or down: total P&L, unrealized
-  (open positions against their cost) and realized (closed trades), per holding in $ and %;
-  options in their own table, quoted like the broker does (contracts, premium per share), with
-  the underlying's live price, breakeven and days to expiry; allocation by sector and asset
-  class, concentration, and performance against S&P 500, Nasdaq 100 and 60/40.
-- **Positions**: every open position with its statistics: for stocks, returns, range, moving
-  averages, volatility and beta; for options, the live bid/ask, implied volatility, greeks,
-  time decay in dollars a day, the move needed to break even, the odds, and a scenario grid;
-  plain-language notes on each (exercise at expiry, decay, wide markets); and a chat with Claude
-  about any position ([positions.md](positions.md)).
-- **Trades**: every trade in one list, yours (from the brokerage sync) and the paper bot's
-  fills, newest first, each with the profit or loss it realized; filter All / Mine / Paper bot.
-- **Ideas**: the rules-based research ideas ([ideas.md](ideas.md)) with the numbers behind each.
-- **Strategies**: strategy 1 (10-month MA timing) on SPY and on Faber's GTAA, against buy and hold.
-- **Paper**: the bot's state and next step; the orders it has queued for the next open, each
-  with its reason and risk checks and a **Don't trade** veto; proposals waiting for approval
-  (strategies on manual approval only); every sleeve's equity, drawdown, slippage and progress
-  toward the paper gate; recent orders, activity, and the kill switch
-  ([paper-trading.md](paper-trading.md)).
-- **Market / Options**: price history per symbol; IV term structure, expected move and smile from
-  the daily chain snapshots.
-- **System**: last ingest, validation report, option snapshots, broker syncs, live-feed status.
+| Section | The question | Inside |
+|---|---|---|
+| **Home** | What's going on today, and what needs me? | Account value and today's P&L (live), total P&L, options time decay, the paper bot, the market clock; **Needs your attention** (options about to be exercised or expire, actions the rules flag on positions, paper orders waiting, stale data), each linking to where you act; the top research ideas; live prices; recent trades |
+| **Portfolio** | What do I own, and what should I do about it? | The account's numbers on top, then three views. **Positions**: every holding with its statistics, options first by expiry; open one for live bid/ask, greeks, odds, scenarios, plain-language notes, **What you could do** (rolls, taking profits, covered calls, LEAPS in place of shares, protective puts, priced from the latest chain) and a Claude chat ([positions.md](positions.md)). **Allocation**: by sector and asset class, concentration, exposure per underlying (shares plus option delta). **Performance**: your account's time-weighted return and today's mix against the S&P 500, Nasdaq 100 and 60/40 |
+| **Research** | What should I look at next? | **Options ideas**: ranked swing calls, LEAPS and bearish puts with the contract each would use ([research.md](research.md)). **Look up a symbol**: any ticker in depth (trend, option pricing, every structure's contract, scenarios, price chart, term structure and smile, Claude); a ticker the platform doesn't have yet can be fetched from there. **Portfolio checks**: the rules-based checks on your portfolio ([ideas.md](ideas.md)) |
+| **Trades** | What did I (and the bot) trade, and how did it go? | Every trade, yours and the paper bot's, newest first, with the P&L each realized; today's trades as pending until the transaction posts |
+| **Paper trading** | How are the automated strategies doing? | **Bot and orders**: the bot's state, queued orders with their reasons and a veto, approvals, every sleeve's equity and progress, the kill switch ([paper-trading.md](paper-trading.md)). **Strategy backtests** |
+| **System** | Is the data fresh, and where does it live? | Each job's last run; **Where your data lives**: every dataset's folder, size, last update, what writes it and what reads it, and how data flows from Fidelity, Alpaca and the paper bot to each section |
+
+Addresses are `#/section/view/detail` (for example `#/portfolio/positions/<symbol>` or
+`#/research/lookup/<symbol>`), so any view can be bookmarked. Old addresses (`#/overview`,
+`#/positions`, `#/ideas`, `#/market`, `#/options`, `#/strategies`) still land in the right place.
 
 ## Run it
 
@@ -78,7 +66,11 @@ All JSON. Reads (`GET`):
 | `/api/bars/{symbol}?days=365` | daily bars (raw and adjusted close) |
 | `/api/options/{underlying}` | latest chain snapshot: ATM IV and expected move per expiry, smile |
 | `/api/portfolio` | accounts (masked), holdings with weights, classification and P&L, option terms (premium per share, breakeven, moneyness, days to expiry), exposures, and `pnl`: unrealized, realized, income, total |
-| `/api/positions` | every position with statistics and notes; options with live quotes, greeks, odds and scenarios ([positions.md](positions.md)) |
+| `/api/positions` | every position with statistics, notes and actions; options with live quotes, greeks, odds and scenarios ([positions.md](positions.md)) |
+| `/api/research?refresh=false` | ranked swing, LEAPS and bearish ideas with contract picks ([research.md](research.md)); cached 5 minutes |
+| `/api/research/symbol/{symbol}` | one symbol in depth: trend, option pricing (IV, rank, events), each structure's contract |
+| `/api/research/fetch` | the last ticker fetch: running, result |
+| `/api/system/data` | every dataset: folder, files, size, last update, what writes and reads it |
 | `/api/trades?source=all\|mine\|paper` | your trades (and today's, pending, from position changes) and the paper bot's fills, newest first, with realized P&L; totals; how fresh the brokerage data is |
 | `/api/broker/sync` | the last dashboard-started brokerage sync: running, result |
 | `/api/portfolio/performance?days=365` | current-holdings backtest and account TWR vs benchmarks |
@@ -99,6 +91,8 @@ account):
 | `/api/paper/proposals/{id}/reject` | `{"note": "..."}`: reject, or veto a queued order before it is sent |
 | `/api/paper/approve-all` | `{"strategy": "..."?}`: every pending proposal (of one strategy) |
 | `/api/paper/kill` | `{"reason": "..."}`: engage the kill switch and cancel open paper orders |
+| `/api/research/fetch` | `{"symbol": "..."}`: pull two years of bars and today's option chain for a ticker (background) |
+| `/api/research/ask` | `{"question": "...", "symbol": "...", "history": [...]}`: ask Claude about a research idea (needs `ANTHROPIC_API_KEY`) |
 | `/api/positions/ask` | `{"question": "...", "symbol": "..."?, "history": [...]}`: ask Claude about a position (needs `ANTHROPIC_API_KEY`; sends the figures to Anthropic's API) |
 | `/api/broker/sync` | `{"refresh": true?}`: sync the brokerage now (read-only), optionally having SnapTrade re-pull from Fidelity first; runs in the background |
 

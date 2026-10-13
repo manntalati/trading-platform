@@ -12,35 +12,16 @@ const RANGES = [
   { label: "5Y", days: 1260 },
 ];
 
-export default function Market({ live }: { live: LiveState }) {
-  const [symbol, setSymbol] = useState("SPY");
-  const [draft, setDraft] = useState("SPY");
+/** Daily price history of one symbol, with the live price when it's streamed. */
+export function PriceHistory({ symbol, live }: { symbol: string; live: LiveState }) {
   const [days, setDays] = useState(252);
   const bars = useApi<Bars>(`/api/bars/${encodeURIComponent(symbol)}?days=${days}`);
   const quote = live.quotes[symbol];
   const data = (bars.data?.bars ?? []).map((b) => ({ date: b.date.slice(0, 10), close: b.adj_close }));
   const first = data[0]?.close;
   const last = data[data.length - 1]?.close;
-
   return (
-    <Card title={`${symbol} daily`} hint="split- and dividend-adjusted">
-      <form
-        className="toolbar"
-        onSubmit={(e) => {
-          e.preventDefault();
-          setSymbol(draft.trim().toUpperCase() || "SPY");
-        }}
-      >
-        <input aria-label="Symbol" value={draft} onChange={(e) => setDraft(e.target.value)} style={{ width: 110 }} />
-        <button type="submit">Show</button>
-        {Object.keys(live.quotes)
-          .sort()
-          .map((s) => (
-            <button type="button" key={s} aria-pressed={s === symbol} onClick={() => { setSymbol(s); setDraft(s); }}>
-              {s}
-            </button>
-          ))}
-      </form>
+    <Card title={`${symbol} price`} hint="daily, split- and dividend-adjusted">
       <div className="toolbar">
         {RANGES.map((r) => (
           <button key={r.label} aria-pressed={days === r.days} onClick={() => setDays(r.days)}>
@@ -58,8 +39,8 @@ export default function Market({ live }: { live: LiveState }) {
           </span>
         ) : null}
       </div>
-      <ErrorBanner error={bars.error} />
-      {bars.loading ? <Loading /> : data.length ? <PriceChart data={data} /> : <Empty>No bars for {symbol}. Symbols in the universe or held in the portfolio are ingested by <code>uv run tp-data bars daily</code>.</Empty>}
+      {bars.error && !bars.error.includes("no clean bars") && <ErrorBanner error={bars.error} />}
+      {bars.loading ? <Loading /> : data.length ? <PriceChart data={data} /> : <Empty>No daily bars for {symbol} yet.</Empty>}
     </Card>
   );
 }
