@@ -1,0 +1,14 @@
+# Company facts and earnings-release dates from SEC EDGAR for the universe, research list and
+# holdings. Needs TP_SEC_USER_AGENT in .env. Exit 1 = a company failed to download.
+[Unit]
+Description=trading-platform: SEC fundamentals and earnings dates
+Wants=network-online.target
+After=network-online.target
+OnFailure=tp-notify-failure@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/trading-platform
+ExecStart=%h/trading-platform/.venv/bin/tp-data fundamentals
+TimeoutStartSec=30min
+Nice=10

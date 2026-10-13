@@ -14,6 +14,7 @@ uv run tp-data bars backfill --source fake # the whole pipeline on synthetic dat
 uv run tp-data options snapshot            # today's chains: [options] universe + holdings
 uv run tp-data macro backfill               # one-off: VIX and Treasury yields from FRED since 1990
 uv run tp-data macro daily                  # scheduled: the last 30 days
+uv run tp-data fundamentals                 # SEC filings: company facts and earnings dates
 ```
 
 ```python
@@ -33,13 +34,18 @@ data/
     alpaca/corporate_actions/ingest_date=YYYY-MM-DD/run-<run id>.parquet
     alpaca/option_chain_snapshots/snapshot_date=YYYY-MM-DD/underlying=<SYM>/run-<run id>.parquet
     fred/macro_1d/ingest_date=YYYY-MM-DD/run-<run id>.parquet
+    sec/company_facts/ingest_date=YYYY-MM-DD/run-<run id>.parquet
+    sec/earnings_events/ingest_date=YYYY-MM-DD/run-<run id>.parquet
   clean/                                derived: rebuilt from raw/ on every run
     stock_bars_1d/symbol=<SYM>/part.parquet
     stock_bars_1d_quarantine/part.parquet
     macro_1d/part.parquet
+    sec_facts/part.parquet
+    earnings_events/part.parquet
   reports/validation/stock_bars_1d-<UTC time>.json
   reports/options_snapshot/<date>-<run id>.json
   reports/macro/<date>.json
+  reports/fundamentals/<date>.json
 ```
 
 - **Raw is append-only.** Each run writes new files stamped with `ingested_at` and `run_id`.
@@ -165,6 +171,40 @@ regimes = market_regimes(closes, macro=macro)  # trend, volatility (VIX), breadt
 Each value is the one for that day's close, so a strategy acting at the next open could have
 known it; regime breakdowns attribute each day's return to the labels of the day before anyway.
 FRED skips some days the exchange trades (and vice versa); values carry forward up to five days.
+
+## Fundamentals (SEC EDGAR)
+
+`tp-data fundamentals` reads two free documents per company from SEC EDGAR for the bars
+universe, your research list and your holdings (funds have none): the **company facts** (every
+figure tagged in its 10-Q and 10-K filings) and the **submissions** (its list of filings). The
+SEC asks every client to say who it is: set `TP_SEC_USER_AGENT` to a name and an email address
+in `.env`. Requests are paced under EDGAR's limit of ten a second.
+
+| Kept | From | Used for |
+|---|---|---|
+| Diluted EPS, net income, revenue, gross profit | each quarter (the fourth is the year less three quarters) | trailing twelve months, P/E, earnings surprises |
+| Stockholders' equity, total assets, shares outstanding | each reporting date | book to market, gross profitability, market cap |
+| Earnings releases (8-K, item 2.02) | the filings list, with the acceptance time | when results became public |
+
+**Point in time.** Every figure carries the date it was filed, and a figure only counts from
+then (`tp_core.fundamentals`, `as_of=`): a backtest can't see a quarter's results before they
+were published. A later filing that restates a quarter counts from its own date; the first
+publication date is kept as `known`. Results are public at the earnings release when there is
+one (a release after the close counts for the next session), else at the 10-Q or 10-K.
+
+```python
+from tp_core.fundamentals import load_facts, quarterly, snapshot, sue
+
+facts = load_facts(Lake(Path("data")))
+eps = quarterly(facts, "XYZ", "eps_diluted", as_of=date(2024, 6, 30))
+surprises = sue(eps)  # Bernard-Thomas standardized unexpected earnings
+known = snapshot(facts, ["XYZ", "ABC"], date(2024, 6, 30))  # trailing EPS, equity, assets...
+```
+
+EPS is per share as reported: compare it across a split with `split_adjusted_eps` (scales each
+quarter by the split factor of the day it was filed). EDGAR has XBRL figures from 2009 on; tags
+differ between companies and years (revenue has four common ones), so a company can lack a
+concept for some quarters.
 
 ## Known limitations
 

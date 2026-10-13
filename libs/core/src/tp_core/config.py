@@ -76,6 +76,10 @@ class Settings(BaseSettings):
         default=None, validation_alias="SNAPTRADE_CONSUMER_KEY"
     )
 
+    # SEC EDGAR (company fundamentals, earnings dates) asks every client to identify itself with
+    # a name and an email address, e.g. "trading-platform you@example.com". No key needed.
+    sec_user_agent: str | None = Field(default=None, validation_alias="TP_SEC_USER_AGENT")
+
     # Annual risk-free rate for option maths (implied volatility, greeks, odds). The 3-month
     # T-bill yield is the usual choice; it moves a near-dated option's figures only slightly.
     risk_free_rate: float = Field(default=0.04, validation_alias="TP_RISK_FREE_RATE")
@@ -105,6 +109,14 @@ class Settings(BaseSettings):
                 ".env (personal API key from https://dashboard.snaptrade.com)."
             )
         return self.snaptrade_client_id, self.snaptrade_consumer_key.get_secret_value()
+
+    def require_sec_user_agent(self) -> str:
+        if not self.sec_user_agent or "@" not in self.sec_user_agent:
+            raise MissingCredentialsError(
+                "TP_SEC_USER_AGENT not set: SEC EDGAR asks for a name and an email address, "
+                'e.g. TP_SEC_USER_AGENT="trading-platform you@example.com" in .env.'
+            )
+        return self.sec_user_agent
 
     def require_anthropic_key(self) -> str:
         if self.anthropic_api_key is None:

@@ -62,7 +62,7 @@ All JSON. Reads (`GET`):
 | Endpoint | What |
 |---|---|
 | `/api/health` | liveness |
-| `/api/status` | market clock, bars freshness, latest validation and options reports, VIX and Treasury yields with the last FRED run, broker syncs, live feed, dashboard build |
+| `/api/status` | market clock, bars freshness, latest validation, options and fundamentals reports, VIX and Treasury yields with the last FRED run, broker syncs, live feed, dashboard build |
 | `/api/market/regime` | today's trend, volatility (VIX), breadth, rates and yield-curve labels with the numbers behind them, and the last year of labels |
 | `/api/bars/{symbol}?days=365` | daily bars (raw and adjusted close) |
 | `/api/options/{underlying}` | latest chain snapshot: ATM IV, expected move and SVI fit per expiry, the smile with its fit, 25-delta skew, term-structure slope, inconsistent quotes |
@@ -70,7 +70,7 @@ All JSON. Reads (`GET`):
 | `/api/positions` | every position with statistics, notes and actions; options with live quotes, greeks, odds and scenarios ([positions.md](positions.md)) |
 | `/api/positions/risk` | the whole book: exposure per underlying, beta, volatility, VaR and expected shortfall, correlation, option Greeks, scenario grid ([risk.md](risk.md#portfolio-risk)) |
 | `/api/research?refresh=false` | ranked swing, LEAPS and bearish ideas with contract picks ([research.md](research.md)); cached 5 minutes |
-| `/api/research/symbol/{symbol}` | one symbol in depth: trend, option pricing (IV, rank, events), each structure's contract |
+| `/api/research/symbol/{symbol}` | one symbol in depth: trend, option pricing (IV, rank, skew, events), each structure's contract, earnings dates and valuation from SEC filings |
 | `/api/research/fetch` | the last ticker fetch: running, result |
 | `/api/system/data` | every dataset: folder, files, size, last update, what writes and reads it |
 | `/api/trades?source=all\|mine\|paper` | your trades (and today's, pending, from position changes) and the paper bot's fills, newest first, with realized P&L; totals; how fresh the brokerage data is |

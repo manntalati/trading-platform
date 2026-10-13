@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import type { CalendarPick, ContractPick, CreditSpreadPick, IronCondorPick, OptionSummary, ResearchIdea, SpreadPick } from "../types";
 import { fitLabel, skewLine } from "./Options";
-import { IdeaCard, PickLine, PickSummary } from "./Research";
+import { EarningsCard, IdeaCard, PickLine, PickSummary } from "./Research";
 
 const call: ContractPick = {
   contract: "XYZ260313C00100000",
@@ -170,5 +170,32 @@ describe("smile in words", () => {
       "25-delta puts trade 5.2 volatility points over calls; 90-day IV 0.90x the 30-day (near-term options dearer: the market expects a rough few weeks); 1 call quotes inconsistent with each other (stale or bad quotes).",
     );
     expect(fitLabel(null)).toBe("too few quotes");
+  });
+});
+
+describe("EarningsCard", () => {
+  it("shows the next results date, the last surprise and valuation", () => {
+    render(
+      <EarningsCard
+        f={{
+          period_end: "2024-09-30",
+          last_release: "2024-10-28",
+          next_release_estimate: "2025-01-29",
+          eps_last_quarter: 1.52,
+          eps_ttm: 5.9,
+          pe: 18.4,
+          earnings_yield: 0.054,
+          book_to_market: 0.21,
+          gross_profitability: 0.33,
+          roe: 0.29,
+          market_cap: 1e11,
+          sue: 2.4,
+        }}
+      />,
+    );
+    expect(screen.getByText("2025-01-29")).toBeInTheDocument();
+    expect(screen.getByText("last: 2024-10-28")).toBeInTheDocument();
+    expect(screen.getByText("+2.4σ")).toBeInTheDocument();
+    expect(screen.getByText("18.4")).toBeInTheDocument();
   });
 });

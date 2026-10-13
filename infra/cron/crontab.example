@@ -17,6 +17,10 @@ REPO=/home/YOU/trading-platform
 # VIX and Treasury yields from FRED (no key), before the open: 12:30 UTC = 07:30 EST / 08:30 EDT.
 30 12 *   *   1-5    cd $REPO && .venv/bin/tp-data macro daily >> $REPO/data/logs/macro.log 2>&1
 
+# Fundamentals and earnings dates from SEC EDGAR (TP_SEC_USER_AGENT in .env), after the evening's
+# releases: 01:00 UTC = 20:00 EST / 21:00 EDT, Tuesday to Saturday for Monday to Friday.
+0 1  *   *   2-6    cd $REPO && .venv/bin/tp-data fundamentals >> $REPO/data/logs/fundamentals.log 2>&1
+
 # Fidelity through SnapTrade: free, so hourly on weekdays (SnapTrade refreshes its copy once a
 # day; this picks it up soon after). Add --refresh to make SnapTrade re-pull from Fidelity first
 # (a small SnapTrade fee each time); the dashboard's "Refresh from Fidelity" button does that

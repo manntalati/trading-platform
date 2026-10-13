@@ -23,6 +23,7 @@ from tp_core.portfolio import held_symbols
 from tp_core.storage import Lake
 from tp_core.validate import ValidationReport
 from tp_ingest.jobs import bars as bars_jobs
+from tp_ingest.jobs import fundamentals as fundamentals_jobs
 from tp_ingest.jobs import macro as macro_jobs
 from tp_ingest.jobs import options as options_jobs
 from tp_ingest.sources.base import FullSource
@@ -247,6 +248,46 @@ def macro_backfill(source: MacroSourceOpt = MacroSourceName.fred) -> None:
     _macro_finish(
         macro_jobs.run_backfill(Lake(settings.data_root), _macro_source(source), now=now_utc())
     )
+
+
+class SecSourceName(StrEnum):
+    sec = "sec"
+    fake = "fake"
+
+
+@app.command()
+def fundamentals(
+    symbols: SymbolsOpt = None,
+    source: Annotated[
+        SecSourceName, typer.Option(help="`sec` (EDGAR, no key) or `fake` (synthetic, offline).")
+    ] = SecSourceName.sec,
+) -> None:
+    """Company facts (EPS, net income, revenue, gross profit, equity, assets, shares) and
+    earnings-release dates from SEC EDGAR, for the bars universe, your research list and holdings
+    (funds have none). Needs TP_SEC_USER_AGENT (a name and an email address)."""
+    from tp_ingest.sources.sec import FakeSecSource, SecSource
+
+    settings = Settings()
+    wanted = _symbols(settings, symbols)
+    if not symbols:
+        try:
+            research = list(load_universes(settings.universes_file).research)
+        except (OSError, ValueError):
+            research = []
+        wanted = list(dict.fromkeys([*wanted, *research]))
+    if source is SecSourceName.fake:
+        sec: fundamentals_jobs.FundamentalsSource = FakeSecSource(wanted)
+    else:
+        try:
+            sec = SecSource(settings.require_sec_user_agent())
+        except MissingCredentialsError as exc:
+            _config_error(exc)
+    result = fundamentals_jobs.run_fundamentals(
+        Lake(settings.data_root), sec, wanted, now=now_utc()
+    )
+    typer.echo(result.summary())
+    if not result.ok:
+        raise typer.Exit(code=1)
 
 
 @bars_app.command("rebuild")

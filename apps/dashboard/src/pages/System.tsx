@@ -20,6 +20,7 @@ function Row(props: { label: string; ok: boolean | null; detail: string }) {
 const FLOWS = [
   { from: "Fidelity", via: "SnapTrade → tp-broker sync", to: "Portfolio, Trades, Home" },
   { from: "Alpaca market data", via: "tp-data bars daily / options snapshot", to: "Portfolio stats, Research, Paper trading" },
+  { from: "SEC EDGAR", via: "tp-data fundamentals", to: "Research (earnings dates, valuation), factor and earnings strategies" },
   { from: "FRED (St. Louis Fed)", via: "tp-data macro daily", to: "Home (VIX, rates), validation regimes, option pricing" },
   { from: "Paper strategies", via: "tp-paper bot → Alpaca paper account", to: "Paper trading, Trades" },
   { from: "Your questions", via: "Anthropic API (only when you ask Claude)", to: "the chat on a position or idea" },
@@ -117,6 +118,15 @@ export default function System({ live }: { live: LiveState }) {
                 label="Option snapshots"
                 ok={s.options.latest_report ? Boolean(s.options.latest_report.ok) : null}
                 detail={s.options.latest_report ? `last ${s.options.latest_report.snapshot_date} · ${s.options.files} files stored` : "none yet"}
+              />
+              <Row
+                label="Fundamentals (SEC)"
+                ok={s.fundamentals ? Boolean(s.fundamentals.ok) : null}
+                detail={
+                  s.fundamentals
+                    ? `${Object.keys(s.fundamentals.facts ?? {}).length} companies${Object.keys(s.fundamentals.errors ?? {}).length ? ` · failed: ${Object.keys(s.fundamentals.errors ?? {}).join(", ")}` : ""}`
+                    : "none yet: set TP_SEC_USER_AGENT and run tp-data fundamentals"
+                }
               />
               <Row
                 label="VIX and Treasury yields"

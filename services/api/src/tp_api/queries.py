@@ -198,6 +198,7 @@ def status(ctx: Context, now: datetime) -> dict[str, Any]:
             "latest_report": _latest_json(ctx.lake.reports_dir("options_snapshot")),
         },
         "broker": broker,
+        "fundamentals": _latest_json(ctx.lake.reports_dir("fundamentals")),
         "macro": {
             "series": macro_latest(load_macro(ctx.lake)),
             "latest_report": _latest_json(ctx.lake.reports_dir("macro")),
@@ -234,6 +235,10 @@ DATASETS: tuple[dict[str, str], ...] = (
     {"name": "VIX and Treasury yields", "path": "raw/fred/macro_1d", "also": "clean/macro_1d",
      "writer": "tp-data macro daily (weekdays after the close; FRED, no key)",
      "used_by": "Home (market), strategy validation (regimes), option pricing (risk-free rate)"},
+    {"name": "Company fundamentals and earnings dates", "path": "raw/sec",
+     "also": "clean/sec_facts",
+     "writer": "tp-data fundamentals (weekday evenings; SEC EDGAR, no key)",
+     "used_by": "Research (earnings dates, valuation), factor and earnings strategies"},
     {"name": "Implied volatility history", "path": "clean/option_iv_daily",
      "writer": "derived from the option chains when Research loads",
      "used_by": "Research (IV rank)"},
