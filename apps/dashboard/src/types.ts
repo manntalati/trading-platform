@@ -404,6 +404,7 @@ interface PositionBase {
   sector: string;
   asset_class: string;
   notes: PositionNote[];
+  actions?: HoldingAction[]; // choices priced from the latest option chain
 }
 
 export interface StockPosition extends PositionBase {
@@ -476,4 +477,159 @@ export interface AskReply {
   usage: { input_tokens: number; output_tokens: number };
   note: string | null;
   as_of: string;
+}
+
+// /api/research (services/api/src/tp_api/research.py, strategies/.../options_research.py)
+
+export interface ContractPick {
+  contract: string;
+  label: string;
+  right: "call" | "put";
+  strike: number;
+  expiration: string;
+  dte: number;
+  bid: number;
+  ask: number;
+  mid: number;
+  spread_pct: number;
+  open_interest: Num;
+  price: number; // per share: the ask to buy, the bid to sell
+  cost: number; // per contract
+  iv: Num;
+  delta: number;
+  theta_day: number; // per contract
+  vega: number;
+  intrinsic: number;
+  extrinsic: number;
+  breakeven: number;
+  breakeven_move_pct: number;
+  prob_itm: Num;
+  prob_profit: Num;
+  expected_move_pct: Num;
+  leverage: Num;
+  scenarios?: ScenarioGrid | null;
+  // LEAPS as a stand-in for 100 shares
+  shares_equivalent?: number;
+  stock_cost?: number;
+  capital_freed?: number;
+  carry_per_year_pct?: Num;
+  breakeven_cagr?: Num;
+  // covered call
+  contracts?: number;
+  premium?: number;
+  yield_pct?: number;
+  annualized_pct?: number;
+  upside_to_strike_pct?: number;
+  prob_assigned?: Num;
+}
+
+export interface SpreadPick {
+  long: ContractPick;
+  short: ContractPick;
+  debit: number;
+  cost: number;
+  max_gain: number;
+  reward_risk: number;
+  breakeven: number;
+  breakeven_move_pct: number;
+  prob_profit: Num;
+  theta_day: number;
+}
+
+export type Pick = ContractPick | SpreadPick;
+
+export function isSpread(p: Pick): p is SpreadPick {
+  return "long" in p;
+}
+
+export interface VolContext {
+  iv30: Num;
+  hv20: Num;
+  iv_hv: Num;
+  rank: Num;
+  percentile: Num;
+  history_days: number;
+  iv_low?: Num;
+  iv_high?: Num;
+  event: { by: string; after: string | null; iv: number; iv_after: number } | null;
+  rich: boolean;
+  as_of: string | null;
+}
+
+export interface Setup {
+  direction: "bullish" | "bearish" | "neutral";
+  tags: string[];
+  rs_3m: Num;
+}
+
+export interface ResearchIdea {
+  symbol: string;
+  kind: "swing" | "leaps" | "bearish";
+  score: number;
+  spot: Num;
+  setup: Setup;
+  stock: StockStats;
+  vol: VolContext;
+  pick: Pick | null;
+  alternative: Pick | null;
+  why: string[];
+  risks: string[];
+  held: string | null;
+}
+
+export interface Research {
+  as_of: string;
+  chains_as_of: string | null;
+  scanned: number;
+  with_chains: number;
+  without_chains: string[];
+  iv_history_days: number;
+  swing: ResearchIdea[];
+  leaps: ResearchIdea[];
+  bearish: ResearchIdea[];
+  disclaimer: string;
+}
+
+export interface SymbolResearch {
+  symbol: string;
+  spot: Num;
+  stock: StockStats;
+  setup: Setup;
+  vol: VolContext;
+  picks: Partial<Record<"swing_call" | "swing_put" | "leaps_call", ContractPick>> &
+    Partial<Record<"call_spread" | "put_spread", SpreadPick>>;
+  chain_age_days: Num;
+  held: string | null;
+  disclaimer: string;
+  ask?: { available: boolean; model: string };
+}
+
+export interface HoldingAction {
+  level: "attention" | "consider" | "info";
+  title: string;
+  text: string;
+  trade: ContractPick | null;
+}
+
+export interface FetchState {
+  running: boolean;
+  symbol?: string;
+  ok?: boolean;
+  message?: string;
+  started_at?: string;
+  finished_at?: string;
+}
+
+export interface DataMap {
+  root: string;
+  datasets: {
+    name: string;
+    path: string;
+    also?: string;
+    writer: string;
+    used_by: string;
+    files: number;
+    bytes: number;
+    updated_at: string | null;
+  }[];
 }

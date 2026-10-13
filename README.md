@@ -69,7 +69,10 @@ uv run tp-broker sync --source fake       # demo portfolio, no keys needed
 uv run tp-ideas                           # rules-based research ideas, with the numbers behind each
 ```
 
-How the ideas are generated: [docs/ideas.md](docs/ideas.md).
+How the ideas are generated: [docs/ideas.md](docs/ideas.md). Options research (swing and LEAPS
+ideas with the contract each would use, and what to do with the options you hold):
+[docs/research.md](docs/research.md). Your own tickers go in `config/universes.local.toml`
+(git-ignored).
 
 ## Dashboard
 

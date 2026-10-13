@@ -18,8 +18,9 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from tp_api import __version__, broker, paper, positions, queries
+from tp_api import __version__, broker, paper, positions, queries, research
 from tp_api.broker import BrokerSync
+from tp_api.claude import ClaudeAdvisor
 from tp_api.dashboard import bundle_state
 from tp_api.deps import Ctx, require_token
 from tp_api.live import (
@@ -29,7 +30,7 @@ from tp_api.live import (
     Position,
     QuoteSource,
 )
-from tp_api.positions import AlpacaMarketData, ClaudeAdvisor, MarketData
+from tp_api.positions import AlpacaMarketData, MarketData
 from tp_core.config import MissingCredentialsError, Settings
 from tp_core.portfolio import MARKET_KINDS, holdings_table, latest_snapshot
 
@@ -175,6 +176,10 @@ def create_app(
         )
         return out
 
+    @app.get("/api/system/data", dependencies=auth)
+    def data(c: Ctx) -> dict[str, Any]:
+        return queries.data_map(c)
+
     @app.get("/api/bars/{symbol}", dependencies=auth)
     def bars(c: Ctx, symbol: str, days: Annotated[int, Query(ge=5, le=5000)] = 365) -> Any:
         try:
@@ -215,6 +220,9 @@ def create_app(
     app.state.market = build_market_data(settings, quotes)
     app.state.advisor = ClaudeAdvisor(settings)
     app.include_router(positions.router)
+    app.state.research_cache = research.ResearchCache()
+    app.state.ticker_fetch = research.TickerFetch(settings, on_done=app.state.research_cache.clear)
+    app.include_router(research.router)
     app.state.broker_sync = BrokerSync(settings, on_done=lambda: update_hub_portfolio(app))
     app.include_router(broker.router)
 

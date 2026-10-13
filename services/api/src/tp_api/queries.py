@@ -191,6 +191,61 @@ def status(ctx: Context, now: datetime) -> dict[str, Any]:
     }
 
 
+# -- where the data lives -----------------------------------------------------------------------
+
+# What the platform keeps under the data root: where, what writes it, what reads it.
+DATASETS: tuple[dict[str, str], ...] = (
+    {"name": "Brokerage accounts and positions", "path": "raw/broker/accounts",
+     "also": "raw/broker/holdings",
+     "writer": "tp-broker sync (hourly on weekdays) or Refresh from Fidelity",
+     "used_by": "Home, Portfolio, Research (what you hold)"},
+    {"name": "Brokerage transactions", "path": "raw/broker/activities",
+     "writer": "tp-broker sync (posted the day after a trade)",
+     "used_by": "Trades, Portfolio (realized P&L)"},
+    {"name": "Daily stock bars", "path": "raw/alpaca/stock_bars_1d",
+     "also": "clean/stock_bars_1d",
+     "writer": "tp-data bars daily (weekdays after the close)",
+     "used_by": "Portfolio (stats, performance), Research, Paper trading"},
+    {"name": "Splits and dividends", "path": "raw/alpaca/corporate_actions",
+     "writer": "tp-data bars daily", "used_by": "Adjusted prices in the daily bars"},
+    {"name": "Option chains", "path": "raw/alpaca/option_chain_snapshots",
+     "writer": "tp-data options snapshot (weekdays 3:45 PM ET; your research list and holdings "
+               "included)",
+     "used_by": "Research (ideas, contract picks), Portfolio (rolls, covered calls)"},
+    {"name": "Implied volatility history", "path": "clean/option_iv_daily",
+     "writer": "derived from the option chains when Research loads",
+     "used_by": "Research (IV rank)"},
+    {"name": "Paper trading", "path": "state",
+     "writer": "tp-paper bot (every few minutes on weekdays)",
+     "used_by": "Paper trading, Trades, Home"},
+    {"name": "Job reports", "path": "reports",
+     "writer": "every job (validation, option snapshots)", "used_by": "System"},
+    {"name": "Job logs", "path": "logs", "writer": "the scheduled jobs (cron)",
+     "used_by": "you, when something fails"},
+)  # fmt: skip
+
+
+def data_map(ctx: Context) -> dict[str, Any]:
+    """Each dataset with where it is on disk, how much there is and when it last changed."""
+    root = ctx.settings.data_root.resolve()
+    out = []
+    for d in DATASETS:
+        paths = [root / d["path"], *([root / d["also"]] if d.get("also") else [])]
+        files = [f for p in paths if p.exists() for f in p.rglob("*") if f.is_file()]
+        newest = max((f.stat().st_mtime for f in files), default=None)
+        out.append(
+            {
+                **d,
+                "files": len(files),
+                "bytes": sum(f.stat().st_size for f in files),
+                "updated_at": (
+                    datetime.fromtimestamp(newest, tz=UTC).isoformat() if newest else None
+                ),
+            }
+        )
+    return {"root": str(root), "datasets": out}
+
+
 # -- market -------------------------------------------------------------------------------------
 
 

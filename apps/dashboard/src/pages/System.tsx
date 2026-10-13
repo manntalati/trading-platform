@@ -2,7 +2,7 @@ import { useApi } from "../api";
 import { Card, ErrorBanner, Loading } from "../components/ui";
 import { issueSummary, timeAgo } from "../format";
 import type { LiveState } from "../live";
-import type { Status } from "../types";
+import type { DataMap, Status } from "../types";
 
 function Row(props: { label: string; ok: boolean | null; detail: string }) {
   const state = props.ok === null ? "" : props.ok ? "good" : "critical";
@@ -17,6 +17,67 @@ function Row(props: { label: string; ok: boolean | null; detail: string }) {
   );
 }
 
+const FLOWS = [
+  { from: "Fidelity", via: "SnapTrade → tp-broker sync", to: "Portfolio, Trades, Home" },
+  { from: "Alpaca market data", via: "tp-data bars daily / options snapshot", to: "Portfolio stats, Research, Paper trading" },
+  { from: "Paper strategies", via: "tp-paper bot → Alpaca paper account", to: "Paper trading, Trades" },
+  { from: "Your questions", via: "Anthropic API (only when you ask Claude)", to: "the chat on a position or idea" },
+];
+
+function bytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 ** 2) return `${(n / 1024).toFixed(0)} KB`;
+  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
+  return `${(n / 1024 ** 3).toFixed(2)} GB`;
+}
+
+/** Where every dataset lives on disk, what writes it, what reads it, and how fresh it is. */
+function DataMapCard() {
+  const data = useApi<DataMap>("/api/system/data", 60_000);
+  const d = data.data;
+  return (
+    <Card title="Where your data lives" hint={d ? <>under <code>{d.root}</code>, on this machine only</> : undefined}>
+      <ErrorBanner error={data.error} />
+      <div className="flows">
+        {FLOWS.map((f) => (
+          <div key={f.from} className="flow">
+            <strong>{f.from}</strong>
+            <span className="muted"> → {f.via} → </span>
+            <span>{f.to}</span>
+          </div>
+        ))}
+      </div>
+      {d && (
+        <div className="datasets">
+          {d.datasets.map((x) => (
+            <div key={x.name} className="dataset">
+              <div>
+                <strong>{x.name}</strong>{" "}
+                <span className="muted small">
+                  {x.updated_at ? `updated ${timeAgo(x.updated_at)}` : "never written"}
+                  {x.files ? ` · ${bytes(x.bytes)} in ${x.files} file${x.files === 1 ? "" : "s"}` : ""}
+                </span>
+              </div>
+              <div className="small">
+                <code>{x.path}</code>
+                {x.also && (
+                  <>
+                    {" "}
+                    <code>{x.also}</code>
+                  </>
+                )}
+              </div>
+              <div className="small muted">
+                Written by {x.writer}. Used by {x.used_by}.
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export default function System({ live }: { live: LiveState }) {
   const status = useApi<Status>("/api/status", 15_000);
   const s = status.data;
@@ -25,7 +86,8 @@ export default function System({ live }: { live: LiveState }) {
     <div className="grid">
       <ErrorBanner error={status.error} />
       {s && (
-        <Card title="Pipeline health">
+        <Card title="Is everything fresh?" hint="each job's last run">
+          <div className="table-wrap">
           <table>
             <tbody>
               <Row
@@ -66,8 +128,10 @@ export default function System({ live }: { live: LiveState }) {
               />
             </tbody>
           </table>
+          </div>
         </Card>
       )}
+      <DataMapCard />
     </div>
   );
 }

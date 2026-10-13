@@ -14,7 +14,8 @@ from fastapi.testclient import TestClient
 
 from tp_api import positions as pos_api
 from tp_api.app import QuoteMode, create_app
-from tp_api.positions import AlpacaMarketData, Answer, ClaudeAdvisor
+from tp_api.claude import Answer, ClaudeAdvisor
+from tp_api.positions import AlpacaMarketData
 from tp_core.positions import OptionQuote
 
 from .test_api import lake_root, settings_for  # noqa: F401  (lake_root is a fixture)

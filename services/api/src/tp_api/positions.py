@@ -20,20 +20,18 @@ import math
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
-from typing import Any, Literal, Protocol, TypeVar
+from typing import Any, Protocol, TypeVar
 
-import anthropic
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
 
 from tp_api import queries
+from tp_api.claude import AskRequest, ask_claude, rounded
 from tp_api.deps import Ctx, require_dashboard_client, require_token
 from tp_core.bars import load_bars, missing_symbols
 from tp_core.calendar import NEW_YORK
-from tp_core.config import MissingCredentialsError, Settings
+from tp_core.config import Settings
 from tp_core.pnl import option_label
 from tp_core.portfolio import CASH_KIND, MARKET_KINDS, holdings_table, latest_snapshot
 from tp_core.positions import (
@@ -44,7 +42,9 @@ from tp_core.positions import (
     stock_notes,
     stock_stats,
 )
+from tp_core.volatility import latest_chains
 from tp_ingest.sources.alpaca import AlpacaSource
+from tp_strategies.options_research import CHAIN_MAX_AGE_DAYS, holding_actions
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/positions", dependencies=[Depends(require_token)])
@@ -207,6 +207,16 @@ def positions_view(
                 pnl=p.get("pnl"),
                 pnl_pct=p.get("pnl_pct"),
             )
+    # What to consider doing with each, priced from the latest option chains.
+    chains = latest_chains(
+        ctx.lake,
+        list({str(p["underlying"]) for p in rows}),
+        since=today - timedelta(days=CHAIN_MAX_AGE_DAYS),
+    )
+    for p in rows:
+        p["actions"] = holding_actions(
+            p, chains.get(str(p["underlying"])), now=now, rate=ctx.settings.risk_free_rate
+        )
     view: dict[str, Any] = queries.clean(
         {
             "synced": True,
@@ -427,121 +437,6 @@ asked for more.
 - You can't place trades; the owner decides. Skip boilerplate disclaimers: one short line at \
 most, and only when the call is genuinely close.
 """
-MAX_TOKENS = 16_000
-MAX_CONTINUATIONS = 3  # web searches can pause a turn; resume it at most this often
-FALLBACK_BETA = "server-side-fallback-2026-07-01"
-
-
-class Turn(BaseModel):
-    role: Literal["user", "assistant"]
-    content: str = Field(min_length=1, max_length=20_000)
-
-
-class AskRequest(BaseModel):
-    question: str = Field(min_length=1, max_length=4_000)
-    symbol: str | None = Field(default=None, max_length=40)
-    history: list[Turn] = Field(default_factory=list, max_length=20)
-
-
-@dataclass(frozen=True)
-class Answer:
-    text: str
-    model: str
-    stop_reason: str | None
-    sources: list[dict[str, str]] = field(default_factory=list)
-    searches: int = 0
-    input_tokens: int = 0
-    output_tokens: int = 0
-    note: str | None = None
-
-
-class Advisor(Protocol):
-    def ask(self, system: str, messages: list[dict[str, Any]]) -> Answer: ...
-
-
-class ClaudeAdvisor:
-    """Claude through the Anthropic API: adaptive thinking at the configured effort, streamed
-    (long answers can take a while), with server-side fallback to another model if a request
-    is declined, and optional web search."""
-
-    def __init__(self, settings: Settings, client: Any | None = None) -> None:
-        self.settings = settings
-        self._client = client
-
-    def client(self) -> Any:
-        if self._client is None:
-            key = self.settings.require_anthropic_key()
-            self._client = anthropic.Anthropic(api_key=key, timeout=300.0)
-        return self._client
-
-    def ask(self, system: str, messages: list[dict[str, Any]]) -> Answer:
-        tools = (
-            [{"type": "web_search_20260209", "name": "web_search", "max_uses": 3}]
-            if self.settings.ask_web_search
-            else []
-        )
-        try:
-            return self._ask(system, messages, tools)
-        except anthropic.BadRequestError as exc:
-            if not tools or "web_search" not in str(exc):
-                raise
-            log.warning("web search unavailable, asking without it: %s", exc)
-            answer = self._ask(system, messages, [])
-            return replace(answer, note="Web search isn't enabled for this API key.")
-
-    def _ask(
-        self, system: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
-    ) -> Answer:
-        convo = list(messages)
-        blocks: list[Any] = []
-        usage = [0, 0]
-        message: Any = None
-        for _ in range(MAX_CONTINUATIONS + 1):
-            extra: dict[str, Any] = {"tools": tools} if tools else {}
-            with self.client().beta.messages.stream(
-                model=self.settings.ask_model,
-                max_tokens=MAX_TOKENS,
-                system=system,
-                messages=convo,
-                output_config={"effort": self.settings.ask_effort},
-                betas=[FALLBACK_BETA],
-                fallbacks="default",
-                **extra,
-            ) as stream:
-                message = stream.get_final_message()
-            blocks += message.content
-            usage[0] += message.usage.input_tokens
-            usage[1] += message.usage.output_tokens
-            if message.stop_reason != "pause_turn":
-                break
-            convo = [*convo, {"role": "assistant", "content": message.content}]
-        if message.stop_reason == "refusal":
-            details = getattr(message, "stop_details", None)
-            why = getattr(details, "explanation", None) if details else None
-            text = "Claude declined to answer this one." + (f" ({why})" if why else "")
-            return Answer(text, message.model, "refusal", input_tokens=usage[0],
-                          output_tokens=usage[1])  # fmt: skip
-        return Answer(
-            text="".join(b.text for b in blocks if b.type == "text").strip(),
-            model=message.model,
-            stop_reason=message.stop_reason,
-            sources=_sources(blocks),
-            searches=sum(
-                1 for b in blocks if b.type == "server_tool_use" and b.name == "web_search"
-            ),
-            input_tokens=usage[0],
-            output_tokens=usage[1],
-        )
-
-
-def _sources(blocks: list[Any]) -> list[dict[str, str]]:
-    seen: dict[str, str] = {}
-    for b in blocks:
-        for c in getattr(b, "citations", None) or []:
-            url = getattr(c, "url", None)
-            if url and url not in seen:
-                seen[url] = getattr(c, "title", None) or url
-    return [{"url": u, "title": t} for u, t in seen.items()]
 
 
 def ask_system_prompt(view: dict[str, Any], symbol: str | None, now: datetime) -> str:
@@ -557,9 +452,9 @@ def ask_system_prompt(view: dict[str, Any], symbol: str | None, now: datetime) -
         "risk_free_rate": view.get("risk_free_rate"),
         "positions": [_brief(p) for p in view.get("positions", [])],
     }
-    parts = [INSTRUCTIONS, "<account>", json.dumps(_rounded(account)), "</account>"]
+    parts = [INSTRUCTIONS, "<account>", json.dumps(rounded(account)), "</account>"]
     if focus is not None:
-        parts += ["<position_in_question>", json.dumps(_rounded(focus)), "</position_in_question>"]
+        parts += ["<position_in_question>", json.dumps(rounded(focus)), "</position_in_question>"]
     else:
         parts.append("The question is about the account as a whole.")
     return "\n".join(parts)
@@ -576,17 +471,6 @@ def _brief(p: dict[str, Any]) -> dict[str, Any]:
     else:
         out["day_change_pct"] = s.get("day_change_pct")
     return out
-
-
-def _rounded(value: Any) -> Any:
-    """Four significant figures is plenty, and keeps the context (and the bill) small."""
-    if isinstance(value, dict):
-        return {k: _rounded(v) for k, v in value.items() if v is not None}
-    if isinstance(value, list):
-        return [_rounded(v) for v in value]
-    if isinstance(value, float):
-        return float(f"{value:.4g}") if math.isfinite(value) else None
-    return value
 
 
 # -- endpoints ------------------------------------------------------------------------------------
@@ -609,9 +493,6 @@ def positions(c: Ctx, request: Request) -> dict[str, Any]:
 
 @router.post("/ask", dependencies=[Depends(require_dashboard_client)])
 def ask(c: Ctx, request: Request, body: AskRequest) -> dict[str, Any]:
-    roles = [t.role for t in body.history]
-    if roles != ["user", "assistant"] * (len(roles) // 2):
-        raise HTTPException(422, "history must alternate user, assistant, starting with user")
     now = now_utc()
     view = positions_view(c, now, market=_market(request), live=_live(request))
     if not view.get("synced"):
@@ -619,24 +500,4 @@ def ask(c: Ctx, request: Request, body: AskRequest) -> dict[str, Any]:
     symbol = body.symbol.upper() if body.symbol else None
     if symbol and not any(p["symbol"] == symbol for p in view["positions"]):
         raise HTTPException(404, f"no open position in {symbol}")
-    messages = [{"role": t.role, "content": t.content} for t in body.history]
-    messages.append({"role": "user", "content": body.question})
-    advisor: Advisor = request.app.state.advisor
-    try:
-        answer = advisor.ask(ask_system_prompt(view, symbol, now), messages)
-    except MissingCredentialsError as exc:
-        raise HTTPException(503, str(exc)) from exc
-    except anthropic.APIStatusError as exc:
-        raise HTTPException(502, f"Claude API error {exc.status_code}: {exc.message}") from exc
-    except anthropic.APIConnectionError as exc:
-        raise HTTPException(502, f"couldn't reach the Claude API: {exc}") from exc
-    return {
-        "answer": answer.text,
-        "model": answer.model,
-        "stop_reason": answer.stop_reason,
-        "sources": answer.sources,
-        "searches": answer.searches,
-        "usage": {"input_tokens": answer.input_tokens, "output_tokens": answer.output_tokens},
-        "note": answer.note,
-        "as_of": now.isoformat(),
-    }
+    return ask_claude(request, ask_system_prompt(view, symbol, now), body, now)

@@ -28,15 +28,32 @@ def test_missing_keys(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 
 
 def test_repo_universe_has_20_etfs_and_38_stocks() -> None:
-    universes = load_universes(REPO_ROOT / "config" / "universes.toml")
+    universes = load_universes(REPO_ROOT / "config" / "universes.toml", local=False)
     assert len(universes.bars) == 58
     assert {"SPY", "EFA", "IEF", "VNQ", "DBC", "AGG", "BIL"} <= set(universes.bars)
 
 
 def test_repo_universe_has_options_underlyings() -> None:
-    universes = load_universes(REPO_ROOT / "config" / "universes.toml")
+    universes = load_universes(REPO_ROOT / "config" / "universes.toml", local=False)
     assert 20 <= len(universes.options_underlyings) <= 30
-    assert universes.options_max_dte == 365
+    assert universes.options_max_dte == 800  # two years out: LEAPS included
+
+
+def test_local_universe_adds_your_own_tickers(tmp_path: Path) -> None:
+    path = tmp_path / "universes.toml"
+    path.write_text(
+        '[bars]\netfs = ["SPY"]\nstocks = ["AAA"]\n[options]\nunderlyings = ["SPY"]\n'
+        '[dashboard]\nwatchlist = ["SPY"]\n'
+    )
+    (tmp_path / "universes.local.toml").write_text(
+        '[research]\nsymbols = ["xyz", "AAA"]\n[dashboard]\nwatchlist = ["XYZ", "SPY"]\n'
+    )
+    u = load_universes(path)
+    assert u.bars == ("SPY", "AAA", "XYZ")
+    assert u.options_underlyings == ("SPY", "XYZ", "AAA")
+    assert u.research == ("XYZ", "AAA")
+    assert u.watchlist == ("SPY", "XYZ")
+    assert load_universes(path, local=False).research == ()
 
 
 def test_duplicate_symbols_rejected(tmp_path: Path) -> None:
