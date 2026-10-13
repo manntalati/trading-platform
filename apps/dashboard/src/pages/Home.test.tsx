@@ -1,4 +1,4 @@
-import type { OptionPositionRow, Positions, Status } from "../types";
+import type { OptionPositionRow, Positions, Status, Validation } from "../types";
 import { attentionItems } from "./Home";
 
 const option = {
@@ -23,6 +23,19 @@ describe("attentionItems", () => {
     ]);
     expect(items[0]?.href).toBe("#/portfolio/positions/XYZ260116C00100000");
     expect(items[2]?.href).toBe("#/paper");
+  });
+
+  it("reminds about paper strategies that haven't passed the backtest gate", () => {
+    const validation = {
+      strategies: [
+        { name: "rsi2", on_paper: true, report: null },
+        { name: "ma-timing", on_paper: true, report: { gate: { passed: true } } },
+        { name: "xs-momentum", on_paper: false, report: null },
+      ],
+    } as unknown as Validation;
+    const [item] = attentionItems(null, null, 0, validation);
+    expect(item?.title).toBe("1 paper strategy hasn't passed the backtest gate");
+    expect(item?.href).toBe("#/paper/strategies");
   });
 
   it("is empty when nothing needs you", () => {

@@ -4,8 +4,19 @@ import { GrowthChart, useThemeColors } from "../components/charts";
 import { Card, Empty, ErrorBanner, Loading, StatsTable } from "../components/ui";
 import { pct } from "../format";
 import type { StrategyView } from "../types";
+import ValidationView from "./Validation";
 
+/** Each strategy against the plan's backtest gate, then strategy 1's replication of Faber. */
 export default function Strategies() {
+  return (
+    <div className="grid">
+      <ValidationView />
+      <MaTimingReplication />
+    </div>
+  );
+}
+
+function MaTimingReplication() {
   const [universe, setUniverse] = useState<"spy" | "gtaa">("gtaa");
   const view = useApi<StrategyView>(`/api/strategies/ma-timing?universe=${universe}`);
   const theme = useThemeColors();

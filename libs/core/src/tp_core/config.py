@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     )
     risk_file: Path = Field(default=Path("config/risk.toml"), validation_alias="TP_RISK_FILE")
     paper_file: Path = Field(default=Path("config/paper.toml"), validation_alias="TP_PAPER_FILE")
+    validation_file: Path = Field(
+        default=Path("config/validation.toml"), validation_alias="TP_VALIDATION_FILE"
+    )
     # "alpaca": the Alpaca paper account (always the paper endpoint). "fake": simulated offline.
     paper_broker: Literal["alpaca", "fake"] = Field(
         default="alpaca", validation_alias="TP_PAPER_BROKER"

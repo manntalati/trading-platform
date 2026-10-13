@@ -633,3 +633,92 @@ export interface DataMap {
     updated_at: string | null;
   }[];
 }
+
+// /api/strategies/validation (strategies/src/tp_strategies/validation.py)
+
+export interface PeriodStats {
+  start?: string;
+  end?: string;
+  sessions: number;
+  total_return?: Num;
+  cagr?: Num;
+  ann_volatility?: Num;
+  sharpe?: Num;
+  max_drawdown?: Num;
+  benchmark?: { cagr: Num; sharpe: Num; max_drawdown: Num; total_return: Num };
+}
+
+export interface GateCheck {
+  name: string;
+  passed: boolean | null;
+  detail: string;
+}
+
+export interface RegimeRow {
+  label: string;
+  days: number;
+  share: number;
+  ann_return: Num;
+  ann_volatility: Num;
+  sharpe: Num;
+  benchmark_ann_return?: Num;
+}
+
+export interface ValidationReport {
+  run_id: string;
+  created_at: string;
+  strategy: string;
+  title: string;
+  params: Record<string, unknown>;
+  full: PeriodStats;
+  periods: { train: PeriodStats; validation: PeriodStats; test: PeriodStats };
+  walk_forward: {
+    windows: { start: string; end: string; params: Record<string, unknown>; train_sharpe: Num; test_return: Num }[];
+    sessions?: number;
+    sharpe?: Num;
+    cagr?: Num;
+    max_drawdown?: Num;
+    efficiency?: Num;
+  };
+  deflated: { sharpe: Num; trials: number; threshold: Num; probability: Num; excess: Num };
+  stress: { name: string; start: string; end: string; passed: boolean | null; note?: string; return?: Num; max_drawdown?: Num; benchmark_return?: Num; benchmark_max_drawdown?: Num }[];
+  stability: {
+    variants: { params: Record<string, unknown>; sharpe: Num; cagr: Num; max_drawdown: Num; base: boolean }[];
+    base_sharpe: Num;
+    worst_neighbor_sharpe: Num;
+    passed: boolean | null;
+  };
+  monte_carlo: { paths?: number; cagr_p5?: number; cagr_p50?: number; cagr_p95?: number; max_drawdown_p5?: number; max_drawdown_p50?: number; sharpe_p5?: number; prob_loss?: number };
+  regimes: Partial<Record<"trend" | "volatility" | "breadth", RegimeRow[]>>;
+  test_touches: number;
+  gate: { passed: boolean; checks: GateCheck[] };
+}
+
+export interface StrategyValidation {
+  name: string;
+  title: string;
+  spec: string;
+  on_paper: boolean;
+  report: ValidationReport | null;
+}
+
+export interface Validation {
+  strategies: StrategyValidation[];
+  job: { running: boolean; names?: string[]; done?: string[]; current?: string | null; ok?: boolean; message?: string; finished_at?: string };
+  periods: { train_end: string; validation_end: string };
+  gate: Record<string, number>;
+}
+
+export interface MarketRegime {
+  current: {
+    date: string;
+    trend: "up" | "down" | null;
+    volatility: "calm" | "normal" | "stressed" | null;
+    breadth: "broad" | "mixed" | "narrow" | null;
+    spy_vs_ma200: Num;
+    realized_vol: Num;
+    breadth_pct: Num;
+    summary: string;
+  } | null;
+  history: { date: string; trend: string | null; volatility: string | null; breadth: string | null }[];
+}

@@ -19,8 +19,11 @@ import pandas as pd
 
 from tp_core import metrics
 from tp_core.bars import load_bars
+from tp_core.portfolio import Classifier
 from tp_core.storage import Lake, new_run_id, write_json, write_parquet
+from tp_risk.limits import Limits
 from tp_risk.manager import RiskManager
+from tp_risk.state import MemoryRiskState
 from tp_trading.data import MarketData
 from tp_trading.engine import BacktestEngine, BacktestResult, EngineConfig
 from tp_trading.risk import RiskGate
@@ -89,6 +92,16 @@ def run_backtest(
         write_parquet(result.orders.astype({"session": "string"}), path / "orders.parquet")
         write_parquet(result.fills.astype({"session": "string"}), path / "fills.parquet")
     return BacktestRun(result, bench, summary, run_id, path)
+
+
+def risk_gate(
+    risk_file: Path, classifier: Classifier, *, enforce_drawdown: bool = False
+) -> RiskManager:
+    """The pre-trade limits paper trading uses (``config/risk.toml``), with fresh state: one per
+    backtest."""
+    return RiskManager(
+        Limits.load(risk_file), classifier, MemoryRiskState(), enforce_drawdown=enforce_drawdown
+    )
 
 
 def _risk_summary(risk: RiskGate | None) -> dict[str, Any]:

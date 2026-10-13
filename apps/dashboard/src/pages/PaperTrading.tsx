@@ -4,7 +4,7 @@ import Strategies from "./Strategies";
 
 const VIEWS = [
   { key: "bot", label: "Bot and orders" },
-  { key: "strategies", label: "Strategy backtests" },
+  { key: "strategies", label: "Strategies and the backtest gate" },
 ];
 
 /** The automated side: the paper bot (orders, approvals, sleeves) and how its strategies

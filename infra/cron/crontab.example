@@ -23,3 +23,7 @@ REPO=/home/YOU/trading-platform
 # Paper trading without the always-on service: `--once` runs whatever is due and exits, so every
 # five minutes is enough. The bot follows the exchange calendar itself (no UTC arithmetic).
 */5 * *   *   *      cd $REPO && .venv/bin/tp-paper bot --once >> $REPO/data/logs/paper.log 2>&1
+
+# Backtest validation (the plan's stage-1 gate) for every strategy, on Saturdays: a few minutes.
+# Exits 1 while any strategy hasn't passed, which is expected; the dashboard shows the reports.
+0 14 *   *   6      cd $REPO && .venv/bin/tp-backtest validate --all >> $REPO/data/logs/validation.log 2>&1
