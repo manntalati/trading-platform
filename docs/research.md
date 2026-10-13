@@ -74,6 +74,15 @@ cash-secured put): size by the maximum loss, not by the premium. Implied volatil
 with Newton's method (bisection when it won't converge); a deep in-the-money put that Black-Scholes
 can't price is read with the American model.
 
+## Earnings and valuation
+
+Look up shows what the company's SEC filings say ([data.md](data.md#fundamentals-sec-edgar)):
+when results last came out and an estimate of the next date (52 weeks after the same quarter's
+release a year earlier), the last quarter's surprise against the seasonal trend (SUE, in
+standard deviations), trailing P/E, book to market, return on equity and gross profit over
+assets. The next date is an estimate: confirm it (the Claude chat searches for it) before
+holding options through it.
+
 ## How expensive are the options?
 
 - **IV rank**: where today's 30-day implied volatility sits in its own history (0% = the low,

@@ -13,6 +13,7 @@ import {
   type ContractPick,
   type CreditSpreadPick,
   type FetchState,
+  type Fundamentals,
   type IronCondorPick,
   type Pick,
   type Research as ResearchData,
@@ -436,6 +437,7 @@ function SymbolDepth({ symbol, live }: { symbol: string; live: LiveState }) {
           }
         />
       </div>
+      {data.fundamentals && <EarningsCard f={data.fundamentals} />}
       {v.event && (
         <div className="banner">
           The option market is pricing an event (often earnings) before {v.event.by}: at-the-money IV is {pct(v.event.iv, 0)} for that expiry vs{" "}
@@ -490,6 +492,24 @@ function SymbolDepth({ symbol, live }: { symbol: string; live: LiveState }) {
       <OptionPricing underlying={symbol} />
       <p className="muted small">{data.disclaimer}</p>
     </div>
+  );
+}
+
+export function EarningsCard({ f }: { f: Fundamentals }) {
+  return (
+    <Card title="Earnings and valuation" hint={`SEC filings, quarter to ${f.period_end ?? "—"}`}>
+      <div className="metrics">
+        <Fact label="Next results (estimate)" value={f.next_release_estimate ?? "—"} sub={f.last_release ? `last: ${f.last_release}` : null} />
+        <Fact
+          label="Last surprise"
+          value={f.sue != null ? `${f.sue >= 0 ? "+" : "−"}${num(Math.abs(f.sue), 1)}σ` : "—"}
+          sub={f.eps_last_quarter != null ? `EPS ${money(f.eps_last_quarter, true)} for the quarter` : null}
+        />
+        <Fact label="P/E" value={f.pe != null ? num(f.pe, 1) : "—"} sub={f.eps_ttm != null ? `trailing EPS ${money(f.eps_ttm, true)}` : null} />
+        <Fact label="Book to market" value={f.book_to_market != null ? num(f.book_to_market, 2) : "—"} sub={f.roe != null ? `ROE ${pct(f.roe, 0)}` : null} />
+        <Fact label="Gross profit / assets" value={pct(f.gross_profitability, 0)} sub="quality (Novy-Marx)" />
+      </div>
+    </Card>
   );
 }
 

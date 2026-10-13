@@ -46,6 +46,7 @@ export interface Status {
   validation: (Record<string, unknown> & { ok?: boolean; counts?: Record<string, number>; generated_at?: string }) | null;
   options: { files: number; latest_report: (Record<string, unknown> & { snapshot_date?: string; ok?: boolean; skipped?: string | null }) | null };
   broker: { source: string; institution: string; account: string; synced_at: string }[];
+  fundamentals?: (Record<string, unknown> & { ok?: boolean; facts?: Record<string, number>; errors?: Record<string, string>; no_cik?: string[] }) | null;
   macro?: {
     series: Record<string, { value: Num; date: string; name: string }>;
     latest_report: (Record<string, unknown> & { ok?: boolean; errors?: Record<string, string> }) | null;
@@ -242,6 +243,22 @@ export interface OptionSummary {
   smile_fit?: { strike: number; iv: number }[];
   quote_arbitrage?: { vertical: number; butterfly: number } | null;
   skew?: { skew_25d: Num; butterfly_25d: Num; iv30: Num; iv90: Num; ratio: Num; shape: "contango" | "flat" | "backwardation" | null };
+}
+
+// tp_core.fundamentals.summary: from SEC filings, as known today
+export interface Fundamentals {
+  period_end: string | null;
+  last_release: string | null;
+  next_release_estimate: string | null;
+  eps_last_quarter: Num;
+  eps_ttm: Num;
+  pe: Num;
+  earnings_yield: Num;
+  book_to_market: Num;
+  gross_profitability: Num;
+  roe: Num;
+  market_cap: Num;
+  sue: Num;
 }
 
 // tp_core.smile.ExpiryFit: SVI per expiration
@@ -708,6 +725,7 @@ export interface SymbolResearch {
       calendar?: CalendarPick;
     };
   chain_age_days: Num;
+  fundamentals?: Fundamentals | null;
   held: string | null;
   disclaimer: string;
   ask?: { available: boolean; model: string };

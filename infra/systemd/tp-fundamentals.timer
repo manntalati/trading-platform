@@ -1,0 +1,12 @@
+# 20:00 New York time on weekdays: after the evening's earnings releases (most come at 4 PM or
+# just after) and the day's 10-Q and 10-K filings. About two requests per company, paced under
+# EDGAR's limit of ten a second.
+[Unit]
+Description=trading-platform: SEC fundamentals (weekdays 20:00 ET)
+
+[Timer]
+OnCalendar=Mon..Fri 20:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

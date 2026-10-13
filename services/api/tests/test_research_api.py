@@ -17,8 +17,10 @@ from tp_broker.jobs import run_sync
 from tp_core.bars import load_bars
 from tp_core.storage import Lake
 from tp_ingest.jobs.bars import run_backfill
+from tp_ingest.jobs.fundamentals import run_fundamentals
 from tp_ingest.jobs.options import run_snapshot
 from tp_ingest.sources.fake import FakeSource
+from tp_ingest.sources.sec import FakeSecSource
 
 from .test_api import SYMBOLS, settings_for
 from .test_positions_api import FakeAdvisor
@@ -37,6 +39,7 @@ def research_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
     run_sync(lake, FakeBroker(price_of=closes.get, as_of=DAY.date()), now=DAY)
     source = FakeSource(as_of=date(2024, 7, 12))
     run_snapshot(lake, source, ["SPY", "AAPL", "MSFT", "NVDA", "JPM"], now=DAY, max_dte=800)
+    run_fundamentals(lake, FakeSecSource(["AAPL"], last_year=2023), ["AAPL", "SPY"], now=DAY)
     return root
 
 
@@ -83,6 +86,12 @@ def test_one_symbol_in_depth(client: tuple[TestClient, Any]) -> None:
     assert {"swing_call", "leaps_call"} <= set(body["picks"])
     assert body["picks"]["leaps_call"]["dte"] >= 270
     assert body["vol"]["iv30"] > 0
+    f = body["fundamentals"]  # from the (synthetic) SEC filings
+    assert f["period_end"] == "2023-12-31"
+    assert f["last_release"] == "2024-01-31"
+    assert f["pe"] > 0
+    assert f["next_release_estimate"] is not None
+    assert c.get("/api/research/symbol/MSFT").json()["fundamentals"] is None
     assert c.get("/api/research/symbol/NOPE").status_code == 404
 
 

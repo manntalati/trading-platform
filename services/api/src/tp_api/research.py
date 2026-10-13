@@ -24,6 +24,8 @@ from tp_api.claude import AskRequest, ask_claude, rounded
 from tp_api.deps import Ctx, require_dashboard_client, require_token
 from tp_core.calendar import NEW_YORK
 from tp_core.config import MissingCredentialsError, Settings, load_universes
+from tp_core.fundamentals import load_events, load_facts
+from tp_core.fundamentals import summary as fundamentals_summary
 from tp_core.pnl import option_label
 from tp_core.portfolio import CASH_KIND, held_symbols, holdings_table, latest_snapshot
 from tp_core.storage import Lake
@@ -109,7 +111,15 @@ def symbol_view(ctx: queries.Context, symbol: str, now: datetime) -> dict[str, A
     age = None
     if chain is not None and not chain.empty:
         age = (today - chain["snapshot_at"].max().tz_convert(NEW_YORK).date()).days
+    facts = load_facts(ctx.lake, [symbol])
     analysis |= {
+        "fundamentals": (
+            fundamentals_summary(
+                facts, load_events(ctx.lake, [symbol]), symbol, analysis.get("spot"), today
+            )
+            if len(facts)
+            else None
+        ),
         "chain_age_days": age,
         "held": held_summary(ctx).get(symbol),
         "ask": {
@@ -244,7 +254,9 @@ You are a candid, numerate options trading assistant inside the owner's personal
 dashboard. They trade swings (weeks to a few months) and LEAPS. Below is what the dashboard's \
 rules found for one stock: its trend and volatility, how its options are priced (implied \
 volatility, its rank, implied vs realized, the smile's 25-delta skew, the term structure's \
-slope and any event it shows), the contracts the rules picked (bought at the ask, sold at the \
+slope and any event it shows), what the company's SEC filings say (trailing EPS, P/E, book to \
+market, the last earnings surprise, the last results date and an estimate of the next), the \
+contracts the rules picked (bought at the ask, sold at the \
 bid, with breakeven, odds and greeks; premium-selling structures and a calendar too), and the \
 owner's portfolio.
 
