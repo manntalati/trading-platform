@@ -47,6 +47,7 @@ from tp_paper.store import (
     now_iso,
 )
 from tp_risk.manager import RiskManager
+from tp_strategies.reference import LakeReference
 from tp_trading.costs import CostModel
 from tp_trading.events import OrderIntent, RiskDecision
 from tp_trading.risk import Book
@@ -348,6 +349,7 @@ def propose(paper: Paper, now: datetime, *, force: bool = False) -> ProposeRepor
             paper.classifier.sectors,
             catch_up=catch_up,
             sizing=make_sizing(sleeve.sizing),
+            reference=LakeReference(paper.lake),
         )
         try:
             sleeve.strategy.on_bar(ctx)

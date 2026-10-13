@@ -251,73 +251,139 @@ def load_events(lake: Lake, symbols: Sequence[str] | None = None) -> pd.DataFram
 # -- quarterly and point in time -----------------------------------------------------------------
 
 
-def _days(df: pd.DataFrame) -> pd.Series:
-    return (pd.to_datetime(df["end"]) - pd.to_datetime(df["start"])).dt.days
+def _pick(
+    end: np.ndarray, rank: np.ndarray, filed: np.ndarray, first: bool = False
+) -> tuple[np.ndarray, np.ndarray]:
+    """One figure per period: the most preferred tag, from the latest filing (``first``: from
+    the first). Returns the positions of the chosen rows (by period end) and each period's first
+    filing date (when it became public)."""
+    when = filed.astype("int64")
+    order = np.lexsort((when if first else -when, rank, end.astype("int64")))
+    ends_sorted = end[order]
+    new_end = np.r_[True, ends_sorted[1:] != ends_sorted[:-1]]
+    chosen = order[new_end]
+    starts = np.flatnonzero(new_end)
+    known = np.minimum.reduceat(filed[order].astype("int64"), starts).astype("datetime64[D]")
+    return chosen, known
 
 
-def _pick(df: pd.DataFrame) -> pd.DataFrame:
-    """One figure per period: the most preferred tag, from the latest filing; ``known`` is the
-    first filing date of that period (when it became public)."""
-    known = df.groupby("end")["filed"].min()
-    best = df.sort_values(["rank", "filed"], ascending=[True, False]).drop_duplicates(
-        "end", keep="first"
-    )
-    best = best.set_index("end")
-    best["known"] = known
-    return best.reset_index()
+def _arrays(f: pd.DataFrame) -> dict[str, np.ndarray]:
+    return {
+        "end": pd.to_datetime(f["end"]).to_numpy().astype("datetime64[D]"),
+        "start": pd.to_datetime(f["start"]).to_numpy().astype("datetime64[D]"),
+        "filed": pd.to_datetime(f["filed"]).to_numpy().astype("datetime64[D]"),
+        "rank": f["rank"].to_numpy(dtype="int64"),
+        "value": f["value"].to_numpy(dtype=float),
+    }
+
+
+def _select(
+    facts: pd.DataFrame, symbol: str | None, concept: str, as_of: date | None
+) -> pd.DataFrame:
+    f = facts
+    if symbol is not None:
+        f = f[f["symbol"] == symbol]
+    f = f[f["concept"] == concept]
+    if as_of is not None:
+        f = f[f["filed"] <= as_of]
+    return f
 
 
 def quarterly(
-    facts: pd.DataFrame, symbol: str, concept: str, *, as_of: date | None = None
+    facts: pd.DataFrame,
+    symbol: str | None,
+    concept: str,
+    *,
+    as_of: date | None = None,
+    first_reported: bool = False,
 ) -> pd.DataFrame:
     """One row per fiscal quarter: ``end, start, value, known, derived`` (``derived``: the fourth
-    quarter, the year less three quarters). With ``as_of``, only filings made by then count."""
+    quarter, the year less three quarters). With ``as_of``, only filings made by then count;
+    with ``first_reported``, each quarter's value as first published (later restatements
+    ignored), which is what the market saw on ``known``. ``symbol=None`` when ``facts`` holds one
+    company already (faster)."""
     cols = ["end", "start", "value", "known", "derived"]
-    f = facts[(facts["symbol"] == symbol) & (facts["concept"] == concept)]
-    if as_of is not None:
-        f = f[f["filed"] <= as_of]
-    f = f.dropna(subset=["start"])
+    f = _select(facts, symbol, concept, as_of)
+    f = f[f["start"].notna()]
     if f.empty:
         return pd.DataFrame(columns=cols)
-    days = _days(f)
-    q = _pick(f[days.between(*QUARTER_DAYS)])
-    years = _pick(f[days.between(*YEAR_DAYS)])
-    rows = [
-        {"end": r["end"], "start": r["start"], "value": r["value"], "known": r["known"],
-         "derived": False}
-        for _, r in q.iterrows()
-    ]  # fmt: skip
-    have = set(q["end"])
-    for _, y in years.iterrows():
-        if y["end"] in have:
-            continue
-        inside = q[(q["start"] >= y["start"] - timedelta(days=7)) & (q["end"] < y["end"])]
-        inside = inside[inside["end"] <= y["end"] - timedelta(days=60)]
-        if len(inside) != 3:
-            continue
-        rows.append(
-            {
-                "end": y["end"],
-                "start": max(inside["end"]) + timedelta(days=1),
-                "value": float(y["value"]) - float(inside["value"].sum()),
-                "known": y["known"],
-                "derived": True,
-            }
+    a = _arrays(f)
+    days = (a["end"] - a["start"]).astype(int)
+    out_end, out_start, out_value, out_known, out_derived = [], [], [], [], []
+    is_q = (days >= QUARTER_DAYS[0]) & (days <= QUARTER_DAYS[1])
+    is_y = (days >= YEAR_DAYS[0]) & (days <= YEAR_DAYS[1])
+    q_idx = np.flatnonzero(is_q)
+    if len(q_idx):
+        chosen, known = _pick(a["end"][q_idx], a["rank"][q_idx], a["filed"][q_idx], first_reported)
+        rows = q_idx[chosen]
+        q_end, q_start, q_val = a["end"][rows], a["start"][rows], a["value"][rows]
+        out_end += list(q_end)
+        out_start += list(q_start)
+        out_value += list(q_val)
+        out_known += list(known)
+        out_derived += [False] * len(rows)
+    else:
+        q_end = np.array([], dtype="datetime64[D]")
+        q_start, q_val = q_end, np.array([], dtype=float)
+    y_idx = np.flatnonzero(is_y)
+    if len(y_idx) and len(q_end):
+        chosen, y_known = _pick(
+            a["end"][y_idx], a["rank"][y_idx], a["filed"][y_idx], first_reported
         )
-    out = pd.DataFrame(rows, columns=cols).sort_values("end").reset_index(drop=True)
-    return out
+        rows = y_idx[chosen]
+        y_end, y_start, y_val = a["end"][rows], a["start"][rows], a["value"][rows]
+        inside = (
+            (q_start[None, :] >= (y_start - np.timedelta64(7, "D"))[:, None])
+            & (q_end[None, :] < y_end[:, None])
+            & (q_end[None, :] <= (y_end - np.timedelta64(60, "D"))[:, None])
+        )
+        count = inside.sum(axis=1)
+        total = (inside * q_val[None, :]).sum(axis=1)
+        last_q = np.where(inside, q_end[None, :], np.datetime64("1900-01-01", "D")).max(axis=1)
+        have = set(q_end.tolist())
+        for i in np.flatnonzero(count == 3):
+            if y_end[i].item() in have:
+                continue
+            out_end.append(y_end[i])
+            out_start.append(last_q[i] + np.timedelta64(1, "D"))
+            out_value.append(float(y_val[i] - total[i]))
+            out_known.append(y_known[i])
+            out_derived.append(True)
+    out = pd.DataFrame(
+        {
+            "end": [x.item() for x in np.array(out_end, dtype="datetime64[D]")],
+            "start": [x.item() for x in np.array(out_start, dtype="datetime64[D]")],
+            "value": np.array(out_value, dtype=float),
+            "known": [x.item() for x in np.array(out_known, dtype="datetime64[D]")],
+            "derived": out_derived,
+        },
+        columns=cols,
+    )
+    return out.sort_values("end").reset_index(drop=True)
 
 
 def balances(
-    facts: pd.DataFrame, symbol: str, concept: str, *, as_of: date | None = None
+    facts: pd.DataFrame,
+    symbol: str | None,
+    concept: str,
+    *,
+    as_of: date | None = None,
+    first_reported: bool = False,
 ) -> pd.DataFrame:
     """A balance (equity, assets, shares) on each reporting date: ``end, value, known``."""
-    f = facts[(facts["symbol"] == symbol) & (facts["concept"] == concept)]
-    if as_of is not None:
-        f = f[f["filed"] <= as_of]
+    f = _select(facts, symbol, concept, as_of)
     if f.empty:
         return pd.DataFrame(columns=["end", "value", "known"])
-    return _pick(f)[["end", "value", "known"]].sort_values("end").reset_index(drop=True)
+    a = _arrays(f.assign(start=f["end"]))
+    chosen, known = _pick(a["end"], a["rank"], a["filed"], first_reported)
+    out = pd.DataFrame(
+        {
+            "end": [x.item() for x in a["end"][chosen]],
+            "value": a["value"][chosen],
+            "known": [x.item() for x in known],
+        }
+    )
+    return out.sort_values("end").reset_index(drop=True)
 
 
 def trailing(q: pd.DataFrame, n: int = 4) -> float | None:
@@ -352,6 +418,70 @@ def snapshot(facts: pd.DataFrame, symbols: Sequence[str], as_of: date) -> pd.Dat
         row["known"] = eps["known"].iloc[-1] if len(eps) else None
         rows.append(row)
     return pd.DataFrame(rows)
+
+
+HISTORY_COLUMNS = (
+    "symbol", "known", "period_end", "ttm_eps_diluted", "ttm_net_income", "ttm_revenue",
+    "ttm_gross_profit", "equity", "assets", "shares_outstanding", "shares_known",
+)  # fmt: skip
+
+
+def history(facts: pd.DataFrame) -> pd.DataFrame:
+    """For every company, what was known after each of its filings, as first reported: one row
+    per quarter, from the day it was filed (``known``), with the trailing twelve months of each
+    flow and the latest balances known by then. Look a date up with ``as_known``. Restatements
+    are ignored (the original figure is what the market saw); nothing appears before it was
+    filed."""
+    rows = []
+    for symbol, company in facts.groupby("symbol"):
+        flows = {c: _ttm(quarterly(company, None, c, first_reported=True)) for c in FLOWS}
+        bals = {
+            c: balances(company, None, c, first_reported=True)
+            for c in ("equity", "assets", "shares_outstanding")
+        }
+        spine = flows["eps_diluted"] if len(flows["eps_diluted"][0]) else flows["net_income"]
+        for end, known in zip(spine[0], spine[3], strict=True):
+            row: dict[str, Any] = {
+                "symbol": symbol,
+                "known": known.item(),
+                "period_end": end.item(),
+            }
+            for c, (ends, ttm, _, _, ttm_known) in flows.items():
+                ok = np.flatnonzero((ends <= end) & (ttm_known <= known) & ~np.isnan(ttm))
+                row[f"ttm_{c}"] = float(ttm[ok[-1]]) if len(ok) else None
+            for c, b in bals.items():
+                b_known = b["known"].to_numpy().astype("datetime64[D]")
+                ok = np.flatnonzero(b_known <= known)
+                row[c] = float(b["value"].iloc[ok[-1]]) if len(ok) else None
+                if c == "shares_outstanding":
+                    row["shares_known"] = b["known"].iloc[ok[-1]] if len(ok) else None
+            rows.append(row)
+    out = pd.DataFrame(rows, columns=list(HISTORY_COLUMNS))
+    return out.sort_values(["symbol", "known"]).reset_index(drop=True)
+
+
+def _ttm(q: pd.DataFrame) -> tuple[np.ndarray, ...]:
+    """Per quarter (by end): the trailing four quarters' sum (NaN unless all four are there,
+    about three months apart) and the date the last of them became known."""
+    ends = q["end"].to_numpy().astype("datetime64[D]") if len(q) else np.array([], "datetime64[D]")
+    known = (
+        q["known"].to_numpy().astype("datetime64[D]") if len(q) else np.array([], "datetime64[D]")
+    )
+    values = q["value"].to_numpy(dtype=float) if len(q) else np.array([], dtype=float)
+    ttm = np.full(len(q), np.nan)
+    ttm_known = known.copy()
+    for i in range(3, len(q)):
+        gaps = np.diff(ends[i - 3 : i + 1]).astype(int)
+        if gaps.min() >= 70 and gaps.max() <= 110:
+            ttm[i] = values[i - 3 : i + 1].sum()
+            ttm_known[i] = known[i - 3 : i + 1].max()
+    return ends, ttm, values, known, ttm_known
+
+
+def as_known(hist: pd.DataFrame, when: date) -> pd.DataFrame:
+    """Each company's latest row of ``history`` known on ``when``, indexed by symbol."""
+    seen = hist[hist["known"] <= when]
+    return seen.groupby("symbol").tail(1).set_index("symbol")
 
 
 # -- earnings surprises -------------------------------------------------------------------------

@@ -29,7 +29,7 @@ from tp_trading.execution import ExecutionConfig, SimulatedExecution
 from tp_trading.portfolio import Portfolio, Position
 from tp_trading.risk import AllowAll, Book, RiskGate
 from tp_trading.sizing import Sizing
-from tp_trading.strategy import Context, Strategy
+from tp_trading.strategy import Context, Reference, Strategy
 
 ORDER_COLUMNS = [
     "id", "session", "symbol", "side", "quantity", "order_type", "limit_price", "stop_price",
@@ -59,8 +59,15 @@ class BacktestContext(Context):
         fractional: bool,
         sectors: Mapping[str, str] | None = None,
         sizing: Sizing | None = None,
+        reference: Reference | None = None,
     ):
-        super().__init__(strategy.name, fractional=fractional, sectors=sectors, sizing=sizing)
+        super().__init__(
+            strategy.name,
+            fractional=fractional,
+            sectors=sectors,
+            sizing=sizing,
+            reference=reference,
+        )
         self._data = data
         self._portfolio = portfolio
         self._symbols = strategy.symbols()
@@ -155,6 +162,7 @@ class BacktestEngine:
         risk: RiskGate | None = None,
         *,
         sectors: Mapping[str, str] | None = None,
+        reference: Reference | None = None,
     ) -> None:
         missing = sorted(set(strategy.symbols()) - set(data.symbols))
         if missing:
@@ -164,6 +172,7 @@ class BacktestEngine:
         self.config = config or EngineConfig()
         self.risk: RiskGate = risk if risk is not None else AllowAll()
         self.sectors = dict(sectors or {})
+        self.reference = reference
 
     def run(self) -> BacktestResult:
         data, cfg, strategy = self.data, self.config, self.strategy
@@ -174,7 +183,13 @@ class BacktestEngine:
 
         portfolio = Portfolio(cfg.initial_cash)
         ctx = BacktestContext(
-            strategy, data, portfolio, cfg.execution.fractional, self.sectors, cfg.sizing
+            strategy,
+            data,
+            portfolio,
+            cfg.execution.fractional,
+            self.sectors,
+            cfg.sizing,
+            self.reference,
         )
         execution = SimulatedExecution(data, cfg.execution)
         pending: list[Order] = []

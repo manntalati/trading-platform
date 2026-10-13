@@ -24,6 +24,7 @@ from tp_core.storage import Lake, new_run_id, write_json, write_parquet
 from tp_risk.limits import Limits
 from tp_risk.manager import RiskManager
 from tp_risk.state import MemoryRiskState
+from tp_strategies.reference import LakeReference
 from tp_trading.data import MarketData
 from tp_trading.engine import BacktestEngine, BacktestResult, EngineConfig
 from tp_trading.risk import RiskGate
@@ -53,7 +54,10 @@ def run_backtest(
     symbols = list(dict.fromkeys([*strategy.symbols(), *([benchmark] if benchmark else [])]))
     bars = load_bars(lake, symbols, end=config.end)
     data = MarketData.from_bars(bars)
-    result = BacktestEngine(strategy, data, config, risk, sectors=sectors).run()
+    reference = LakeReference(lake)
+    result = BacktestEngine(
+        strategy, data, config, risk, sectors=sectors, reference=reference
+    ).run()
 
     bench = None
     if benchmark:

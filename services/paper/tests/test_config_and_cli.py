@@ -16,9 +16,13 @@ from tp_strategies.library import REGISTRY
 REPO = Path(__file__).resolve().parents[3]
 
 
-def test_repo_book_runs_every_library_strategy_inside_a_default_paper_account() -> None:
+def test_repo_book_runs_library_strategies_inside_a_default_paper_account() -> None:
     book = PaperBook.load(REPO / "config" / "paper.toml")
-    assert {s.name for s in book.sleeves} == set(REGISTRY)
+    names = {s.name for s in book.sleeves}
+    assert names <= set(REGISTRY)
+    # the first six; the later ones join once they pass the backtest gate
+    assert {"ma-timing", "ts-momentum", "xs-momentum", "dual-momentum", "rsi2",
+            "leveraged-momentum"} <= names  # fmt: skip
     assert book.capital <= 100_000  # Alpaca paper accounts start at $100k
     assert {s.approval for s in book.sleeves} == {"auto"}  # the bot trades unattended
 

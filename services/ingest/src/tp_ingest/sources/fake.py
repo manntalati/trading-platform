@@ -12,12 +12,12 @@ import math
 import zlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 
 import numpy as np
 import pandas as pd
 
-from tp_core.calendar import session_midnight_utc, sessions
+from tp_core.calendar import NEW_YORK, session_midnight_utc, sessions
 from tp_core.occ import Right, format_occ
 from tp_ingest.sources.base import (
     BAR_COLUMNS,
@@ -69,6 +69,42 @@ class FakeSource:
         if self.mutate is not None:
             df = self.mutate(df)
         return df.reset_index(drop=True)[list(BAR_COLUMNS)]
+
+    def intraday_bars(
+        self, symbols: Sequence[str], start: date, end: date, minutes: int = 5
+    ) -> pd.DataFrame:
+        """Regular-hours bars for each session: a random walk from a fixed open, with a trend
+        on some days (so breakouts sometimes follow through) and a little noise outside it."""
+        self.calls.append(("intraday_bars", tuple(symbols), start, end))
+        rows = []
+        per_day = 390 // minutes
+        for symbol in symbols:
+            for day in sessions(start, end):
+                seed = zlib.crc32(f"{symbol}-{day.isoformat()}".encode())
+                rng = np.random.default_rng(seed)
+                drift = rng.choice([-0.0001, 0.0, 0.0, 0.0001]) * minutes / 5
+                steps = rng.normal(drift, 0.0012 * math.sqrt(minutes / 5), per_day)
+                closes = 100.0 * np.exp(np.cumsum(steps))
+                opens = np.r_[100.0, closes[:-1]]
+                spread = np.abs(rng.normal(0, 0.0008, per_day))
+                first = datetime.combine(day, time(9, 30), tzinfo=NEW_YORK)
+                for i in range(per_day):
+                    rows.append(
+                        {
+                            "symbol": symbol,
+                            "timestamp": (first + timedelta(minutes=minutes * i)).astimezone(UTC),
+                            "open": opens[i],
+                            "high": max(opens[i], closes[i]) * (1 + spread[i]),
+                            "low": min(opens[i], closes[i]) * (1 - spread[i]),
+                            "close": closes[i],
+                            "volume": float(rng.integers(50_000, 200_000)),
+                            "trade_count": float(rng.integers(100, 1000)),
+                            "vwap": (opens[i] + closes[i]) / 2,
+                        }
+                    )
+        df = pd.DataFrame(rows, columns=list(BAR_COLUMNS))
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+        return df
 
     def corporate_actions(self, symbols: Sequence[str], start: date, end: date) -> pd.DataFrame:
         self.calls.append(("corporate_actions", tuple(symbols), start, end))

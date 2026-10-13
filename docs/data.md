@@ -15,6 +15,7 @@ uv run tp-data options snapshot            # today's chains: [options] universe 
 uv run tp-data macro backfill               # one-off: VIX and Treasury yields from FRED since 1990
 uv run tp-data macro daily                  # scheduled: the last 30 days
 uv run tp-data fundamentals                 # SEC filings: company facts and earnings dates
+uv run tp-data bars intraday --symbols SPY,QQQ --days 250  # 5-minute bars for intraday research
 ```
 
 ```python
@@ -34,12 +35,14 @@ data/
     alpaca/corporate_actions/ingest_date=YYYY-MM-DD/run-<run id>.parquet
     alpaca/option_chain_snapshots/snapshot_date=YYYY-MM-DD/underlying=<SYM>/run-<run id>.parquet
     fred/macro_1d/ingest_date=YYYY-MM-DD/run-<run id>.parquet
+    alpaca/stock_bars_5m/ingest_date=YYYY-MM-DD/run-<run id>.parquet
     sec/company_facts/ingest_date=YYYY-MM-DD/run-<run id>.parquet
     sec/earnings_events/ingest_date=YYYY-MM-DD/run-<run id>.parquet
   clean/                                derived: rebuilt from raw/ on every run
     stock_bars_1d/symbol=<SYM>/part.parquet
     stock_bars_1d_quarantine/part.parquet
     macro_1d/part.parquet
+    stock_bars_5m/symbol=<SYM>/part.parquet
     sec_facts/part.parquet
     earnings_events/part.parquet
   reports/validation/stock_bars_1d-<UTC time>.json
@@ -205,6 +208,15 @@ EPS is per share as reported: compare it across a split with `split_adjusted_eps
 quarter by the split factor of the day it was filed). EDGAR has XBRL figures from 2009 on; tags
 differ between companies and years (revenue has four common ones), so a company can lack a
 concept for some quarters.
+
+## Intraday bars
+
+`tp-data bars intraday` downloads 5-minute bars (`--minutes` for another length) for a few
+symbols over the last `--days` sessions, regular hours only (9:30 to 16:00 New York), into
+`clean/stock_bars_5m` (`tp_core.intraday.load_intraday`). Prices are raw: fine within a day,
+which is what intraday research needs. Run it by hand when you want more history; downloading an
+overlapping window again replaces bars rather than duplicating them. Alpaca's intraday history
+goes back to 2016.
 
 ## Known limitations
 

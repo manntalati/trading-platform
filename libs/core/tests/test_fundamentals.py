@@ -173,3 +173,20 @@ def test_summary() -> None:
     assert s["gross_profitability"] == pytest.approx(ttm * 2e9 / 50e9)
     assert s["sue"] is not None
     assert f.summary(df, ev, "NONE", 100.0, date(2024, 12, 1)) is None
+
+
+def test_history_is_first_reported_and_point_in_time() -> None:
+    df = facts(restated={(2022, 2): 9.9})
+    h = f.history(df)
+    assert set(h["symbol"]) == {"XYZ"}
+    known = f.as_known(h, date(2024, 12, 1)).loc["XYZ"]
+    assert known["period_end"] == date(2024, 9, 30)
+    assert known["ttm_eps_diluted"] == pytest.approx(
+        EPS[(2023, 4)] + sum(EPS[(2024, k)] for k in (1, 2, 3))
+    )
+    # the restatement is ignored: the trailing year as of the original filings
+    mid = f.as_known(h, date(2022, 12, 1)).loc["XYZ"]
+    assert mid["ttm_eps_diluted"] == pytest.approx(
+        EPS[(2021, 4)] + sum(EPS[(2022, k)] for k in (1, 2, 3))
+    )
+    assert f.as_known(h, date(2020, 1, 1)).empty
