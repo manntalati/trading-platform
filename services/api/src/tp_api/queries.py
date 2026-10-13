@@ -28,6 +28,8 @@ from tp_core.portfolio import (
     BENCHMARK_SYMBOLS,
     CASH_KIND,
     Classifier,
+    PortfolioSnapshot,
+    account_cash,
     benchmark_returns,
     concentration,
     exposures,
@@ -264,15 +266,17 @@ def portfolio(ctx: Context, now: datetime | None = None) -> dict[str, Any]:
     today = (now or datetime.now(UTC)).astimezone(NEW_YORK).date()
     table = _with_option_terms(ctx, holdings_table(snap, ctx.classifier, today))
     priced = set(ctx.prices().columns)
-    columns = ["source", "account_name", "account_number_masked", "institution", "cash"]
+    columns = ["source", "account_name", "account_number_masked", "institution"]
+    cash = account_cash(snap.accounts, snap.holdings)
     accounts = snap.accounts[
         [*columns, "total_value", "taken_at", "holdings_as_of", "transactions_as_of"]
-    ]
+    ].assign(**{c: cash[c] for c in ("cash", "reported_cash", "unsettled", "buying_power")})
     return {
         "synced": True,
         "freshness": freshness(snap.accounts),
         "total_value": snap.total_value,
-        "cash": float(snap.accounts["cash"].fillna(0).sum()),
+        "cash": snap.cash,
+        "cash_detail": cash_summary(snap),
         "accounts": records(accounts),
         "holdings": records(table.assign(priced=table["symbol"].isin(priced))),
         "by_sector": clean(exposures(table, "sector").to_dict()),
@@ -336,6 +340,24 @@ def _pnl(ctx: Context, table: pd.DataFrame, value: float, today: date) -> dict[s
         # Only meaningful when the synced history starts with the account's first deposit.
         "value_minus_deposits": value - summary.net_deposits if summary.net_deposits else None,
     }
+
+
+def cash_summary(snap: PortfolioSnapshot) -> dict[str, Any]:
+    """Cash across accounts, reconciled with the broker's totals (``account_cash``): what's
+    really there, what the broker's cash balance says, and the difference still settling."""
+    cash = account_cash(snap.accounts, snap.holdings)
+    power = cash["buying_power"].dropna()
+    out: dict[str, Any] = clean(
+        {
+            "cash": float(cash["cash"].sum()),
+            "reported_cash": float(cash["reported_cash"].sum()),
+            "unsettled": float(cash["unsettled"].sum()),
+            "buying_power": float(power.sum()) if len(power) else None,
+            "holdings_value": float(cash["holdings_value"].sum()),
+            "total_value": float(cash["total_value"].sum()),
+        }
+    )
+    return out
 
 
 def freshness(accounts: pd.DataFrame) -> dict[str, Any]:

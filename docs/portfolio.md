@@ -105,8 +105,17 @@ same tear-sheet metrics (CAGR, volatility, Sharpe, max drawdown, beta to SPY).
 
 Money-market sweep positions (Fidelity's SPAXX core position) are flagged by SnapTrade as cash
 equivalents and are already inside the account's cash balance, so they are not stored as
-holdings; holdings + cash reconcile with the broker's reported total (checked against a live
-Fidelity account to the cent).
+holdings.
+
+## Cash, and trades that haven't settled
+
+Right after a purchase, the broker's account total already counts the new position, but its cash
+balance still includes the money paid for it until the trade settles (the next business day).
+Adding the two would count that money twice. So when the broker reports a total, the platform
+takes **cash = total − holdings**, which keeps holdings + cash equal to the account's value and
+the weights honest. The difference from the broker's cash balance is shown as money "paying for
+trades that haven't settled" (or, after a sale, proceeds still to arrive); the broker's buying
+power is shown next to it. When nothing is settling, the two agree to the cent.
 
 ## Classification
 
@@ -119,4 +128,5 @@ shared file, so your positions never end up in the public repo.
 
 - SnapTrade's daily plans cache positions once a day. Quantities rarely change intraday; live
   values come from the dashboard's quote stream.
-- Options and crypto positions are stored and valued but not yet analysed.
+- Crypto positions are stored and valued but not analysed. Options are, on the Positions tab
+  ([positions.md](positions.md)).

@@ -212,6 +212,29 @@ def test_option_chain_maps_quotes_and_greeks(source: AlpacaSource) -> None:
 
 
 @responses.activate
+def test_option_snapshots_of_specific_contracts(source: AlpacaSource) -> None:
+    responses.get(
+        "https://data.alpaca.markets/v1beta1/options/snapshots",
+        json={
+            "snapshots": {
+                "XYZ260116C00100000": {
+                    "latestQuote": {"ap": 1.1, "bp": 1.0, "t": "2026-01-12T15:00:00Z"},
+                    "impliedVolatility": 0.4,
+                }
+            },
+            "next_page_token": None,
+        },
+    )
+    df = source.option_snapshots(["XYZ260116C00100000", "XYZ260116P00090000"])
+    assert df.set_index("contract").loc["XYZ260116C00100000", "bid"] == 1.0
+    assert len(df) == 1  # the vendor had nothing for the put
+    query = parse_qs(urlparse(responses.calls[0].request.url).query)
+    assert query["symbols"] == ["XYZ260116C00100000,XYZ260116P00090000"]
+    assert query["feed"] == ["indicative"]
+    assert source.option_snapshots([]).empty
+
+
+@responses.activate
 def test_option_contracts_paginates_manually(source: AlpacaSource) -> None:
     def contract(symbol: str, oi: str | None) -> dict[str, object]:
         return {

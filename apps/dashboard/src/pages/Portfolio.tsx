@@ -96,7 +96,15 @@ export default function Portfolio({ live }: { live: LiveState }) {
             ) : null
           }
         />
-        <Stat label="Cash" value={money(p.cash)} sub={pct((p.cash ?? 0) / (p.total_value || 1), 1) + " of portfolio"} />
+        <Stat
+          label="Cash"
+          value={money(p.cash)}
+          sub={
+            p.cash_detail && Math.abs(p.cash_detail.unsettled) >= 1
+              ? `${pct((p.cash ?? 0) / (p.total_value || 1), 1)} of portfolio · broker's balance ${money(p.cash_detail.reported_cash)} incl. ${money(Math.abs(p.cash_detail.unsettled))} not yet settled`
+              : `${pct((p.cash ?? 0) / (p.total_value || 1), 1)} of portfolio`
+          }
+        />
         <Stat
           label="Largest position"
           value={p.concentration?.largest_symbol || "—"}
@@ -199,7 +207,8 @@ export function OptionsCard({ options }: { options: OptionRow[] }) {
       title="Options"
       hint={
         <>
-          {options.length} positions · {money(value)} · <Delta value={unrealized} kind="money" /> unrealized · premiums from the last brokerage sync, underlyings live
+          {options.length} positions · {money(value)} · <Delta value={unrealized} kind="money" /> unrealized · premiums from the last brokerage sync, underlyings live ·{" "}
+          <a href="#/positions">live quotes, greeks and odds</a>
         </>
       }
     >
@@ -225,7 +234,9 @@ export function OptionsCard({ options }: { options: OptionRow[] }) {
               return (
                 <tr key={o.symbol}>
                   <td title={o.symbol}>
-                    <strong>{o.label}</strong>
+                    <a href={`#/positions/${encodeURIComponent(o.symbol)}`}>
+                      <strong>{o.label}</strong>
+                    </a>
                   </td>
                   <td className="num">{qty(o.quantity)}</td>
                   <td className="num">{money(o.premium, true)}</td>

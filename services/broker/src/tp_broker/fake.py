@@ -107,6 +107,7 @@ class FakeBroker:
                 # through the day before
                 "holdings_as_of": pd.Timestamp(self.as_of, tz="UTC") + pd.Timedelta(hours=20),
                 "transactions_as_of": self.as_of - timedelta(days=1),
+                "buying_power": self.cash[key],
             }
             for key, (account_id, name, masked) in ACCOUNTS.items()
         ]

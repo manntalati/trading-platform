@@ -109,6 +109,11 @@ class PortfolioSnapshot:
     def total_value(self) -> float:
         return float(account_totals(self.accounts, self.holdings).sum())
 
+    @property
+    def cash(self) -> float:
+        """Cash as it adds up with the holdings to the accounts' value (see ``account_cash``)."""
+        return float(account_cash(self.accounts, self.holdings)["cash"].sum())
+
 
 def read_accounts(lake: Lake) -> pd.DataFrame:
     return read_parquet_dir(lake.raw_dir(RAW_BROKER_ACCOUNTS), RAW_BROKER_ACCOUNTS_SCHEMA)
@@ -157,6 +162,48 @@ def account_totals(accounts: pd.DataFrame, holdings: pd.DataFrame) -> pd.Series:
         cash = float(row["cash"]) if pd.notna(row["cash"]) else 0.0
         totals.append(float(held.get(k, 0.0)) + cash)
     return pd.Series(totals, index=accounts.index, dtype=float)
+
+
+def account_cash(accounts: pd.DataFrame, holdings: pd.DataFrame) -> pd.DataFrame:
+    """Each account's cash, reconciled with its value; one row per account (same index).
+
+    Right after a purchase the broker's account total already counts the new position, but its
+    cash balance still holds the money paid for it until the trade settles (the next business
+    day); after a sale it's the other way round. So when the broker reports a total, cash is
+    taken as that total less the holdings, which keeps holdings + cash = the account's value.
+    ``unsettled`` is the reported cash less that: money committed to purchases that haven't
+    settled (or, when negative, sale proceeds still to arrive).
+    """
+    key = ["source", "account_id", "taken_at"]
+    held: dict[tuple[object, ...], float] = {}
+    unpriced: set[tuple[object, ...]] = set()
+    if not holdings.empty:
+        for k, g in holdings.groupby(key):
+            held[k] = float(g["market_value"].sum())
+            if g["market_value"].isna().any():
+                unpriced.add(k)
+    rows = []
+    for _, a in accounts.iterrows():
+        k = (a["source"], a["account_id"], a["taken_at"])
+        reported = float(a["cash"]) if pd.notna(a["cash"]) else 0.0
+        total = float(a["total_value"]) if pd.notna(a["total_value"]) else math.nan
+        holdings_value = held.get(k, 0.0)
+        # A holding without a price would turn up as cash; keep the broker's figure then.
+        cash = total - holdings_value if total == total and k not in unpriced else reported
+        power = a.get("buying_power")
+        rows.append(
+            {
+                "reported_cash": reported,
+                "holdings_value": holdings_value,
+                "total_value": total if total == total else holdings_value + reported,
+                "cash": cash,
+                "unsettled": reported - cash,
+                "buying_power": float(power) if power is not None and pd.notna(power) else math.nan,
+            }
+        )
+    columns = ["reported_cash", "holdings_value", "total_value", "cash", "unsettled",
+               "buying_power"]  # fmt: skip
+    return pd.DataFrame(rows, columns=columns, index=accounts.index, dtype=float)
 
 
 def held_symbols(lake: Lake) -> list[str]:
@@ -311,8 +358,8 @@ def holdings_table(
                     "days_to_expiry": (occ.expiration - today).days if today else math.nan,
                 }
             rows.append(row)
-    cash = float(snap.accounts["cash"].fillna(0.0).sum())
-    if cash:
+    cash = snap.cash
+    if abs(cash) >= 0.005:
         rows.append(
             {"symbol": "CASH", "description": "Cash", "kind": CASH_KIND, "market_value": cash}
         )

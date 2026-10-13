@@ -218,6 +218,7 @@ def _num(value: Any) -> float | None:
 def _account_row(account: Mapping[str, Any], balances: list[dict[str, Any]]) -> dict[str, Any]:
     usd = [b for b in balances if (b.get("currency") or {}).get("code", "USD") == "USD"]
     cash = sum(_num(b.get("cash")) or 0.0 for b in usd) if usd else None
+    power = [_num(b.get("buying_power")) for b in usd]
     total = ((account.get("balance") or {}).get("total") or {}).get("amount")
     return {
         "account_id": str(account["id"]),
@@ -232,6 +233,9 @@ def _account_row(account: Mapping[str, Any], balances: list[dict[str, Any]]) -> 
         "currency": "USD",
         "holdings_as_of": _holdings_as_of(account),
         "transactions_as_of": _transactions_as_of(account),
+        "buying_power": (
+            sum(p for p in power if p is not None) if any(p is not None for p in power) else None
+        ),
     }
 
 

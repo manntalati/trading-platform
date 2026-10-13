@@ -149,6 +149,8 @@ RAW_BROKER_ACCOUNTS_SCHEMA = pa.schema(
         # pulled from the brokerage, and the last day of transactions it has. Added later.
         ("holdings_as_of", _TS),
         ("transactions_as_of", pa.date32()),
+        # Cash available to trade now, as the broker reports it. Added later.
+        ("buying_power", pa.float64()),
     ]
 )
 

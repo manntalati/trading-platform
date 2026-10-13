@@ -18,6 +18,7 @@ ACCOUNT_COLUMNS = (
     "currency",
     "holdings_as_of",  # when the aggregator last pulled positions from the brokerage (UTC)
     "transactions_as_of",  # the last day of transactions it has
+    "buying_power",  # cash available to trade now: excludes purchases that haven't settled
 )
 HOLDING_COLUMNS = (
     "account_id",

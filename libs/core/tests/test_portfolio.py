@@ -121,6 +121,45 @@ def test_holdings_table_merges_accounts(lake: Lake, classifier: pf.Classifier) -
     assert conc["largest_weight"] == pytest.approx(2000 / 2800)
 
 
+def test_cash_is_reconciled_with_the_reported_total(lake: Lake, classifier: pf.Classifier) -> None:
+    # A: bought 400 of XYZ today; the total counts it, the cash balance hasn't paid for it yet.
+    # B: no total reported, so its cash is taken as given.
+    store_sync(
+        lake,
+        DAY1,
+        [
+            {"account_id": "A", "cash": 1000.0, "total_value": 3000.0, "buying_power": 600.0},
+            {"account_id": "B", "cash": 50.0},
+        ],
+        [holding("A", "ABC", 10, 200), holding("A", "XYZ", 4, 100), holding("B", "ABC", 1, 200)],
+    )
+    snap = pf.latest_snapshot(lake)
+    cash = pf.account_cash(snap.accounts, snap.holdings).set_index(snap.accounts["account_id"])
+    assert cash.loc["A", "cash"] == pytest.approx(600.0)
+    assert cash.loc["A", "unsettled"] == pytest.approx(400.0)
+    assert cash.loc["A", "buying_power"] == pytest.approx(600.0)
+    assert cash.loc["B", "cash"] == pytest.approx(50.0)
+    assert cash.loc["B", "unsettled"] == pytest.approx(0.0)
+    assert snap.cash == pytest.approx(650.0)
+
+    table = pf.holdings_table(snap, classifier)
+    assert table.set_index("symbol").loc["CASH", "market_value"] == pytest.approx(650.0)
+    # The weights add up against the same value the account total shows.
+    assert table["market_value"].sum() == pytest.approx(snap.total_value)
+
+
+def test_unpriced_holding_keeps_the_reported_cash(lake: Lake) -> None:
+    unpriced = holding("A", "ODD", 1, 0) | {"price": None, "market_value": None}
+    store_sync(
+        lake,
+        DAY1,
+        [{"account_id": "A", "cash": 100.0, "total_value": 900.0}],
+        [holding("A", "ABC", 2, 200), unpriced],
+    )
+    snap = pf.latest_snapshot(lake)
+    assert snap.cash == pytest.approx(100.0)  # 900 - 400 would count ODD's value as cash
+
+
 def test_value_history_carries_missing_account_forward(lake: Lake) -> None:
     store_sync(
         lake,

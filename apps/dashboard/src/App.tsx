@@ -7,6 +7,7 @@ import Options from "./pages/Options";
 import Overview from "./pages/Overview";
 import Paper from "./pages/Paper";
 import Portfolio from "./pages/Portfolio";
+import Positions from "./pages/Positions";
 import Strategies from "./pages/Strategies";
 import Trades from "./pages/Trades";
 import System from "./pages/System";
@@ -15,6 +16,7 @@ import type { PaperProposal } from "./types";
 const PAGES = [
   { path: "overview", label: "Overview" },
   { path: "portfolio", label: "Portfolio" },
+  { path: "positions", label: "Positions" },
   { path: "trades", label: "Trades" },
   { path: "ideas", label: "Ideas" },
   { path: "strategies", label: "Strategies" },
@@ -25,9 +27,11 @@ const PAGES = [
 ] as const;
 type Page = (typeof PAGES)[number]["path"];
 
-function currentPage(): Page {
-  const hash = window.location.hash.replace(/^#\/?/, "");
-  return (PAGES.find((p) => p.path === hash)?.path ?? "overview") as Page;
+/** ``#/page`` or ``#/page/detail`` (e.g. ``#/positions/XYZ`` opens that position). */
+function route(): [Page, string | null] {
+  const [head, ...rest] = window.location.hash.replace(/^#\/?/, "").split("/");
+  const page = (PAGES.find((p) => p.path === head)?.path ?? "overview") as Page;
+  return [page, rest.length ? decodeURIComponent(rest.join("/")) : null];
 }
 
 type Theme = "auto" | "light" | "dark";
@@ -54,14 +58,14 @@ function useTheme(): [Theme, (t: Theme) => void] {
 }
 
 export default function App() {
-  const [page, setPage] = useState<Page>(currentPage);
+  const [[page, detail], setRoute] = useState<[Page, string | null]>(route);
   const [theme, setTheme] = useTheme();
   const live = useLive();
   const waiting = useApi<PaperProposal[]>("/api/paper/proposals", 60_000);
   const pendingCount = waiting.data?.length ?? 0;
 
   useEffect(() => {
-    const onHash = () => setPage(currentPage());
+    const onHash = () => setRoute(route());
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
@@ -99,6 +103,9 @@ export default function App() {
       <main>
         {page === "overview" && <Overview live={live} />}
         {page === "portfolio" && <Portfolio live={live} />}
+        {page === "positions" && (
+          <Positions selected={detail} onSelect={(symbol) => (window.location.hash = symbol ? `#/positions/${encodeURIComponent(symbol)}` : "#/positions")} />
+        )}
         {page === "trades" && <Trades />}
         {page === "ideas" && <Ideas />}
         {page === "strategies" && <Strategies />}

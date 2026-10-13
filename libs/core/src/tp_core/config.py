@@ -16,6 +16,7 @@ from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BarsFeed = Literal["sip", "iex", "delayed_sip"]
+Effort = Literal["low", "medium", "high", "xhigh", "max"]
 OptionsFeed = Literal["indicative", "opra"]
 
 
@@ -72,6 +73,20 @@ class Settings(BaseSettings):
         default=None, validation_alias="SNAPTRADE_CONSUMER_KEY"
     )
 
+    # Annual risk-free rate for option maths (implied volatility, greeks, odds). The 3-month
+    # T-bill yield is the usual choice; it moves a near-dated option's figures only slightly.
+    risk_free_rate: float = Field(default=0.04, validation_alias="TP_RISK_FREE_RATE")
+
+    # "Ask Claude" about a position (optional; billed to your Anthropic API account). Your
+    # positions and the question are sent to Anthropic's API with each request. (Field names
+    # differ from the variables so a stray CLAUDE_MODEL in the environment isn't picked up.)
+    anthropic_api_key: SecretStr | None = Field(default=None, validation_alias="ANTHROPIC_API_KEY")
+    ask_model: str = Field(default="claude-opus-5-5", validation_alias="TP_CLAUDE_MODEL")
+    # How hard it thinks: higher is slower and costs more; "medium" suits most questions.
+    ask_effort: Effort = Field(default="medium", validation_alias="TP_CLAUDE_EFFORT")
+    # Let it search the web (earnings dates, news); each search adds a small charge.
+    ask_web_search: bool = Field(default=True, validation_alias="TP_CLAUDE_WEB_SEARCH")
+
     def require_alpaca_keys(self) -> tuple[str, str]:
         if self.alpaca_api_key is None or self.alpaca_secret_key is None:
             raise MissingCredentialsError(
@@ -87,6 +102,14 @@ class Settings(BaseSettings):
                 ".env (personal API key from https://dashboard.snaptrade.com)."
             )
         return self.snaptrade_client_id, self.snaptrade_consumer_key.get_secret_value()
+
+    def require_anthropic_key(self) -> str:
+        if self.anthropic_api_key is None:
+            raise MissingCredentialsError(
+                "Anthropic API key not set: put ANTHROPIC_API_KEY in .env (create one in the "
+                "Claude Console, https://platform.claude.com, under API keys)."
+            )
+        return self.anthropic_api_key.get_secret_value()
 
 
 class MissingCredentialsError(RuntimeError):
