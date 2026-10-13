@@ -20,9 +20,22 @@ function Row(props: { label: string; ok: boolean | null; detail: string }) {
 const FLOWS = [
   { from: "Fidelity", via: "SnapTrade → tp-broker sync", to: "Portfolio, Trades, Home" },
   { from: "Alpaca market data", via: "tp-data bars daily / options snapshot", to: "Portfolio stats, Research, Paper trading" },
+  { from: "FRED (St. Louis Fed)", via: "tp-data macro daily", to: "Home (VIX, rates), validation regimes, option pricing" },
   { from: "Paper strategies", via: "tp-paper bot → Alpaca paper account", to: "Paper trading, Trades" },
   { from: "Your questions", via: "Anthropic API (only when you ask Claude)", to: "the chat on a position or idea" },
 ];
+
+export function macroDetail(s: Status): string {
+  const series = s.macro?.series ?? {};
+  const vix = series.VIXCLS;
+  const r10 = series.DGS10;
+  if (!vix && !r10) return "none yet: run tp-data macro backfill";
+  const parts = [];
+  if (vix?.value != null) parts.push(`VIX ${vix.value.toFixed(1)}`);
+  if (r10?.value != null) parts.push(`10-year ${r10.value.toFixed(2)}%`);
+  const failed = Object.keys(s.macro?.latest_report?.errors ?? {});
+  return `${parts.join(" · ")} · as of ${(vix ?? r10)?.date}${failed.length ? ` · last run failed for ${failed.join(", ")}` : ""}`;
+}
 
 function bytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -104,6 +117,11 @@ export default function System({ live }: { live: LiveState }) {
                 label="Option snapshots"
                 ok={s.options.latest_report ? Boolean(s.options.latest_report.ok) : null}
                 detail={s.options.latest_report ? `last ${s.options.latest_report.snapshot_date} · ${s.options.files} files stored` : "none yet"}
+              />
+              <Row
+                label="VIX and Treasury yields"
+                ok={s.macro?.latest_report ? Boolean(s.macro.latest_report.ok) : null}
+                detail={macroDetail(s)}
               />
               <Row
                 label="Brokerage sync"

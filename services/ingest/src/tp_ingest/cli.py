@@ -23,6 +23,7 @@ from tp_core.portfolio import held_symbols
 from tp_core.storage import Lake
 from tp_core.validate import ValidationReport
 from tp_ingest.jobs import bars as bars_jobs
+from tp_ingest.jobs import macro as macro_jobs
 from tp_ingest.jobs import options as options_jobs
 from tp_ingest.sources.base import FullSource
 
@@ -33,6 +34,10 @@ bars_app = typer.Typer(help="Daily stock/ETF bars.", no_args_is_help=True)
 app.add_typer(bars_app, name="bars")
 options_app = typer.Typer(help="Option chain snapshots.", no_args_is_help=True)
 app.add_typer(options_app, name="options")
+macro_app = typer.Typer(
+    help="Macro series from FRED: VIX and Treasury yields.", no_args_is_help=True
+)
+app.add_typer(macro_app, name="macro")
 
 
 class SourceName(StrEnum):
@@ -202,6 +207,46 @@ def options_snapshot(
         typer.echo(f"  FAILED {failure.underlying}: {failure.error}")
     if not result.ok:
         raise typer.Exit(code=1)
+
+
+class MacroSourceName(StrEnum):
+    fred = "fred"
+    fake = "fake"
+
+
+MacroSourceOpt = Annotated[
+    MacroSourceName, typer.Option(help="`fred` (no key needed) or `fake` (synthetic, offline).")
+]
+
+
+def _macro_source(name: MacroSourceName) -> macro_jobs.MacroSource:
+    from tp_ingest.sources.fred import FakeMacroSource, FredSource
+
+    return FakeMacroSource() if name is MacroSourceName.fake else FredSource()
+
+
+def _macro_finish(result: macro_jobs.MacroJobResult) -> None:
+    typer.echo(result.summary())
+    if not result.ok:
+        raise typer.Exit(code=1)
+
+
+@macro_app.command("daily")
+def macro_daily(source: MacroSourceOpt = MacroSourceName.fred) -> None:
+    """Download the last 30 days of VIX and Treasury yields and rebuild the clean table."""
+    settings = Settings()
+    _macro_finish(
+        macro_jobs.run_macro(Lake(settings.data_root), _macro_source(source), now=now_utc())
+    )
+
+
+@macro_app.command("backfill")
+def macro_backfill(source: MacroSourceOpt = MacroSourceName.fred) -> None:
+    """Download every series from 1990 (a few seconds; run once)."""
+    settings = Settings()
+    _macro_finish(
+        macro_jobs.run_backfill(Lake(settings.data_root), _macro_source(source), now=now_utc())
+    )
 
 
 @bars_app.command("rebuild")

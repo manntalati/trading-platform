@@ -1,0 +1,14 @@
+# VIX and Treasury yields from FRED (no API key): the last 30 days, then rebuild the clean table.
+# User unit: install with infra/README.md. Exit 1 = a series failed to download.
+[Unit]
+Description=trading-platform: FRED macro series (VIX, Treasury yields)
+Wants=network-online.target
+After=network-online.target
+OnFailure=tp-notify-failure@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/trading-platform
+ExecStart=%h/trading-platform/.venv/bin/tp-data macro daily
+TimeoutStartSec=10min
+Nice=10

@@ -78,6 +78,16 @@ export function attentionItems(
   return items.sort((a, b) => order[a.level] - order[b.level]);
 }
 
+/** "3-month 4.05% · rising · curve inverted": the short rate, where long rates are heading
+ * against their 200-day average, and the 10-year minus 3-month curve. */
+export function ratesLine(now: NonNullable<MarketRegime["current"]>): string {
+  const parts = [];
+  if (now.rate_3m != null) parts.push(`3-month ${now.rate_3m.toFixed(2)}%`);
+  if (now.rates) parts.push(`rates ${now.rates}`);
+  if (now.curve) parts.push(`curve ${now.curve}${now.curve_10y_3m != null ? ` (${now.curve_10y_3m >= 0 ? "+" : "−"}${Math.abs(now.curve_10y_3m).toFixed(2)})` : ""}`);
+  return parts.join(" · ");
+}
+
 export default function Home({ live, pendingApprovals }: { live: LiveState; pendingApprovals: number }) {
   const status = useApi<Status>("/api/status", 60_000);
   const portfolio = useApi<Portfolio>("/api/portfolio", 120_000);
@@ -137,11 +147,18 @@ export default function Home({ live, pendingApprovals }: { live: LiveState; pend
           value={now?.trend ? (now.trend === "up" ? "Uptrend" : "Downtrend") : s ? (s.market.is_open ? "Open" : "Closed") : "—"}
           sub={
             <>
-              {now ? `${now.volatility ?? "—"} volatility · ${now.breadth === "broad" ? "most stocks rising" : now.breadth === "narrow" ? "few stocks rising" : "mixed breadth"} · ` : ""}
+              {now ? `${now.vix != null ? `VIX ${now.vix.toFixed(1)}, ` : ""}${now.volatility ?? "—"} volatility · ${now.breadth === "broad" ? "most stocks rising" : now.breadth === "narrow" ? "few stocks rising" : "mixed breadth"} · ` : ""}
               {s ? (s.market.is_open ? `closes ${nyTime(s.market.next_close)} ET` : `opens ${nyTime(s.market.next_open)} ET`) : null}
             </>
           }
         />
+        {now?.rate_10y != null && (
+          <Stat
+            label="Rates"
+            value={`10-year ${now.rate_10y.toFixed(2)}%`}
+            sub={ratesLine(now)}
+          />
+        )}
       </div>
 
       <div className="grid cols-2 top">

@@ -1,5 +1,6 @@
-import type { OptionPositionRow, Positions, Status, Validation } from "../types";
-import { attentionItems } from "./Home";
+import type { MarketRegime, OptionPositionRow, Positions, Status, Validation } from "../types";
+import { attentionItems, ratesLine } from "./Home";
+import { macroDetail } from "./System";
 
 const option = {
   symbol: "XYZ260116C00100000",
@@ -40,5 +41,23 @@ describe("attentionItems", () => {
 
   it("is empty when nothing needs you", () => {
     expect(attentionItems(null, null, 0)).toEqual([]);
+  });
+});
+
+describe("macro lines", () => {
+  it("describes rates and the curve", () => {
+    const now = { rate_3m: 4.05, rates: "rising", curve: "inverted", curve_10y_3m: -0.3 } as NonNullable<MarketRegime["current"]>;
+    expect(ratesLine(now)).toBe("3-month 4.05% · rates rising · curve inverted (−0.30)");
+  });
+
+  it("says when FRED hasn't been downloaded, and what the last run got", () => {
+    expect(macroDetail({} as Status)).toMatch(/tp-data macro backfill/);
+    const s = {
+      macro: {
+        series: { VIXCLS: { value: 17.94, date: "2026-10-09", name: "VIX" }, DGS10: { value: 4.1, date: "2026-10-09", name: "10y" } },
+        latest_report: { ok: false, errors: { DGS2: "HTTPError" } },
+      },
+    } as unknown as Status;
+    expect(macroDetail(s)).toBe("VIX 17.9 · 10-year 4.10% · as of 2026-10-09 · last run failed for DGS2");
   });
 });

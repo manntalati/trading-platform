@@ -12,6 +12,8 @@ uv run tp-data bars daily                  # scheduled: latest sessions (+ new s
 uv run tp-data bars rebuild                # re-derive clean/ from raw/ (no network)
 uv run tp-data bars backfill --source fake # the whole pipeline on synthetic data, no keys
 uv run tp-data options snapshot            # today's chains: [options] universe + holdings
+uv run tp-data macro backfill               # one-off: VIX and Treasury yields from FRED since 1990
+uv run tp-data macro daily                  # scheduled: the last 30 days
 ```
 
 ```python
@@ -30,11 +32,14 @@ data/
     alpaca/stock_bars_1d/ingest_date=YYYY-MM-DD/run-<run id>.parquet
     alpaca/corporate_actions/ingest_date=YYYY-MM-DD/run-<run id>.parquet
     alpaca/option_chain_snapshots/snapshot_date=YYYY-MM-DD/underlying=<SYM>/run-<run id>.parquet
+    fred/macro_1d/ingest_date=YYYY-MM-DD/run-<run id>.parquet
   clean/                                derived: rebuilt from raw/ on every run
     stock_bars_1d/symbol=<SYM>/part.parquet
     stock_bars_1d_quarantine/part.parquet
+    macro_1d/part.parquet
   reports/validation/stock_bars_1d-<UTC time>.json
   reports/options_snapshot/<date>-<run id>.json
+  reports/macro/<date>.json
 ```
 
 - **Raw is append-only.** Each run writes new files stamped with `ingested_at` and `run_id`.
@@ -135,6 +140,31 @@ Caveats:
 - Snapshots are stored as-is, without a clean layer yet: a crossed quote (bid > ask) is counted
   in the job report, not removed.
 - A missed day can't be backfilled from Alpaca later; that's the point of running it daily.
+
+## Macro series (FRED)
+
+`tp-data macro daily` downloads five daily series from FRED's public CSV (no API key) and keeps
+them like the bars: one immutable raw file per run, `clean/macro_1d` rebuilt with the latest
+download winning per series and day (`tp_core.macro`).
+
+| Series | What | Used for |
+|---|---|---|
+| `VIXCLS` | VIX: the S&P 500's 30-day implied volatility | the volatility regime: calm under 15, stressed over 25 |
+| `VXVCLS` | the 3-month VIX | VIX / VIX 3-month above 1 (an inverted volatility curve) marks stress |
+| `DGS3MO` | 3-month Treasury yield | the risk-free rate in option pricing (falls back to `TP_RISK_FREE_RATE` when missing or more than ten days old) |
+| `DGS2`, `DGS10` | 2- and 10-year Treasury yields | the rate regime (10-year rising, steady or falling against its 200-day average, a quarter point either way) and the curve (10-year minus 3-month: inverted under 0, flat under half a point) |
+
+```python
+from tp_core.macro import load_macro
+from tp_core.regime import market_regimes
+
+macro = load_macro(Lake(Path("data")))  # one column per series, one row per day
+regimes = market_regimes(closes, macro=macro)  # trend, volatility (VIX), breadth, rates, curve
+```
+
+Each value is the one for that day's close, so a strategy acting at the next open could have
+known it; regime breakdowns attribute each day's return to the labels of the day before anyway.
+FRED skips some days the exchange trades (and vice versa); values carry forward up to five days.
 
 ## Known limitations
 

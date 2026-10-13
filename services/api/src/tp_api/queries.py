@@ -15,6 +15,8 @@ from tp_core.bars import close_matrix, load_bars, missing_symbols
 from tp_core.calendar import NEW_YORK, last_completed_session, xnys
 from tp_core.chains import load_chain_snapshots
 from tp_core.config import Settings, Universes, load_universes
+from tp_core.macro import latest as macro_latest
+from tp_core.macro import load_macro, risk_free_rate
 from tp_core.occ import parse_occ
 from tp_core.pnl import (
     OPTION_MULTIPLIER,
@@ -98,6 +100,7 @@ class Context:
         self.settings = settings
         self.lake = Lake(settings.data_root)
         self.classifier = Classifier.load(settings.classifications_file)
+        self._rate: float | None = None
         try:
             self.universes: Universes = load_universes(settings.universes_file)
         except OSError:
@@ -115,6 +118,16 @@ class Context:
         bars = load_bars(self.lake, present)
         last = bars.sort_values("session").groupby("symbol")["close"].last()
         return {str(k): float(v) for k, v in last.items()}
+
+    def risk_free_rate(self, at: date | None = None) -> float:
+        """The 3-month Treasury yield from FRED (``tp-data macro daily``), else
+        ``TP_RISK_FREE_RATE`` (also when the download is more than ten days old at ``at``,
+        today by default)."""
+        if at is not None:
+            return risk_free_rate(self.lake, self.settings.risk_free_rate, at=at)
+        if self._rate is None:
+            self._rate = risk_free_rate(self.lake, self.settings.risk_free_rate)
+        return self._rate
 
     def is_cash(self, symbol: str) -> bool:
         """The money-market sweep (e.g. SPAXX): cash, not a holding or a trade."""
@@ -183,6 +196,10 @@ def status(ctx: Context, now: datetime) -> dict[str, Any]:
             "latest_report": _latest_json(ctx.lake.reports_dir("options_snapshot")),
         },
         "broker": broker,
+        "macro": {
+            "series": macro_latest(load_macro(ctx.lake)),
+            "latest_report": _latest_json(ctx.lake.reports_dir("macro")),
+        },
         "universe": {
             "bars": len(ctx.universes.bars),
             "options": len(ctx.universes.options_underlyings),
@@ -212,6 +229,9 @@ DATASETS: tuple[dict[str, str], ...] = (
      "writer": "tp-data options snapshot (weekdays 3:45 PM ET; your research list and holdings "
                "included)",
      "used_by": "Research (ideas, contract picks), Portfolio (rolls, covered calls)"},
+    {"name": "VIX and Treasury yields", "path": "raw/fred/macro_1d", "also": "clean/macro_1d",
+     "writer": "tp-data macro daily (weekdays after the close; FRED, no key)",
+     "used_by": "Home (market), strategy validation (regimes), option pricing (risk-free rate)"},
     {"name": "Implied volatility history", "path": "clean/option_iv_daily",
      "writer": "derived from the option chains when Research loads",
      "used_by": "Research (IV rank)"},

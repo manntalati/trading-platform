@@ -1,17 +1,24 @@
 """Strategy validation from the dashboard, and the market regime."""
 
+import shutil
 import time
 from collections.abc import Iterator
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
+from tp_api import queries
 from tp_api.app import QuoteMode, create_app
+from tp_core.storage import Lake
+from tp_ingest.jobs.macro import run_backfill
+from tp_ingest.sources.fred import FakeMacroSource
 
 from .test_api import lake_root, settings_for  # noqa: F401  (lake_root is a fixture)
 
 WRITE = {"X-TP-Client": "dashboard"}
+NOW = datetime(2024, 7, 12, 22, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -66,5 +73,35 @@ def test_market_regime(client: TestClient) -> None:
     assert now["volatility"] in ("calm", "normal", "stressed")
     assert now["summary"]
     assert len(body["history"]) <= 252
-    assert set(body["history"][-1]) == {"date", "trend", "volatility", "breadth"}
+    assert set(body["history"][-1]) == {"date", "trend", "volatility", "breadth", "rates", "curve"}
+    assert now["rates"] is None  # no FRED data in this lake
+    assert now["volatility_source"] == "realized"
     assert client.get("/api/market/regime").json() == body  # cached
+
+
+def test_vix_and_rates_once_fred_is_downloaded(
+    lake_root: Path,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "lake"
+    shutil.copytree(lake_root, root)
+    run_backfill(Lake(root), FakeMacroSource(end=date(2024, 7, 12)), now=NOW)
+    monkeypatch.chdir(tmp_path)
+    settings = settings_for(root)
+    app = create_app(settings, quotes=QuoteMode.off, serve_dashboard=False)
+    with TestClient(app) as c:
+        now = c.get("/api/market/regime").json()["current"]
+        assert now["volatility_source"] == "vix"
+        assert now["vix"] > 0
+        assert now["rate_10y"] > 0
+        assert now["rates"] in ("rising", "steady", "falling")
+        assert now["curve"] in ("normal", "flat", "inverted")
+        macro = c.get("/api/status").json()["macro"]
+        assert macro["series"]["DGS3MO"]["date"] == "2024-07-12"
+        assert macro["latest_report"]["ok"] is True
+        datasets = {d["name"]: d for d in c.get("/api/system/data").json()["datasets"]}
+        assert datasets["VIX and Treasury yields"]["files"] >= 2  # raw + clean
+    ctx = queries.Context(settings)
+    assert ctx.risk_free_rate(at=date(2024, 7, 15)) == pytest.approx(now["rate_3m"] / 100)
+    assert ctx.risk_free_rate() == settings.risk_free_rate  # 2024 data is stale today
