@@ -24,6 +24,7 @@ from tp_core.storage import Lake
 from tp_core.validate import ValidationReport
 from tp_ingest.jobs import bars as bars_jobs
 from tp_ingest.jobs import fundamentals as fundamentals_jobs
+from tp_ingest.jobs import intraday as intraday_jobs
 from tp_ingest.jobs import macro as macro_jobs
 from tp_ingest.jobs import options as options_jobs
 from tp_ingest.sources.base import FullSource
@@ -288,6 +289,27 @@ def fundamentals(
     typer.echo(result.summary())
     if not result.ok:
         raise typer.Exit(code=1)
+
+
+@bars_app.command("intraday")
+def bars_intraday(
+    symbols: Annotated[str, typer.Option(help="Comma-separated symbols.")] = "SPY,QQQ",
+    days: Annotated[int, typer.Option(min=1, max=2500, help="Sessions back from today.")] = 60,
+    minutes: Annotated[int, typer.Option(min=1, max=60, help="Bar length in minutes.")] = 5,
+    source: SourceOpt = SourceName.alpaca,
+) -> None:
+    """Intraday bars (regular hours) for intraday research, e.g. the opening-range breakout."""
+    settings = Settings()
+    names = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    result = intraday_jobs.run_intraday(
+        Lake(settings.data_root),
+        make_source(source, settings),
+        names,
+        now=now_utc(),
+        days=days,
+        minutes=minutes,
+    )
+    typer.echo(result.summary())
 
 
 @bars_app.command("rebuild")

@@ -18,7 +18,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import date
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Protocol
 
 import pandas as pd
 
@@ -27,6 +27,13 @@ from tp_trading.data import Field
 from tp_trading.events import Fill, OrderIntent, OrderType, Side
 from tp_trading.portfolio import EPSILON, Position
 from tp_trading.sizing import Sizing
+
+
+class Reference(Protocol):
+    """Data beyond the bars (fundamentals, earnings, macro), point in time: ``get`` returns only
+    what was known on ``as_of``. Provided by the runtime (``tp_strategies.reference``)."""
+
+    def get(self, name: str, as_of: date) -> pd.DataFrame: ...
 
 
 @dataclass(frozen=True)
@@ -67,8 +74,10 @@ class Context(ABC):
         sectors: Mapping[str, str] | None = None,
         catch_up: bool = False,
         sizing: Sizing | None = None,
+        reference: Reference | None = None,
     ) -> None:
         self.strategy = strategy
+        self._reference = reference
         self.fractional = fractional
         # How much of each target weight to actually take (tp_trading.sizing); None: all of it.
         self.sizing = sizing
@@ -125,6 +134,13 @@ class Context(ABC):
         """For monthly strategies: the last session of the month, or any session while catching
         up (a sleeve that has never traded shouldn't sit in cash until month end)."""
         return self.catch_up or self.is_last_session_of_month()
+
+    def reference(self, name: str) -> pd.DataFrame:
+        """A reference dataset as known at today's close (``Reference``): "fundamentals",
+        "valuation", "earnings" or "macro". Raises when the runtime has none."""
+        if self._reference is None:
+            raise LookupError(f"{self.strategy}: no reference data in this runtime ({name})")
+        return self._reference.get(name, self.now)
 
     def sector(self, symbol: str) -> str | None:
         """GICS sector of a single name (reference data from config/classifications.toml), or

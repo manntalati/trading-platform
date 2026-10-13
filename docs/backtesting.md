@@ -99,6 +99,37 @@ Not modelled yet: borrow costs (no shorts), delistings (the universe is today's 
 `config/universes.toml`), trading halts beyond "no bar, order expires", and size-dependent
 impact.
 
+## Data beyond the bars
+
+`ctx.reference(name)` gives a strategy what was known at today's close and nothing later
+(`tp_strategies.reference`, the same in backtests and paper trading):
+
+| Name | What | Needs |
+|---|---|---|
+| `fundamentals` | each company's latest filing as first reported: trailing EPS, net income, revenue, gross profit; equity, assets, shares | `tp-data fundamentals` |
+| `valuation` | the same with that day's market cap and earnings yield, book to market, gross profitability, ROE | `tp-data fundamentals` and bars |
+| `earnings` | every quarterly result published so far, with its SUE and the session it reached the data | `tp-data fundamentals` |
+| `macro` | VIX and Treasury yields | `tp-data macro backfill` |
+
+A figure counts from the day it was filed, never from the end of the quarter it describes.
+Restatements are ignored (the original figure is what the market saw). Tables are built once per
+process and rebuilt when the lake changes.
+
+## Research backtests
+
+Some ideas don't fit the daily, shares-only engine yet. They run as vectorized research
+backtests that print a tear sheet against a benchmark and save nothing:
+
+```bash
+uv run tp-backtest research pairs     # long/short pairs (strategy 7 with its hedge)
+uv run tp-backtest research vrp       # buy-write and put-write on SPY at the VIX (strategy 10)
+uv run tp-backtest research orb       # opening-range breakout on 5-minute bars (strategy 11)
+```
+
+They follow the same rules (decide on information up to the bar, fill after it, pay costs) but
+have no risk limits, no validation gate and no paper trading. An idea that looks good here earns
+an engine version. Options backtesting: [options-backtesting.md](options-backtesting.md).
+
 ## Writing a strategy
 
 ```python
@@ -129,7 +160,8 @@ Rules:
 
 - Fields are the parameters; `tp-backtest run my-strategy -p lookback=126` converts strings to
   the field types. Register the class in `tp_strategies/library/__init__.py`.
-- Read the world only through `ctx`: `history`, `price`, `positions`, `equity`, `cash`.
+- Read the world only through `ctx`: `history`, `price`, `positions`, `equity`, `cash`, and
+  `reference(name)` for data beyond the bars (below).
 - Ask for trades with `ctx.order(symbol, ±shares)` or `ctx.order_target_weights({...})`. Both
   produce intents; whether they become orders is decided outside the strategy.
 - Give every order a `reason`. In paper trading it is what you read before approving it.

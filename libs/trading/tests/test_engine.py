@@ -271,3 +271,37 @@ def test_trims_round_down_so_a_position_never_ends_above_target() -> None:
     BacktestEngine(Scripted(act=act), MarketData.from_closes(_flat([100.0] * 8)), cfg).run()
     [[trim]] = log
     assert (trim.side, trim.quantity) == ("sell", 3)  # leaves 7 (70%), not 8 (80%)
+
+
+def test_reference_data_is_point_in_time_and_absent_by_default() -> None:
+    from dataclasses import dataclass
+    from datetime import date as day
+    from typing import ClassVar
+
+    from tp_trading.strategy import Context, Strategy
+
+    seen: list[day] = []
+
+    class Ref:
+        def get(self, name: str, as_of: day) -> pd.DataFrame:
+            seen.append(as_of)
+            return pd.DataFrame({"known": [as_of]})
+
+    @dataclass(frozen=True)
+    class Reads(Strategy):
+        name: ClassVar[str] = "reads"
+
+        def symbols(self) -> list[str]:
+            return ["SPY"]
+
+        def on_bar(self, ctx: Context) -> None:
+            assert ctx.reference("anything")["known"].iloc[0] == ctx.now
+
+    px = pd.DataFrame(
+        {"SPY": [100.0, 101.0, 102.0]},
+        index=pd.DatetimeIndex(["2024-01-02", "2024-01-03", "2024-01-04"]),
+    )
+    BacktestEngine(Reads(), MarketData.from_closes(px), reference=Ref()).run()
+    assert seen == [day(2024, 1, 2), day(2024, 1, 3), day(2024, 1, 4)]
+    with pytest.raises(LookupError, match="no reference data"):
+        BacktestEngine(Reads(), MarketData.from_closes(px)).run()

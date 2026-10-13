@@ -19,7 +19,7 @@ from tp_trading.data import Field, MarketData
 from tp_trading.events import Fill, Side
 from tp_trading.portfolio import Portfolio, Position
 from tp_trading.sizing import Sizing
-from tp_trading.strategy import Context, Strategy
+from tp_trading.strategy import Context, Reference, Strategy
 
 
 def sleeve_portfolio(capital: float, fills: Iterable[FillRecord]) -> Portfolio:
@@ -144,9 +144,15 @@ class PaperContext(Context):
         *,
         catch_up: bool = False,
         sizing: Sizing | None = None,
+        reference: Reference | None = None,
     ) -> None:
         super().__init__(
-            strategy.name, fractional=False, sectors=sectors, catch_up=catch_up, sizing=sizing
+            strategy.name,
+            fractional=False,
+            sectors=sectors,
+            catch_up=catch_up,
+            sizing=sizing,
+            reference=reference,
         )
         self._data = data
         self._t = t

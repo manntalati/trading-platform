@@ -102,14 +102,18 @@ Library strategies implement one contract that both backtests and paper-trades
 uv run tp-backtest list
 uv run tp-backtest run ma-timing --start 2018-01-01      # tear sheet vs SPY; saved under data/reports/backtests
 uv run tp-backtest validate --all                       # the plan's backtest gate before paper trading
+uv run tp-backtest research vrp                         # vectorized research backtests: pairs, vrp, orb
 ```
 
 Every order passes the plan's pre-trade limits (`config/risk.toml`), which strategies cannot see
 or change: position, sector and gross caps, daily loss limit, stale data, liquidity, no shorts,
 plus a kill switch and a per-strategy drawdown limit. See [docs/risk.md](docs/risk.md).
 
-All six paper-trade (`config/paper.toml`); by the plan each is an experiment until it passes the
-backtest gate (`tp-backtest validate`, shown under Paper trading in the dashboard).
+The first six paper-trade (`config/paper.toml`); by the plan each is an experiment until it
+passes the backtest gate (`tp-backtest validate`, shown under Paper trading in the dashboard).
+7 to 9 run on the same engine and can be added to the paper book once validated; 10 and 11 are
+research backtests (`tp-backtest research vrp|orb`) until the paper bot can place option and
+intraday orders.
 
 | # | Strategy | Spec |
 |---|---|---|
@@ -119,6 +123,11 @@ backtest gate (`tp-backtest validate`, shown under Paper trading in the dashboar
 | 4 | Dual momentum (Antonacci) | [04-dual-momentum.md](docs/strategies/04-dual-momentum.md) |
 | 5 | RSI(2) mean reversion (Connors, Alvarez) | [05-rsi2.md](docs/strategies/05-rsi2.md) |
 | 6 | Leveraged ETF momentum rotation, daily (high risk by design) | [06-leveraged-momentum.md](docs/strategies/06-leveraged-momentum.md) |
+| 7 | Pairs trading on cointegration (long-only engine version; long/short in research) | [07-pairs.md](docs/strategies/07-pairs.md) |
+| 8 | Factor portfolios: value, quality, low volatility | [08-factors.md](docs/strategies/08-factors.md) |
+| 9 | Post-earnings-announcement drift (SUE) | [09-pead.md](docs/strategies/09-pead.md) |
+| 10 | Volatility risk premium: buy-write and put-write (research) | [10-vrp.md](docs/strategies/10-vrp.md) |
+| 11 | Opening-range breakout on 5-minute bars (research) | [11-orb.md](docs/strategies/11-orb.md) |
 
 Where the project stands against the plan, and what's next: [docs/progress.md](docs/progress.md).
 

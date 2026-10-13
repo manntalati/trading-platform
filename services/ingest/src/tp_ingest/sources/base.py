@@ -62,6 +62,18 @@ class CorporateActionsSource(Protocol):
         ...
 
 
+class IntradaySource(Protocol):
+    name: str
+    feed: str
+
+    def intraday_bars(
+        self, symbols: Sequence[str], start: date, end: date, minutes: int = 5
+    ) -> pd.DataFrame:
+        """Unadjusted ``minutes``-minute bars for sessions in ``[start, end]``; columns
+        ``BAR_COLUMNS``, ``timestamp`` the bar's start (tz-aware UTC)."""
+        ...
+
+
 class MarketDataSource(BarsSource, CorporateActionsSource, Protocol):
     """Everything the bars jobs need."""
 
@@ -113,5 +125,5 @@ class OptionsSource(Protocol):
         ...
 
 
-class FullSource(MarketDataSource, OptionsSource, Protocol):
+class FullSource(MarketDataSource, OptionsSource, IntradaySource, Protocol):
     """Bars, corporate actions and options from one vendor (Alpaca and the fake both are)."""

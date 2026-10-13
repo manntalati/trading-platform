@@ -22,7 +22,7 @@ from alpaca.data.requests import (
     StockBarsRequest,
     StockSnapshotRequest,
 )
-from alpaca.data.timeframe import TimeFrame
+from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import GetOptionContractsRequest
 
@@ -106,6 +106,24 @@ class AlpacaSource:
         request = StockBarsRequest(
             symbol_or_symbols=list(symbols),
             timeframe=TimeFrame.Day,
+            start=datetime.combine(start, time.min, tzinfo=NEW_YORK),
+            end=end_at,
+            adjustment=Adjustment.RAW,
+            feed=DataFeed(self.feed),
+        )
+        raw = cast(dict[str, list[dict[str, Any]]], self._stocks.get_stock_bars(request))
+        return bars_from_raw(raw)
+
+    def intraday_bars(
+        self, symbols: Sequence[str], start: date, end: date, minutes: int = 5
+    ) -> pd.DataFrame:
+        end_at = min(
+            datetime.combine(end, time.max, tzinfo=NEW_YORK),
+            datetime.now(UTC) - _SIP_DELAY,
+        )
+        request = StockBarsRequest(
+            symbol_or_symbols=list(symbols),
+            timeframe=TimeFrame(minutes, TimeFrameUnit.Minute),
             start=datetime.combine(start, time.min, tzinfo=NEW_YORK),
             end=end_at,
             adjustment=Adjustment.RAW,

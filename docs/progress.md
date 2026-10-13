@@ -25,7 +25,7 @@ plan's phase table didn't survive the import, so the phases here follow the bran
 | ✓ | Rules-based portfolio checks | [ideas.md](ideas.md) |
 | ✓ | Dashboard with live quotes | six sections, [dashboard.md](dashboard.md) |
 
-## Phase 2: strategies, backtesting, risk, paper trading, options (`step2/…`)
+## Phase 2: strategies, backtesting, risk, paper trading, options (`step2/…`): done
 
 | | Item | Notes |
 |---|---|---|
@@ -38,12 +38,12 @@ plan's phase table didn't survive the import, so the phases here follow the bran
 | ✓ | Options: Black-Scholes, IV, greeks, IV rank, events, odds, scenarios | [positions.md](positions.md), [research.md](research.md) |
 | ✓ | Options research: swing and LEAPS ideas, actions on held positions, Claude | [research.md](research.md) |
 | ✓ | Fundamentals and earnings dates, point in time | `tp-data fundamentals` from SEC EDGAR; trailing EPS, valuation and SUE; earnings dates on Research → Look up ([data.md](data.md#fundamentals-sec-edgar)) |
-| ○ | Strategies 6 to 10: pairs (cointegration), factor portfolios, post-earnings drift, volatility risk premium (covered calls, cash-secured puts), opening-range breakout | fundamentals and earnings dates are in; 10 needs intraday bars |
+| ✓ | Strategies 6 to 10: pairs (cointegration), factor portfolios, post-earnings drift, volatility risk premium (covered calls, cash-secured puts), opening-range breakout | specs 07 to 11; pairs, factors and drift on the engine with point-in-time fundamentals (`ctx.reference`); the long/short pairs, the volatility risk premium and the opening-range breakout as research backtests (`tp-backtest research`), with 5-minute bars from `tp-data bars intraday` |
 | ✓ | Position sizing methods to compare: fixed fractional, volatility targeting, quarter Kelly | `tp-backtest sizing`, `--sizing`, per sleeve in paper.toml, [risk.md](risk.md#position-sizing) |
 | ✓ | Portfolio risk monitoring: correlation, beta, aggregate Greeks, VaR | Portfolio → Risk, with a scenario grid (S&P ±10%, IV ±5 points), [risk.md](risk.md#portfolio-risk) |
 | ✓ | Rest of the options module: American (binomial) pricing, SVI smile fits, 25-delta skew, options backtesting | `tp_core.american`, `tp_core.smile`, Newton IV, rho/vanna/charm/vomma; cash-secured puts, credit spreads, iron condors, calendars and premium-selling ideas ([research.md](research.md)); [options-backtesting.md](options-backtesting.md) |
 | ✓ | Rate regime from FRED, VIX for the volatility regime | `tp-data macro`, the 3-month yield as the risk-free rate, [data.md](data.md#macro-series-fred) |
-| ◐ | Experiment tracking | every backtest and validation run is saved with its git commit, data version and config; MLflow not yet |
+| ◐ | Experiment tracking | every backtest and validation run is saved with its git commit, data version and config; MLflow moves to Phase 4, where model experiments need it |
 
 ## Phase 3: the platform (`step3/…`)
 
@@ -61,6 +61,7 @@ plan's phase table didn't survive the import, so the phases here follow the bran
 
 | | Item |
 |---|---|
+| ○ | MLflow experiment tracking (deferred from Phase 2) |
 | ○ | Meta-labeling with triple-barrier labels |
 | ○ | Cross-sectional ranking (ridge, then LightGBM) |
 | ○ | Regime HMM; GARCH and HAR volatility forecasts (feeding IV vs forecast) |
@@ -76,9 +77,11 @@ plan's phase table didn't survive the import, so the phases here follow the bran
 
 ## Next, in order
 
-1. **Strategies 6 to 10** (`step2/more-strategies`): pairs, factor portfolios, post-earnings
-   drift, the volatility risk premium, opening-range breakout.
-2. **The platform** (`step3/…`): Docker images first, then the message bus, then k3s with
+Phase 2 is done; what's left of it is waiting on time, not code: the paper gate's 60 trading days
+for each sleeve, and the fill-in-the-numbers tables in the strategy specs.
+
+1. **The platform** (`step3/…`): Docker images first, then the message bus, then k3s with
    monitoring and Discord alerts. The plan puts this ahead of ML: "cut scope from ML experiments
    before cutting infrastructure".
-3. **Machine learning** (`step4/…`), starting with meta-labeling.
+2. **Machine learning** (`step4/…`), starting with meta-labeling, with MLflow for the
+   experiments.

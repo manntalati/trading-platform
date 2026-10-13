@@ -6,6 +6,7 @@ tp-backtest run ma-timing -p assets=SPY --fill next_close --slippage-bps 10
 tp-backtest validate ma-timing          # the plan's stage-1 gate (see docs/backtesting.md)
 tp-backtest validate --all
 tp-backtest sizing ts-momentum           # the plan's three sizing methods side by side
+tp-backtest research pairs|vrp|orb       # vectorized research backtests
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from tp_core.storage import Lake
 from tp_risk.manager import RiskManager
 from tp_strategies.backtest import risk_gate, run_backtest
 from tp_strategies.library import REGISTRY, build, parameters
+from tp_strategies.research_cli import app as research_app
 from tp_strategies.validation import ValidationConfig, paper_params
 from tp_strategies.validation import validate as run_validation
 from tp_trading.costs import CostModel
@@ -32,6 +34,7 @@ from tp_trading.sizing import METHODS as SIZING_METHODS
 from tp_trading.sizing import make as make_sizing
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
+app.add_typer(research_app, name="research")
 log = logging.getLogger("tp_strategies.backtest")
 
 ROWS = [
@@ -259,7 +262,7 @@ def validate(
                 risk=(lambda: _risk_gate(settings, classifier, False)) if risk else (lambda: None),
                 progress=lambda m: typer.echo(f"  {m}", err=True),
             )  # fmt: skip
-        except (KeyError, ValueError) as exc:
+        except (KeyError, ValueError, LookupError) as exc:  # e.g. no fundamentals yet
             typer.echo(f"{name}: {exc.args[0] if exc.args else exc}", err=True)
             failed = True
             continue

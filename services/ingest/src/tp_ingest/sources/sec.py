@@ -83,10 +83,16 @@ class FakeSecSource:
 
     name = "fake"
 
-    def __init__(self, symbols: list[str], missing: set[str] | None = None,
-                 last_year: int = 2025) -> None:  # fmt: skip
+    def __init__(
+        self,
+        symbols: list[str],
+        missing: set[str] | None = None,
+        last_year: int = 2025,
+        years: int = 5,
+    ) -> None:
         self.symbols = [s for s in symbols if s not in (missing or set())]
         self.last_year = last_year
+        self.years = years
 
     def tickers(self) -> dict[str, int]:
         return {edgar_ticker(s): zlib.crc32(s.encode()) % 9_000_000 + 1 for s in self.symbols}
@@ -94,12 +100,11 @@ class FakeSecSource:
     def _eps(self, cik: int) -> dict[tuple[int, int], float]:
         base = 1.0 + (cik % 7) / 10
         out = {}
-        for y in range(self.last_year - 4, self.last_year + 1):
+        for y in range(self.last_year - self.years + 1, self.last_year + 1):
             for q in (1, 2, 3, 4):
                 bump = 0.4 if (cik + y * 4 + q) % 9 == 0 else 0.0
-                out[(y, q)] = round(
-                    base * (1 + 0.08 * (y - self.last_year + 4)) + 0.02 * q + bump, 2
-                )
+                growth = 1 + 0.08 * (y - self.last_year + self.years - 1)
+                out[(y, q)] = round(base * growth + 0.02 * q + bump, 2)
         return out
 
     def company_facts(self, cik: int) -> dict[str, Any]:
