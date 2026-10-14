@@ -13,7 +13,7 @@ from tp_api import queries
 from tp_api.app import QuoteMode, create_app
 from tp_core.storage import Lake
 from tp_ingest.jobs.macro import run_backfill
-from tp_ingest.sources.fred import FakeMacroSource
+from tp_ingest.sources.macro import FakeMacroSource
 
 from .test_api import lake_root, settings_for  # noqa: F401  (lake_root is a fixture)
 

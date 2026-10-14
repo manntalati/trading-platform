@@ -11,7 +11,7 @@ from tp_ingest.jobs.bars import run_backfill
 from tp_ingest.jobs.intraday import run_intraday
 from tp_ingest.jobs.macro import run_backfill as macro_backfill
 from tp_ingest.sources.fake import FakeSource
-from tp_ingest.sources.fred import FakeMacroSource
+from tp_ingest.sources.macro import FakeMacroSource
 from tp_strategies.backtest_cli import app
 from tp_strategies.library.xs_momentum import LARGE_CAPS
 

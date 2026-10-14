@@ -72,6 +72,66 @@ def parse_fred_csv(text: str, series: str) -> pd.DataFrame:
     return out[dates.notna() & values.notna()].reset_index(drop=True)
 
 
+def _frame(series: str, dates: pd.Series, values: pd.Series) -> pd.DataFrame:
+    out = pd.DataFrame({"series": series, "date": dates.dt.date, "value": values})
+    return out[dates.notna() & values.notna()].reset_index(drop=True)
+
+
+def _dates(raw: pd.Series) -> pd.Series:
+    """US (``10/13/2026``) or ISO (``2026-10-13``) dates."""
+    us = pd.to_datetime(raw, format="%m/%d/%Y", errors="coerce")
+    iso = pd.to_datetime(raw, format="%Y-%m-%d", errors="coerce")
+    return us.fillna(iso)
+
+
+def parse_fred_json(doc: dict[str, Any], series: str) -> pd.DataFrame:
+    """The FRED API's ``series/observations`` (``file_type=json``): ``observations`` with
+    ``date`` and ``value`` (``.`` when missing)."""
+    obs = doc.get("observations")
+    if obs is None:
+        raise ValueError(
+            f"{series}: no observations in the FRED response ({doc.get('error_message')})"
+        )
+    raw = pd.DataFrame(obs, columns=["date", "value"])
+    values = pd.to_numeric(raw["value"].replace(".", None), errors="coerce")
+    return _frame(series, pd.to_datetime(raw["date"], errors="coerce"), values)
+
+
+def parse_cboe_csv(text: str, series: str) -> pd.DataFrame:
+    """Cboe's index history (``VIX_History.csv``: ``DATE,OPEN,HIGH,LOW,CLOSE`` with US dates):
+    the close of each day."""
+    raw = pd.read_csv(io.StringIO(text), dtype=str)
+    cols = {c.strip().upper(): c for c in raw.columns}
+    date_col = next((cols[c] for c in cols if "DATE" in c), None)
+    value_col = cols.get("CLOSE") or (raw.columns[-1] if raw.shape[1] >= 2 else None)
+    if date_col is None or value_col is None or value_col == date_col:
+        raise ValueError(f"{series}: expected DATE and CLOSE columns, got {list(raw.columns)}")
+    values = pd.to_numeric(raw[value_col].str.strip(), errors="coerce")
+    return _frame(series, _dates(raw[date_col].str.strip()), values)
+
+
+TREASURY_COLUMNS = {"DGS3MO": "3 MO", "DGS2": "2 YR", "DGS10": "10 YR"}
+
+
+def parse_treasury_csv(text: str) -> dict[str, pd.DataFrame]:
+    """The Treasury's daily par yield curve (one year per file: ``Date`` with US dates, then a
+    column per maturity, ``3 Mo`` ... ``30 Yr``, in percent). These are the constant-maturity
+    yields FRED republishes as ``DGS3MO``, ``DGS2`` and ``DGS10``."""
+    raw = pd.read_csv(io.StringIO(text), dtype=str)
+    if raw.empty:
+        return {s: _frame(s, pd.Series(dtype="datetime64[ns]"), pd.Series(dtype=float))
+                for s in TREASURY_COLUMNS}  # fmt: skip
+    cols = {" ".join(c.strip().upper().split()): c for c in raw.columns}
+    date_col = next((cols[c] for c in cols if c == "DATE"), raw.columns[0])
+    dates = _dates(raw[date_col].str.strip())
+    out = {}
+    for series, name in TREASURY_COLUMNS.items():
+        if name not in cols:
+            raise ValueError(f"no {name!r} column in the Treasury file: {list(raw.columns)}")
+        out[series] = _frame(series, dates, pd.to_numeric(raw[cols[name]], errors="coerce"))
+    return out
+
+
 def build_clean_macro(lake: Lake) -> pd.DataFrame:
     """Rebuild ``clean/macro_1d`` from every raw download: the latest wins per series and day."""
     raw = read_parquet_dir(lake.raw_dir(DATASET), SCHEMA)

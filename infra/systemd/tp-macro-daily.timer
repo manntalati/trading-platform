@@ -1,8 +1,8 @@
-# 07:30 New York time on weekdays: FRED usually posts a day's VIX close and Treasury yields by the
+# 07:30 New York time on weekdays: a day's VIX close and Treasury yields are all posted by the
 # next morning, so the regimes are current before the open. The 30-day overlap catches late
 # postings.
 [Unit]
-Description=trading-platform: FRED macro series (weekdays 07:30 ET)
+Description=trading-platform: macro series (weekdays 07:30 ET)
 
 [Timer]
 OnCalendar=Mon..Fri 07:30 America/New_York

@@ -1,4 +1,5 @@
-"""Macro series from FRED: VIX and Treasury yields (``tp_core.macro``).
+"""Macro series: VIX and Treasury yields (``tp_core.macro``; sources in
+``tp_ingest.sources.macro``).
 
 ``backfill`` downloads each series from 1990; the daily run the last 30 days (a few days of
 overlap catch late publication). Each run writes one immutable raw file with every series it
@@ -19,7 +20,7 @@ import pandas as pd
 
 from tp_core.macro import DATASET, FIRST_DATE, SCHEMA, SERIES, build_clean_macro
 from tp_core.storage import Lake, new_run_id, write_json, write_raw
-from tp_ingest.sources.fred import MacroSource
+from tp_ingest.sources.macro import MacroSource, MacroUnavailableError
 
 __all__ = ["MacroJobResult", "MacroSource", "run_backfill", "run_macro"]
 
@@ -34,6 +35,7 @@ class MacroJobResult:
     rows: dict[str, int] = field(default_factory=dict)
     latest: dict[str, str] = field(default_factory=dict)
     errors: dict[str, str] = field(default_factory=dict)
+    sources: dict[str, str] = field(default_factory=dict)  # which source served each series
     path: Path | None = None
 
     @property
@@ -41,8 +43,12 @@ class MacroJobResult:
         return not self.errors
 
     def summary(self) -> str:
-        got = ", ".join(f"{s} {n} (to {self.latest.get(s)})" for s, n in self.rows.items())
-        failed = f"; FAILED {', '.join(self.errors)}" if self.errors else ""
+        parts = []
+        for s, n in self.rows.items():
+            via = f", from {self.sources[s]}" if s in self.sources else ""
+            parts.append(f"{s} {n} (to {self.latest.get(s)}{via})")
+        got = ", ".join(parts)
+        failed = "".join(f"\n  FAILED {s}: {e}" for s, e in self.errors.items())
         return f"run {self.run_id}: from {self.start}: {got or 'nothing'}{failed}"
 
     def to_dict(self) -> dict[str, Any]:
@@ -65,10 +71,14 @@ def run_macro(
         try:
             df = source.series(s, start)
         except Exception as exc:  # one series failing doesn't stop the rest
-            log.warning("FRED %s failed: %s", s, exc)
-            result.errors[s] = f"{type(exc).__name__}: {exc}"
+            log.warning("macro series %s failed: %s", s, exc)
+            plain = isinstance(exc, MacroUnavailableError)  # already says what each source said
+            result.errors[s] = str(exc) if plain else f"{type(exc).__name__}: {exc}"
             continue
         result.rows[s] = len(df)
+        used = getattr(source, "used", {})
+        if s in used:
+            result.sources[s] = used[s]
         if len(df):
             result.latest[s] = str(max(df["date"]))
             frames.append(df)

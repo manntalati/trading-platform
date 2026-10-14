@@ -62,7 +62,7 @@ All JSON. Reads (`GET`):
 | Endpoint | What |
 |---|---|
 | `/api/health` | liveness |
-| `/api/status` | market clock, bars freshness, latest validation, options and fundamentals reports, VIX and Treasury yields with the last FRED run, broker syncs, live feed, dashboard build |
+| `/api/status` | market clock, bars freshness, latest validation, options and fundamentals reports, VIX and Treasury yields with the last macro run, broker syncs, live feed, dashboard build |
 | `/api/market/regime` | today's trend, volatility (VIX), breadth, rates and yield-curve labels with the numbers behind them, and the last year of labels |
 | `/api/bars/{symbol}?days=365` | daily bars (raw and adjusted close) |
 | `/api/options/{underlying}` | latest chain snapshot: ATM IV, expected move and SVI fit per expiry, the smile with its fit, 25-delta skew, term-structure slope, inconsistent quotes |
