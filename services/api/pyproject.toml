@@ -18,6 +18,7 @@ dependencies = [
 
 [project.scripts]
 tp-api = "tp_api.cli:main"
+tp-doctor = "tp_api.doctor:main"
 
 [tool.uv.sources]
 tp-broker = { workspace = true }

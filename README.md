@@ -8,6 +8,10 @@ runs it (message bus, Kubernetes, observability). The full plan is in
 **Ground rules:** the bot proposes and a human decides; paper before real money; hard risk caps
 live outside strategy code; backtests are hypotheses, not evidence.
 
+**Setting it up:** [docs/setup.md](docs/setup.md) lists every key, one-time download and
+schedule in order; `uv run tp-doctor` checks your machine against it and prints the command for
+whatever is missing.
+
 ## Layout
 
 ```
