@@ -149,3 +149,22 @@ def test_data_map(client: tuple[TestClient, Any]) -> None:
     assert by_name["Brokerage accounts and positions"]["updated_at"]
     assert by_name["Paper trading"]["files"] == 0
     assert body["root"].endswith("research0")
+
+
+def test_one_failing_symbol_does_not_break_the_scan(
+    client: tuple[TestClient, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tp_strategies import options_research
+
+    real = options_research.analyze
+
+    def flaky(symbol: str, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        if symbol == "MSFT":
+            raise KeyError("spread_pct")
+        return real(symbol, *args, **kwargs)
+
+    monkeypatch.setattr(options_research, "analyze", flaky)
+    c, _ = client
+    body = c.get("/api/research?refresh=true").json()
+    assert body["errors"] == {"MSFT": "KeyError: 'spread_pct'"}
+    assert body["scanned"] >= 9

@@ -111,6 +111,11 @@ function OptionsIdeas() {
           <Empty>No {info.label.toLowerCase()} setups right now.</Empty>
         </Card>
       )}
+      {Object.keys(r.errors ?? {}).length > 0 && (
+        <p className="muted small">
+          Skipped because of an error (details in the tp-api log): {Object.keys(r.errors ?? {}).join(", ")}.
+        </p>
+      )}
       {r.without_chains.length > 0 && (
         <p className="muted small">
           Ranked without option chains (no contract picked): {r.without_chains.join(", ")}. They get chains once they're in your research list.

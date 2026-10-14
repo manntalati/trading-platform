@@ -709,6 +709,7 @@ export interface Research {
   leaps: ResearchIdea[];
   bearish: ResearchIdea[];
   income: ResearchIdea[];
+  errors?: Record<string, string>; // symbols the scan skipped, with why
   disclaimer: string;
 }
 
