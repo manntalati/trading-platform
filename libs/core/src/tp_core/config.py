@@ -76,6 +76,11 @@ class Settings(BaseSettings):
         default=None, validation_alias="SNAPTRADE_CONSUMER_KEY"
     )
 
+    # FRED's API (VIX and Treasury yields, `tp-data macro`): optional, free at
+    # https://fred.stlouisfed.org/docs/api/api_key.html. Without it the series come straight from
+    # Cboe and the Treasury, with FRED's graph download as a last resort.
+    fred_api_key: SecretStr | None = Field(default=None, validation_alias="FRED_API_KEY")
+
     # SEC EDGAR (company fundamentals, earnings dates) asks every client to identify itself with
     # a name and an email address, e.g. "trading-platform you@example.com". No key needed.
     sec_user_agent: str | None = Field(default=None, validation_alias="TP_SEC_USER_AGENT")

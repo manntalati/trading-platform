@@ -150,11 +150,22 @@ Caveats:
   in the job report, not removed.
 - A missed day can't be backfilled from Alpaca later; that's the point of running it daily.
 
-## Macro series (FRED)
+## Macro series (VIX and Treasury yields)
 
-`tp-data macro daily` downloads five daily series from FRED's public CSV (no API key) and keeps
-them like the bars: one immutable raw file per run, `clean/macro_1d` rebuilt with the latest
-download winning per series and day (`tp_core.macro`).
+`tp-data macro daily` downloads five daily series and keeps them like the bars: one immutable raw
+file per run, `clean/macro_1d` rebuilt with the latest download winning per series and day
+(`tp_core.macro`). They're stored under FRED's names, whichever source served them:
+
+| Source | Series | Needs |
+|---|---|---|
+| FRED's API | all five | a free key in `FRED_API_KEY` ([get one](https://fred.stlouisfed.org/docs/api/api_key.html)); tried first when set |
+| Cboe's history files | `VIXCLS`, `VXVCLS` | nothing |
+| The Treasury's daily par yield curve | `DGS3MO`, `DGS2`, `DGS10` | nothing |
+| FRED's graph download | all five | nothing; often hangs for non-browser clients, so it is the last resort |
+
+Cboe and the Treasury publish these numbers and FRED republishes them, so the values match.
+A host that times out or refuses a connection is skipped for the rest of the run. The summary
+says which source served each series; `--source fred-api|publishers|fred-csv` forces one.
 
 | Series | What | Used for |
 |---|---|---|

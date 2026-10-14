@@ -42,7 +42,7 @@ plan's phase table didn't survive the import, so the phases here follow the bran
 | ✓ | Position sizing methods to compare: fixed fractional, volatility targeting, quarter Kelly | `tp-backtest sizing`, `--sizing`, per sleeve in paper.toml, [risk.md](risk.md#position-sizing) |
 | ✓ | Portfolio risk monitoring: correlation, beta, aggregate Greeks, VaR | Portfolio → Risk, with a scenario grid (S&P ±10%, IV ±5 points), [risk.md](risk.md#portfolio-risk) |
 | ✓ | Rest of the options module: American (binomial) pricing, SVI smile fits, 25-delta skew, options backtesting | `tp_core.american`, `tp_core.smile`, Newton IV, rho/vanna/charm/vomma; cash-secured puts, credit spreads, iron condors, calendars and premium-selling ideas ([research.md](research.md)); [options-backtesting.md](options-backtesting.md) |
-| ✓ | Rate regime from FRED, VIX for the volatility regime | `tp-data macro`, the 3-month yield as the risk-free rate, [data.md](data.md#macro-series-fred) |
+| ✓ | Rate regime from FRED, VIX for the volatility regime | `tp-data macro` (Cboe and the Treasury, or FRED's API), the 3-month yield as the risk-free rate, [data.md](data.md#macro-series-vix-and-treasury-yields) |
 | ◐ | Experiment tracking | every backtest and validation run is saved with its git commit, data version and config; MLflow moves to Phase 4, where model experiments need it |
 
 ## Phase 3: the platform (`step3/…`)

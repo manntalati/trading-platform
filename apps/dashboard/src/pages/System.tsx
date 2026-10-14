@@ -21,7 +21,7 @@ const FLOWS = [
   { from: "Fidelity", via: "SnapTrade → tp-broker sync", to: "Portfolio, Trades, Home" },
   { from: "Alpaca market data", via: "tp-data bars daily / options snapshot", to: "Portfolio stats, Research, Paper trading" },
   { from: "SEC EDGAR", via: "tp-data fundamentals", to: "Research (earnings dates, valuation), factor and earnings strategies" },
-  { from: "FRED (St. Louis Fed)", via: "tp-data macro daily", to: "Home (VIX, rates), validation regimes, option pricing" },
+  { from: "Cboe, the Treasury (or FRED)", via: "tp-data macro daily", to: "Home (VIX, rates), validation regimes, option pricing" },
   { from: "Paper strategies", via: "tp-paper bot → Alpaca paper account", to: "Paper trading, Trades" },
   { from: "Your questions", via: "Anthropic API (only when you ask Claude)", to: "the chat on a position or idea" },
 ];

@@ -73,7 +73,7 @@ the same engine, costs and risk limits as `tp-backtest run`, then checks:
 | **Parameter stability** | every nearby variant keeps at least half the Sharpe | a result that falls off a cliff one step away from the chosen parameters is a lucky spike |
 
 Also reported, not gated:
-- **Returns by market regime** (`tp_core.regime`): trend (SPY vs its 200-day), volatility (the VIX: calm under 15, stressed over 25; SPY's 20-day realized volatility with 12% and 25% when the FRED data isn't there), breadth (share of the universe above its 50-day), and with the FRED data, rates (the 10-year yield against its 200-day average) and the yield curve (10-year minus 3-month) ([data.md](data.md#macro-series-fred)). Each day's return goes to the regime known at the previous close.
+- **Returns by market regime** (`tp_core.regime`): trend (SPY vs its 200-day), volatility (the VIX: calm under 15, stressed over 25; SPY's 20-day realized volatility with 12% and 25% when the FRED data isn't there), breadth (share of the universe above its 50-day), and with the FRED data, rates (the 10-year yield against its 200-day average) and the yield curve (10-year minus 3-month) ([data.md](data.md#macro-series-vix-and-treasury-yields)). Each day's return goes to the regime known at the previous close.
 - **Monte Carlo**: 1,000 block-bootstrap resamples of the daily returns: the 5th to 95th percentile CAGR, the bad-tail drawdown and the share of paths that lose money.
 
 Periods: train up to `train_end`, validation up to `validation_end`, locked test after, each from

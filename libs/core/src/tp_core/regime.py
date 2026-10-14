@@ -3,12 +3,12 @@
 From daily closes only, each label using data up to that day:
 
 - **Trend**: the S&P 500 (SPY) above or below its 200-day average.
-- **Volatility**: the VIX when it has been downloaded from FRED (``tp-data macro``): calm under
+- **Volatility**: the VIX when it has been downloaded (``tp-data macro``): calm under
   15, stressed over 25. Without it, SPY's 20-day realized volatility, annualized: calm under
   12%, stressed over 25% (realized volatility runs a few points below the VIX).
 - **Breadth**: the share of the universe above its own 50-day average: broad at 60%+, narrow at
   40% or less.
-- **Rates** and **curve** (with the FRED data only): the 10-year Treasury yield rising, steady or
+- **Rates** and **curve** (with the macro data only): the 10-year Treasury yield rising, steady or
   falling against its 200-day average, and the 10-year minus 3-month curve normal, flat or
   inverted (``tp_core.macro``).
 
@@ -152,7 +152,7 @@ def performance_by_regime(
                     float(b.mean() * metrics.TRADING_DAYS) if len(b) else None
                 )
             rows.append(row)
-        if rows:  # rates and curve only with the FRED data
+        if rows:  # rates and curve only with the macro data
             out[dim] = rows
     return out
 

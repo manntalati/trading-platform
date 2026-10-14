@@ -14,7 +14,7 @@ from tp_ingest.jobs.bars import run_backfill
 from tp_ingest.jobs.fundamentals import run_fundamentals
 from tp_ingest.jobs.macro import run_backfill as macro_backfill
 from tp_ingest.sources.fake import FakeSource, FakeSplit
-from tp_ingest.sources.fred import FakeMacroSource
+from tp_ingest.sources.macro import FakeMacroSource
 from tp_ingest.sources.sec import FakeSecSource
 from tp_strategies.reference import LakeReference
 

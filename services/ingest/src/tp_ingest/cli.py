@@ -37,7 +37,7 @@ app.add_typer(bars_app, name="bars")
 options_app = typer.Typer(help="Option chain snapshots.", no_args_is_help=True)
 app.add_typer(options_app, name="options")
 macro_app = typer.Typer(
-    help="Macro series from FRED: VIX and Treasury yields.", no_args_is_help=True
+    help="Macro series: VIX and Treasury yields (FRED, Cboe, the Treasury).", no_args_is_help=True
 )
 app.add_typer(macro_app, name="macro")
 
@@ -212,19 +212,44 @@ def options_snapshot(
 
 
 class MacroSourceName(StrEnum):
-    fred = "fred"
+    auto = "auto"
+    fred_api = "fred-api"
+    publishers = "publishers"
+    fred_csv = "fred-csv"
     fake = "fake"
 
 
 MacroSourceOpt = Annotated[
-    MacroSourceName, typer.Option(help="`fred` (no key needed) or `fake` (synthetic, offline).")
+    MacroSourceName,
+    typer.Option(
+        help="`auto`: the FRED API if FRED_API_KEY is set, else Cboe and the Treasury, with "
+        "FRED's download as a last resort. `fake`: synthetic, offline."
+    ),
 ]
 
 
-def _macro_source(name: MacroSourceName) -> macro_jobs.MacroSource:
-    from tp_ingest.sources.fred import FakeMacroSource, FredSource
+def _macro_source(name: MacroSourceName, settings: Settings) -> macro_jobs.MacroSource:
+    from tp_ingest.sources.macro import (
+        AutoMacroSource,
+        CboeSource,
+        FakeMacroSource,
+        FredApiSource,
+        FredCsvSource,
+        TreasurySource,
+    )
 
-    return FakeMacroSource() if name is MacroSourceName.fake else FredSource()
+    key = settings.fred_api_key.get_secret_value() if settings.fred_api_key else None
+    if name is MacroSourceName.fake:
+        return FakeMacroSource()
+    if name is MacroSourceName.fred_api:
+        if not key:
+            _config_error(MissingCredentialsError("FRED_API_KEY not set (free from FRED)"))
+        return AutoMacroSource({"fred-api": FredApiSource(key)}, ["fred-api"])
+    if name is MacroSourceName.publishers:
+        return AutoMacroSource({"cboe": CboeSource(), "treasury": TreasurySource()}, ["publisher"])
+    if name is MacroSourceName.fred_csv:
+        return AutoMacroSource({"fred-csv": FredCsvSource()}, ["fred-csv"])
+    return AutoMacroSource.default(key)
 
 
 def _macro_finish(result: macro_jobs.MacroJobResult) -> None:
@@ -234,20 +259,24 @@ def _macro_finish(result: macro_jobs.MacroJobResult) -> None:
 
 
 @macro_app.command("daily")
-def macro_daily(source: MacroSourceOpt = MacroSourceName.fred) -> None:
+def macro_daily(source: MacroSourceOpt = MacroSourceName.auto) -> None:
     """Download the last 30 days of VIX and Treasury yields and rebuild the clean table."""
     settings = Settings()
     _macro_finish(
-        macro_jobs.run_macro(Lake(settings.data_root), _macro_source(source), now=now_utc())
+        macro_jobs.run_macro(
+            Lake(settings.data_root), _macro_source(source, settings), now=now_utc()
+        )
     )
 
 
 @macro_app.command("backfill")
-def macro_backfill(source: MacroSourceOpt = MacroSourceName.fred) -> None:
-    """Download every series from 1990 (a few seconds; run once)."""
+def macro_backfill(source: MacroSourceOpt = MacroSourceName.auto) -> None:
+    """Download every series from 1990 (run once; under a minute)."""
     settings = Settings()
     _macro_finish(
-        macro_jobs.run_backfill(Lake(settings.data_root), _macro_source(source), now=now_utc())
+        macro_jobs.run_backfill(
+            Lake(settings.data_root), _macro_source(source, settings), now=now_utc()
+        )
     )
 
 

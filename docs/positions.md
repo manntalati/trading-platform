@@ -33,7 +33,7 @@ before expiry, and near expiry, the difference is cents. Puts are checked on a b
 price (deep in the money, months to run), implied volatility is read with the American model,
 because Black-Scholes would count that right as extra volatility, and the position shows what
 the right is worth. Time runs to 4:00 PM New York on the
-expiration day. The risk-free rate is the 3-month Treasury yield from FRED (`tp-data macro daily`), or
+expiration day. The risk-free rate is the 3-month Treasury yield (`tp-data macro daily`), or
 `TP_RISK_FREE_RATE` (default 4%) until that has been downloaded.
 
 The odds are **risk-neutral**: what the market is charging for, not a forecast. That's the right

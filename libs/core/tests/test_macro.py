@@ -118,3 +118,24 @@ def test_market_regimes_use_vix_and_add_rates() -> None:
 
     perf = performance_by_regime(closes["A"].pct_change().fillna(0), r)
     assert {row["label"] for row in perf["curve"]} == {"normal", "inverted"}
+
+
+def test_publisher_formats() -> None:
+    from tp_core.macro import parse_cboe_csv, parse_fred_json, parse_treasury_csv
+
+    cboe = parse_cboe_csv(
+        "DATE,OPEN,HIGH,LOW,CLOSE\n01/02/1990,17.24,17.24,17.24,17.24\n", "VIXCLS"
+    )
+    assert (cboe["date"].iloc[0], cboe["value"].iloc[0]) == (date(1990, 1, 2), 17.24)
+    with pytest.raises(ValueError, match="DATE and CLOSE"):
+        parse_cboe_csv("X\n1\n", "VIXCLS")
+    treasury = parse_treasury_csv(
+        'Date,"1 Mo","3 Mo","2 Yr","10 Yr"\n10/13/2026,3.9,3.88,3.45,4.05\n'
+    )
+    assert treasury["DGS10"]["value"].iloc[0] == 4.05
+    assert treasury["DGS3MO"]["date"].iloc[0] == date(2026, 10, 13)
+    assert all(df.empty for df in parse_treasury_csv('Date,"3 Mo"\n').values())
+    with pytest.raises(ValueError, match="10 YR"):
+        parse_treasury_csv('Date,"3 Mo","2 Yr"\n10/13/2026,3.9,3.4\n')
+    fred = parse_fred_json({"observations": [{"date": "2026-10-13", "value": "."}]}, "DGS2")
+    assert fred.empty

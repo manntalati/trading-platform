@@ -122,7 +122,7 @@ class Context:
         return {str(k): float(v) for k, v in last.items()}
 
     def risk_free_rate(self, at: date | None = None) -> float:
-        """The 3-month Treasury yield from FRED (``tp-data macro daily``), else
+        """The 3-month Treasury yield (``tp-data macro daily``), else
         ``TP_RISK_FREE_RATE`` (also when the download is more than ten days old at ``at``,
         today by default)."""
         if at is not None:
@@ -237,7 +237,7 @@ DATASETS: tuple[dict[str, str], ...] = (
                "included)",
      "used_by": "Research (ideas, contract picks), Portfolio (rolls, covered calls)"},
     {"name": "VIX and Treasury yields", "path": "raw/fred/macro_1d", "also": "clean/macro_1d",
-     "writer": "tp-data macro daily (weekdays after the close; FRED, no key)",
+     "writer": "tp-data macro daily (weekdays before the open; Cboe and the Treasury, or FRED)",
      "used_by": "Home (market), strategy validation (regimes), option pricing (risk-free rate)"},
     {"name": "Company fundamentals and earnings dates", "path": "raw/sec",
      "also": "clean/sec_facts",
