@@ -110,7 +110,9 @@ class AlpacaMarketData:
                 ask=_float(r["ask"]),
                 last=_float(r["last_price"]),
                 implied_volatility=_float(r["implied_volatility"]),
-                quote_at=r["quote_at"].to_pydatetime() if pd.notna(r["quote_at"]) else None,
+                quote_at=r["quote_at"].to_pydatetime(warn=False)
+                if pd.notna(r["quote_at"])
+                else None,
             )
             for _, r in df.iterrows()
         }

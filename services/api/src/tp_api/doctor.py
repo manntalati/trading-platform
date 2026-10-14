@@ -131,7 +131,7 @@ def data(settings: Settings, now: datetime) -> list[Check]:
         out.append(Check(area, "Fidelity positions", "todo", "never synced",
                          "tp-broker link (once), then tp-broker sync"))  # fmt: skip
     else:
-        synced = max(snap.accounts["taken_at"]).to_pydatetime()
+        synced = max(snap.accounts["taken_at"]).to_pydatetime(warn=False)
         stale = now - synced > timedelta(days=3)
         out.append(Check(area, "Fidelity positions", "warn" if stale else "ok",
                          f"{len(snap.accounts)} account(s), synced {synced:%Y-%m-%d %H:%M} UTC",

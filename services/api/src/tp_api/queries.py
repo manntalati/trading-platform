@@ -321,7 +321,7 @@ def option_summary(ctx: Context, underlying: str) -> dict[str, Any]:
             }
         )
     monthly = [t for t in term if t["dte"] >= 20] or term
-    when = pd.Timestamp(latest["snapshot_at"].iloc[0]).to_pydatetime()
+    when = pd.Timestamp(latest["snapshot_at"].iloc[0]).to_pydatetime(warn=False)
     rate = ctx.risk_free_rate(when.date())
     fits = fit_chain(latest, spot, when, rate) if not math.isnan(spot) else []
     by_expiry = {f.expiration.isoformat(): f for f in fits}

@@ -20,6 +20,7 @@ from tp_strategies.options_research import (
     iron_condor_pick,
     leaps_pick,
     leaps_view,
+    priced,
     rank_ideas,
     spread_pick,
     stock_setup,
@@ -252,3 +253,15 @@ def test_stock_actions_for_a_large_winner() -> None:
     ]
     assert "Selling 2 " in actions[0]["text"]
     assert holding_actions(stock, None, now=NOW, rate=0.04) == []
+
+
+def test_a_chain_missing_whole_expiry_windows_still_analyzes() -> None:
+    # only short-dated expiries: nothing for the calendar's back month, LEAPS or swing window
+    short = chain(days=(4, 11, 18))
+    rising, spy = closes(0.003, seed=2), closes(0.0003, seed=9)
+    a = analyze("XYZ", rising, chain=short, benchmark=spy, iv_hist=None, now=NOW, rate=0.04)
+    assert "calendar" not in a["picks"]
+    assert "leaps_call" not in a["picks"]
+    empty = priced(short, 100.0, NOW, 0.04, right="C", dte=(50, 120))
+    assert empty.empty
+    assert {"mid", "spread_pct", "years", "iv", "delta", "theta", "vega"} <= set(empty.columns)

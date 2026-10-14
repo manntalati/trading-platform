@@ -30,6 +30,7 @@ stands in.
 
 from __future__ import annotations
 
+import logging
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -51,6 +52,8 @@ from tp_core.storage import Lake
 from tp_core.volatility import atm_term, chain_spot, event_expiry, iv_at, iv_history, iv_rank
 
 Right = Literal["C", "P"]
+log = logging.getLogger(__name__)
+
 DISCLAIMER = (
     "Rules-based research from price history and option chains, with the numbers behind each "
     "idea. Not investment advice: options can lose their whole value, quickly. You decide."
@@ -103,6 +106,9 @@ class Rules:
 # -- pricing contracts ----------------------------------------------------------------------------
 
 
+PRICED_COLUMNS = ("mid", "spread_pct", "years", "iv", "delta", "theta", "vega")
+
+
 def priced(
     chain: pd.DataFrame,
     spot: float,
@@ -114,7 +120,8 @@ def priced(
     strikes: tuple[float, float] = (0.5, 1.5),
 ) -> pd.DataFrame:
     """Two-sided quotes of one side of the chain within an expiry and strike window, with mid,
-    spread, implied volatility (solved from the mid) and greeks per share."""
+    spread, implied volatility (solved from the mid) and greeks per share. Always has those
+    columns, even when nothing in the window qualifies (an empty frame)."""
     c = chain[
         (chain["right"] == right)
         & chain["dte"].between(*dte)
@@ -123,7 +130,8 @@ def priced(
         & (chain["ask"] >= chain["bid"])
     ].copy()
     if c.empty:
-        return c
+        vendor = c.drop(columns=["delta", "gamma", "theta", "vega", "rho"], errors="ignore")
+        return vendor.assign(**{k: pd.Series(dtype=float) for k in PRICED_COLUMNS})
     c["mid"] = (c["bid"] + c["ask"]) / 2
     c["spread_pct"] = (c["ask"] - c["bid"]) / c["mid"]
     rows = []
@@ -1032,22 +1040,27 @@ def scan(
         str(u): g.set_index("snapshot_date")["iv30"] for u, g in history.groupby("underlying")
     }
     analyses = []
+    errors: dict[str, str] = {}
     for symbol in wanted:
         series = closes.get(symbol)
         if series is None or len(series) < 60:
             continue
-        analyses.append(
-            analyze(
-                symbol,
-                series,
-                chain=chains.get(symbol),
-                benchmark=bench,
-                iv_hist=by_symbol.get(symbol),
-                now=now,
-                rate=rate,
-                rules=rules,
+        try:
+            analyses.append(
+                analyze(
+                    symbol,
+                    series,
+                    chain=chains.get(symbol),
+                    benchmark=bench,
+                    iv_hist=by_symbol.get(symbol),
+                    now=now,
+                    rate=rate,
+                    rules=rules,
+                )
             )
-        )
+        except Exception as exc:  # one odd chain must not take the whole scan down
+            log.exception("options research: %s failed", symbol)
+            errors[symbol] = f"{type(exc).__name__}: {exc}"
     ideas = rank_ideas(analyses, held or {}, rules)
     without = sorted({a["symbol"] for a in analyses if not a["picks"]})
     return {
@@ -1056,6 +1069,7 @@ def scan(
         "scanned": len(analyses),
         "with_chains": sum(1 for a in analyses if a["picks"]),
         "without_chains": without,
+        "errors": errors,
         "iv_history_days": int(history["snapshot_date"].nunique()) if len(history) else 0,
         **ideas,
         "disclaimer": DISCLAIMER,
