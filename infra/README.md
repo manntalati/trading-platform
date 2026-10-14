@@ -48,6 +48,8 @@ sudo loginctl enable-linger "$USER"
 The units assume the repo lives at `~/trading-platform`; edit `WorkingDirectory`/`ExecStart`
 if not.
 
+`uv run tp-doctor` confirms each timer is enabled and each dataset is fresh.
+
 ## Operate
 
 ```bash
