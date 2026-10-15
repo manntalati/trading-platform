@@ -57,7 +57,7 @@ plan's phase table didn't survive the import, so the phases here follow the bran
 | ○ | Pre-market checklist (8:30 ET) and end-of-day jobs; deploy freeze in market hours |
 | ○ | Approvals in Discord or Slack (today they're on the dashboard) |
 
-## Phase 4: machine learning (`step4/…`)
+## Phase 4: machine learning (`step4/…`): done
 
 Taken ahead of Phase 3 at your call; nothing in it depends on the platform. See [ml.md](ml.md).
 
@@ -69,7 +69,7 @@ Taken ahead of Phase 3 at your call; nothing in it depends on the platform. See 
 | ✓ | Meta-labeling with triple-barrier labels | `tp-ml meta`; strategy 12 (`rsi2-meta`) on the engine; labels by the strategy's own exits or the triple barrier |
 | ✓ | Cross-sectional ranking (ridge, then gradient boosting) | `tp-ml rank`: rank IC, t-stat, bucket spreads and turnover against 12-1 momentum; strategy 13 (`ml-rank`) on the engine |
 | ✓ | Regime HMM; GARCH and HAR volatility forecasts (feeding IV vs forecast) | `tp-ml regime` (filtered probabilities, out of sample), `tp-ml vol` (naive, EWMA, GARCH, HAR-RV, gradient boosting and implied, walk-forward); the options research judges implied against the HAR forecast |
-| ○ | Strategy search, guarded by Deflated Sharpe and walk-forward | |
+| ✓ | Strategy search, guarded by Deflated Sharpe and walk-forward | `tp-backtest search`: 41 rule sets in three families; train → validation → one look at test; Deflated Sharpe over every rule set ever tried; probability of backtest overfitting (CSCV); walk-forward of the search itself ([backtesting.md](backtesting.md#strategy-search)) |
 
 ## The money gates
 
@@ -81,12 +81,12 @@ Taken ahead of Phase 3 at your call; nothing in it depends on the platform. See 
 
 ## Next, in order
 
-Phase 2 is done; what's left of it is waiting on time, not code: the paper gate's 60 trading days
-for each sleeve, and the fill-in-the-numbers tables in the strategy specs.
+Phases 2 and 4 are done. What's left of them is waiting on time and your data, not code: the
+paper gate's 60 trading days for each sleeve, and the fill-in-the-numbers tables in the strategy
+specs.
 
-1. **Machine learning** (`step4/…`), in progress: strategy search is what's left. Run
-   `tp-ml meta`, `rank`, `vol` and `regime` on your lake and fill in the tables in specs 12 and
-   13.
-2. **The platform** (`step3/…`): Docker images first, then the message bus, then k3s with
-   monitoring and Discord alerts. The plan puts this ahead of ML ("cut scope from ML experiments
-   before cutting infrastructure"); it comes after Phase 4 here by choice.
+1. **The platform** (`step3/…`): Docker images first, then the message bus, then k3s with
+   monitoring and Discord alerts.
+2. **Phase 4 on your data**: run `tp-ml meta`, `rank`, `vol` and `regime`, and
+   `tp-backtest search`. Fill in the tables in specs 12 and 13, and promote to paper only what
+   clears `tp-backtest validate`.

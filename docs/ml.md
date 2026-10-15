@@ -276,6 +276,14 @@ VIX level, breadth, rates) are still in `tp_core.regime`; this is the learned co
 
 Runs go to the MLflow experiments `volatility` and `regimes`.
 
-## What's next in Phase 4
+## Strategy search
 
-1. **Strategy search**, guarded by the Deflated Sharpe and walk-forward.
+`tp-backtest search` tries 41 simple rule sets (trend, momentum and RSI(2) reversion, vectorized
+versions of the library strategies). It picks one by train, then validation, then the locked
+test period. It only trusts the pick if four guards hold: a Deflated Sharpe over every rule set
+it has ever tried, the probability of backtest overfitting, a walk-forward of the search itself,
+and the test period. [backtesting.md](backtesting.md#strategy-search) has the protocol.
+
+That completes Phase 4's list. What's left is yours to run on real data: `tp-ml meta`, `rank`,
+`vol` and `regime`, and `tp-backtest search`. Fill in the tables in specs 12 and 13, and promote
+only what clears the engine's validation.
