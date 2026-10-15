@@ -178,6 +178,21 @@ def test_trades_combines_yours_and_the_paper_bots(client: TestClient, lake_root:
     assert only_paper["mine"] is None
 
 
+def test_trade_stats_on_the_demo_history(client: TestClient) -> None:
+    body = client.get("/api/trades/stats").json()
+    assert body["synced"] is True
+    kinds = body["by_kind"]
+    # the demo: two round trips in shares (AMD up, INTC down) and a call that expired
+    assert kinds["shares"]["trades"] == 2
+    assert kinds["shares"]["win_rate"] == pytest.approx(0.5)
+    assert kinds["calls"]["trades"] == 1
+    assert kinds["calls"]["expired"] == 1
+    assert kinds["all"]["trades"] == 3
+    assert body["open"]["positions"] > 0  # the holdings bought in the history
+    assert {b["bucket"] for b in body["holding"]["all"]} >= {"same day", "1-3 months"}
+    assert body["worst"][0]["return_pct"] == pytest.approx(-1.0)
+
+
 def test_performance(client: TestClient) -> None:
     body = client.get("/api/portfolio/performance?days=365").json()
     backtest = body["holdings_backtest"]

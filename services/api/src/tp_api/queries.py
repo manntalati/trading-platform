@@ -48,6 +48,7 @@ from tp_core.portfolio import (
 )
 from tp_core.smile import fit_chain, quote_arbitrage, smile_curve, term_shape
 from tp_core.storage import Lake, parquet_files
+from tp_core.trade_stats import stats_from_activities
 from tp_core.volatility import iv_at
 from tp_paper.store import PaperStore
 from tp_strategies.ideas import ideas_from_lake
@@ -540,6 +541,19 @@ def trades(ctx: Context, source: str = "all", limit: int = 200) -> dict[str, Any
         "paper": clean(paper),
         "freshness": freshness(snap.accounts) if source != "paper" else None,
     }
+
+
+def trade_stats(ctx: Context) -> dict[str, Any]:
+    """How you trade, from your synced brokerage history: round trips matched first in, first
+    out, and what they say (``tp_core.trade_stats``)."""
+    acts = read_activities(ctx.lake)
+    if acts.empty:
+        return {"synced": False}
+    today = datetime.now(UTC).astimezone(NEW_YORK).date()
+    out: dict[str, Any] = clean(
+        {"synced": True, **stats_from_activities(acts, today, is_cash=ctx.is_cash)}
+    )
+    return out
 
 
 def _pending_trades(

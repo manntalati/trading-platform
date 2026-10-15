@@ -882,3 +882,50 @@ export interface PortfolioRisk {
   greeks?: { delta_dollars: number; gamma_1pct: number; theta_day: number; vega_point: number };
   scenarios?: { vol_shifts: number[]; rows: { move: number; pnl: number[] }[] };
 }
+
+// /api/trades/stats (libs/core/src/tp_core/trade_stats.py): how you trade, from round trips
+
+export interface TradeGroup {
+  trades: number;
+  win_rate?: Num;
+  median_return?: Num;
+  avg_return?: Num;
+  weighted_return?: Num; // total P&L over total cost
+  avg_win?: Num;
+  avg_loss?: Num;
+  total_pnl?: number;
+  profit_factor?: Num;
+  median_days?: Num;
+  avg_days?: Num;
+  median_days_winners?: Num;
+  median_days_losers?: Num;
+  avg_size?: Num;
+  expired?: number;
+}
+
+export interface TripView {
+  label: string;
+  kind: "call" | "put" | "shares";
+  side: "long" | "short";
+  opened: string;
+  closed: string;
+  days: number;
+  pnl: number;
+  return_pct: Num;
+  exit: string;
+}
+
+export type TradeKind = "all" | "calls" | "puts" | "shares" | "options_sold";
+
+export interface TradeStats {
+  synced: boolean;
+  since?: string | null;
+  by_kind?: Record<TradeKind, TradeGroup>;
+  holding?: Partial<Record<TradeKind, { bucket: string; trades: number }[]>>;
+  monthly?: { month: string; pnl: number; trades: number }[];
+  best?: TripView[];
+  worst?: TripView[];
+  open?: { positions: number; median_age_days: Num; oldest_days: Num };
+  unknown_cost?: number;
+  observations?: string[];
+}
