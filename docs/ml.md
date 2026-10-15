@@ -12,6 +12,9 @@ can reach a broker. The rules are the same as for any strategy:
 uv run tp-ml features              # compute and store the feature set (versioned)
 uv run tp-ml meta                  # evaluate the RSI(2) meta-labeling filter; logged to MLflow
 uv run tp-ml rank                  # evaluate cross-sectional ranking against 12-1 momentum
+uv run tp-ml vol                   # volatility forecasts (GARCH, HAR, ...) for SPY, vs the VIX
+uv run tp-ml vol --symbol XYZ      # any symbol: against its options' implied volatility
+uv run tp-ml regime                # market regimes from a hidden Markov model
 uv run tp-ml runs                  # what's been tried, and how it scored
 uv run tp-ml ui                    # MLflow's UI on http://127.0.0.1:5000
 uv run tp-backtest run rsi2-meta   # the filter as an engine strategy (spec 12)
@@ -142,8 +145,8 @@ are cached, so `tp-backtest validate rsi2-meta` reuses them across its threshold
 
 ## Experiment tracking (MLflow)
 
-Every `tp-ml meta` and `tp-ml rank` run is recorded in MLflow, under the experiments
-`meta-labeling` and `cross-sectional-ranking`. The store is a SQLite file,
+Every `tp-ml meta`, `rank`, `vol` and `regime` run is recorded in MLflow, under the
+experiments `meta-labeling`, `cross-sectional-ranking`, `volatility` and `regimes`. The store is a SQLite file,
 `data/mlflow/mlflow.db`, with artifacts beside it, so no server is needed. Each run records:
 
 - **Parameters**: the full config (labels, model, threshold, folds, features, symbols)
@@ -214,9 +217,65 @@ most 3 per sector, but ranked by the model. It retrains every 3 months on the mo
 that month, and ranks by 12-1 momentum until it has 24 month ends to learn from. A 10-year
 backtest takes about 15 seconds.
 
+## Volatility forecasts
+
+[`tp_ml.vol`](../libs/ml/src/tp_ml/vol.py) forecasts the annualized volatility of a stock's
+daily returns over the next `horizon` sessions (21 by default) with five models:
+
+| Model | How |
+|---|---|
+| Trailing realized | the last 21 sessions' volatility: the naive forecast, and what the options research used to compare with |
+| EWMA | RiskMetrics' exponentially weighted variance (lambda 0.94) |
+| GARCH(1,1) | variance reverts to a long-run level at a fitted speed, pushed up by each squared return; maximum likelihood |
+| HAR-RV | tomorrow's variance from today's, last week's and last month's, a regression on logs (Corsi 2009); daily variance from the open, high, low and close (Garman-Klass plus the overnight gap) |
+| Gradient boosting | the HAR terms plus recent returns and the VIX |
+
+`tp-ml vol` scores them walk-forward. Models are refitted every quarter on what was known then,
+and forecast weekly. For SPY the VIX is scored as one more forecast; for another symbol it's the
+30-day implied volatility from the stored chain snapshots. The losses:
+
+- **QLIKE** (Patton 2011): the standard loss for variance forecasts, robust to how noisy
+  realized variance is. Lower is better.
+- **error**: the RMSE in volatility points.
+- **bias**: the forecast minus what happened.
+- **MZ R²**: how much of the variation in realized variance the forecast explains.
+
+The report ends with today's forecasts and GARCH's persistence (half-life) and long-run level.
+It also gives implied now against the best forecaster: that ratio is the volatility risk premium
+an option seller would collect.
+
+Implied volatility usually runs above what happens. That gap is the volatility risk premium
+(spec 10), and it's why the VIX tends to score worse than the models as a pure forecast.
+
+**In the options research.** Each symbol now gets a HAR forecast, which takes about 10 ms. It
+needs roughly 200 sessions of bars, and the research loads about 14 months. "Expensive options"
+is judged on implied volatility against that forecast instead of against the last 20 days'
+realized ([research.md](research.md#how-expensive-are-the-options)).
+
+## Regimes
+
+[`tp_ml.regime`](../libs/ml/src/tp_ml/regime.py) is a Gaussian hidden Markov model fitted to two
+daily observations of SPY: its log return, and the log of its 5-day range-based volatility. The
+market switches between 2 (or 3) hidden states, calm to stressed, each with its own
+distribution, and tends to stay in one. That is what the transition matrix captures.
+`tp-ml regime` reports each state's return and volatility, how much of the time it held, how long
+it lasts, and today's probabilities.
+
+Two rules keep it honest:
+
+- **Filtered, not smoothed.** A day's state probability uses only the days up to it. Libraries
+  usually report smoothed probabilities, which also use the days after. Any regime "signal"
+  built on those looks better than it can be.
+- **Out of sample.** The model is refitted each January on the years before. The report says
+  what the state it gave each day meant for the *next* month's volatility and return. It also
+  shows SPY held only while the model said calm (decided a day late) against buy and hold.
+
+On regime-switching test data the stressed state predicts higher next-month volatility out of
+sample. On random walks it doesn't, and the report shows that too. The rule-based labels (trend,
+VIX level, breadth, rates) are still in `tp_core.regime`; this is the learned counterpart.
+
+Runs go to the MLflow experiments `volatility` and `regimes`.
+
 ## What's next in Phase 4
 
-1. **Regimes and volatility.** A hidden Markov model on returns and volatility. GARCH(1,1) and
-   HAR-RV volatility forecasts against a gradient-boosted one. Implied against forecast volatility
-   for the options work.
-2. **Strategy search**, guarded by the Deflated Sharpe and walk-forward.
+1. **Strategy search**, guarded by the Deflated Sharpe and walk-forward.

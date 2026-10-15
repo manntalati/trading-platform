@@ -4791,6 +4791,7 @@ dependencies = [
     { name = "numpy" },
     { name = "pandas" },
     { name = "scikit-learn" },
+    { name = "scipy" },
     { name = "tp-core" },
     { name = "typer" },
 ]
@@ -4801,6 +4802,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.0" },
     { name = "pandas", specifier = ">=2.2" },
     { name = "scikit-learn", specifier = ">=1.5" },
+    { name = "scipy", specifier = ">=1.13" },
     { name = "tp-core", editable = "libs/core" },
     { name = "typer", specifier = ">=0.12" },
 ]

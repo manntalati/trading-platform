@@ -6,6 +6,9 @@ tp-ml meta                     # evaluate the RSI(2) meta-labeling filter; logge
 tp-ml meta --model logistic --label barrier
 tp-ml rank                     # evaluate cross-sectional ranking (IC, buckets) vs 12-1 momentum
 tp-ml rank --model gbm
+tp-ml vol                      # volatility forecasts for SPY (GARCH, HAR, ...) vs the VIX
+tp-ml vol --symbol XYZ         # any symbol with bars: against its options' implied volatility
+tp-ml regime                   # market regimes (hidden Markov model), filtered, out of sample
 tp-ml runs                     # recent runs and their scores
 tp-ml ui                       # MLflow's web UI on http://127.0.0.1:5000
 
@@ -29,10 +32,12 @@ import typer
 
 from tp_core.bars import load_bars, missing_symbols
 from tp_core.config import Settings
+from tp_core.macro import load_macro
 from tp_core.portfolio import Classifier
 from tp_core.storage import Lake
 from tp_core.versions import data_version
-from tp_ml import meta, ranking, tracking
+from tp_core.volatility import iv_history
+from tp_ml import meta, ranking, regime, tracking, vol
 from tp_ml.features import EARNINGS, FEATURES
 from tp_ml.models import MODELS, REGRESSORS
 from tp_ml.store import build_feature_set, load_feature_set, registry, wide_bars
@@ -42,6 +47,8 @@ app = typer.Typer(help="Features, models and experiment tracking.", no_args_is_h
 INDEX_ETFS = ("SPY", "QQQ", "IWM", "DIA")
 EXPERIMENT = "meta-labeling"
 RANKING = "cross-sectional-ranking"
+VOLATILITY = "volatility"
+REGIMES = "regimes"
 
 
 def default_symbols(universes: Path) -> list[str]:
@@ -242,6 +249,128 @@ def rank_cmd(
     typer.echo(f"\nlogged to MLflow ({RANKING}, run {active.info.run_id[:8]}): tp-ml ui")
 
 
+def _ohlc(lake: Lake, symbol: str) -> pd.DataFrame:
+    raw = load_bars(lake, [symbol])
+    if raw.empty:
+        return raw
+    bars = raw[["adj_open", "adj_high", "adj_low", "adj_close"]].astype(float)
+    bars.columns = ["open", "high", "low", "close"]
+    bars.index = pd.DatetimeIndex(raw["session"])
+    return bars.sort_index()
+
+
+def _implied(lake: Lake, symbol: str, macro: pd.DataFrame) -> tuple[pd.Series | None, str]:
+    """The symbol's implied volatility history (decimal) and where it comes from: the VIX for
+    SPY, else the 30-day at-the-money IV of the stored option chain snapshots."""
+    if symbol == "SPY" and "VIXCLS" in macro.columns:
+        return macro["VIXCLS"].dropna() / 100, "VIX"
+    history = iv_history(lake)
+    mine = history[history["underlying"] == symbol] if len(history) else history
+    if mine.empty:
+        return None, ""
+    series = mine.set_index(pd.DatetimeIndex(mine["snapshot_date"]))["iv30"].dropna()
+    return series.astype(float), "30-day IV from the chain snapshots"
+
+
+@app.command("vol")
+def vol_cmd(
+    symbol: Annotated[str, typer.Option(help="Any symbol with daily bars.")] = "SPY",
+    horizon: Annotated[int, typer.Option(help="Sessions ahead.")] = 21,
+    log: Annotated[bool, typer.Option(help="Record the run in MLflow.")] = True,
+) -> None:
+    """Score volatility forecasts walk-forward (and implied volatility as one), then today's."""
+    settings = Settings()
+    lake = Lake(settings.data_root)
+    symbol = symbol.upper()
+    bars = _ohlc(lake, symbol)
+    cfg = vol.VolConfig(horizon=horizon)
+    if len(bars) < cfg.min_train + cfg.refit + horizon:
+        typer.echo(
+            f"needs {cfg.min_train + cfg.refit + horizon} sessions of {symbol} bars, have "
+            f"{len(bars)}: tp-data bars backfill --years 5"
+        )
+        raise typer.Exit(code=2)
+    macro = load_macro(lake)
+    vix = macro["VIXCLS"] if "VIXCLS" in macro.columns else None
+    implied, source = _implied(lake, symbol, macro)
+    report = vol.evaluate_vol(bars, cfg, vix=vix, implied=implied)
+    now = vol.forecast_now(bars, horizon, vix=vix)
+    text = vol.report_text(report, now)
+    if implied is not None and len(implied):
+        best = vol.best_model(report["scores"], lambda m: m != "implied") or "har"
+        forecast = now["forecasts"].get(best)
+        current = float(implied.iloc[-1])
+        if forecast:
+            text += (
+                f"\nImplied now ({source}, {implied.index[-1].date()}): {current:.1%}, "
+                f"{current / forecast:.2f}x the best forecaster's ({vol.LABELS[best]}) "
+                f"{forecast:.1%}"
+            )
+    typer.echo(f"{symbol}\n{text}")
+    if not log:
+        return
+    with tracking.run(
+        lake,
+        VOLATILITY,
+        name=f"vol-{symbol}-{horizon}d",
+        params={**asdict(cfg), "symbol": symbol, "implied": source or "none"},
+        tags={"data_last_session": str(bars.index[-1].date())},
+    ) as active:
+        metrics: dict[str, float | None] = {}
+        for model_name, scores in report["scores"].items():
+            for key, value in scores.items():
+                metrics[f"{model_name}_{key}"] = value
+        for model_name, value in now["forecasts"].items():
+            metrics[f"now_{model_name}"] = value
+        tracking.log_metrics(metrics)
+        tracking.log_text(text, "report.txt")
+        tracking.log_text(report["_forecasts"].to_csv(), "forecasts.csv")
+    typer.echo(f"\nlogged to MLflow ({VOLATILITY}, run {active.info.run_id[:8]}): tp-ml ui")
+
+
+@app.command("regime")
+def regime_cmd(
+    states: Annotated[int, typer.Option(help="Hidden states: 2 or 3.")] = 2,
+    log: Annotated[bool, typer.Option(help="Record the run in MLflow.")] = True,
+) -> None:
+    """Market regimes from SPY: a hidden Markov model, filtered (no look-ahead), out of sample."""
+    if states not in regime.NAMES:
+        typer.echo("states: 2 or 3")
+        raise typer.Exit(code=2)
+    lake = Lake(Settings().data_root)
+    bars = _ohlc(lake, "SPY")
+    if len(bars) < 252 * 5:
+        typer.echo(f"needs 5 years of SPY bars, have {len(bars)} sessions: "
+                   "tp-data bars backfill --years 10")  # fmt: skip
+        raise typer.Exit(code=2)
+    obs = regime.observations(bars)
+    model = regime.fit_regimes(obs, states)
+    desc = regime.describe(model, obs)
+    ev = regime.evaluate_regimes(bars, states)
+    text = regime.report_text(desc, ev)
+    typer.echo(text)
+    if not log:
+        return
+    with tracking.run(
+        lake,
+        REGIMES,
+        name=f"hmm-{states}",
+        params={"states": states, "symbol": "SPY"},
+        tags={"data_last_session": desc["as_of"]},
+    ) as active:
+        metrics: dict[str, float | None] = {f"now_{k}": v for k, v in desc["now"].items()}
+        for s in ev.get("by_state", []):
+            metrics[f"oos_{s['state']}_next_vol"] = s["next_vol"]
+            metrics[f"oos_{s['state']}_share"] = s["share"]
+        if ev.get("days"):
+            metrics["oos_timed_sharpe"] = ev["timed"]["sharpe"]
+            metrics["oos_hold_sharpe"] = ev["buy_and_hold"]["sharpe"]
+        tracking.log_metrics(metrics)
+        tracking.log_text(text, "report.txt")
+        tracking.log_text(model.probabilities(obs).to_csv(), "filtered_probabilities.csv")
+    typer.echo(f"\nlogged to MLflow ({REGIMES}, run {active.info.run_id[:8]}): tp-ml ui")
+
+
 @app.command("runs")
 def runs_cmd(
     experiment: Annotated[
@@ -252,18 +381,20 @@ def runs_cmd(
     """Recent runs: what was tried and how it scored out of sample."""
     lake = Lake(Settings().data_root)
     shown = 0
-    for name in [experiment] if experiment else [EXPERIMENT, RANKING]:
+    for name in [experiment] if experiment else [EXPERIMENT, RANKING, VOLATILITY, REGIMES]:
         try:
             frame = tracking.runs(lake, name)
         except Exception:  # mlflow raises several kinds for a missing store
             continue
         if frame.empty:
             continue
-        table = ranking_table if name == RANKING else runs_table
+        table = {RANKING: ranking_table, VOLATILITY: vol_table, REGIMES: regime_table}.get(
+            name, runs_table
+        )
         typer.echo(f"{'' if not shown else chr(10)}{name}\n{table(frame.head(limit))}")
         shown += 1
     if not shown:
-        typer.echo("no runs yet: tp-ml meta, tp-ml rank")
+        typer.echo("no runs yet: tp-ml meta, tp-ml rank, tp-ml vol, tp-ml regime")
 
 
 def _cell(row: pd.Series, key: str, fmt: str) -> str:
@@ -305,6 +436,31 @@ def ranking_table(frame: pd.DataFrame) -> str:
             f"{cell(row, 'metrics.wf_rank_ic_t', '+.1f'):>5} "
             f"{cell(row, 'metrics.wf_spread', '+.2%'):>8} "
             f"{cell(row, 'metrics.mom_rank_ic', '+.3f'):>12}"
+        )
+    return "\n".join(lines)
+
+
+def vol_table(frame: pd.DataFrame) -> str:
+    cell = _cell
+    models = ["naive", "garch", "har", "gbm", "implied"]
+    lines = [f"{'started':<17} {'run':<22} " + " ".join(f"{m:>8}" for m in models) + "  (QLIKE)"]
+    for _, row in frame.iterrows():
+        started = pd.Timestamp(row["start_time"]).strftime("%Y-%m-%d %H:%M")
+        scores = " ".join(f"{cell(row, f'metrics.{m}_qlike', '.3f'):>8}" for m in models)
+        lines.append(f"{started:<17} {str(row.get('tags.mlflow.runName', ''))[:22]:<22} {scores}")
+    return "\n".join(lines)
+
+
+def regime_table(frame: pd.DataFrame) -> str:
+    cell = _cell
+    lines = [f"{'started':<17} {'run':<12} {'calm now':>9} {'timed Sharpe':>13} {'hold':>6}"]
+    for _, row in frame.iterrows():
+        started = pd.Timestamp(row["start_time"]).strftime("%Y-%m-%d %H:%M")
+        lines.append(
+            f"{started:<17} {str(row.get('tags.mlflow.runName', ''))[:12]:<12} "
+            f"{cell(row, 'metrics.now_calm', '.0%'):>9} "
+            f"{cell(row, 'metrics.oos_timed_sharpe', '.2f'):>13} "
+            f"{cell(row, 'metrics.oos_hold_sharpe', '.2f'):>6}"
         )
     return "\n".join(lines)
 

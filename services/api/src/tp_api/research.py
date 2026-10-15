@@ -34,7 +34,8 @@ from tp_strategies.options_research import (
     CHAIN_MAX_AGE_DAYS,
     DISCLAIMER,
     analyze,
-    closes_from_lake,
+    bars_from_lake,
+    rv_forecast,
     scan,
 )
 
@@ -93,7 +94,8 @@ def symbol_view(ctx: queries.Context, symbol: str, now: datetime) -> dict[str, A
     """One symbol in depth, whether or not it ranks: the stock, its options' pricing and the
     contract each approach would use. Chains of any age are used (and dated)."""
     today = now.astimezone(NEW_YORK).date()
-    closes = closes_from_lake(ctx.lake, [symbol, "SPY"], today)
+    bars = bars_from_lake(ctx.lake, [symbol, "SPY"], today)
+    closes = {s: b["close"] for s, b in bars.items()}
     if symbol not in closes:
         raise HTTPException(404, f"no daily bars for {symbol}: fetch it first")
     chain = latest_chains(ctx.lake, [symbol]).get(symbol)
@@ -107,6 +109,7 @@ def symbol_view(ctx: queries.Context, symbol: str, now: datetime) -> dict[str, A
         iv_hist=mine,
         now=now,
         rate=ctx.risk_free_rate(),
+        forecast=rv_forecast(bars.get(symbol)),
     )
     age = None
     if chain is not None and not chain.empty:

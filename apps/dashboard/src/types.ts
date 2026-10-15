@@ -663,6 +663,9 @@ export interface VolContext {
   iv30: Num;
   hv20: Num;
   iv_hv: Num;
+  rv_forecast?: Num; // the next month's volatility, forecast (HAR-RV)
+  iv_rv?: Num; // implied over that forecast: what "expensive" is judged by
+
   rank: Num;
   percentile: Num;
   history_days: number;

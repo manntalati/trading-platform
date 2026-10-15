@@ -109,7 +109,7 @@ files = [
 
 [[tool.mypy.overrides]]
 # Third-party packages that ship without type information.
-module = ["pyarrow.*", "exchange_calendars.*", "matplotlib.*", "cycler.*", "sklearn.*"]
+module = ["pyarrow.*", "exchange_calendars.*", "matplotlib.*", "cycler.*", "sklearn.*", "scipy.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

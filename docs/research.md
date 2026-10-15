@@ -88,10 +88,16 @@ holding options through it.
 - **IV rank**: where today's 30-day implied volatility sits in its own history (0% = the low,
   100% = the high). It's built from the daily chain snapshots (`clean/option_iv_daily`) and
   needs 20 days of them; until then, the next measure stands in.
-- **Implied vs realized**: 30-day implied volatility against how much the stock actually moved
-  over 20 days.
-- Options count as **expensive** at IV rank 60%+ or implied 1.3x realized. Then the spread leads
-  for swings, and a LEAPS note suggests waiting for calmer pricing.
+- **Implied vs forecast**: 30-day implied volatility against a *forecast* of how much the stock
+  will move over the next month (HAR-RV from its daily ranges, [ml.md](ml.md#volatility-forecasts)).
+  An option seller is paid for implied minus the volatility still to come, not the volatility
+  already past. After a quiet month the trailing number understates what's coming, and implied
+  looks cheap against the forecast when it looked rich against the past.
+- **Implied vs realized**: the same against the last 20 days' moves, shown alongside. It stands
+  in when there's less than about 10 months of bars to forecast from.
+- Options count as **expensive** at IV rank 60%+ or implied 1.3x the forecast (or realized, with
+  no forecast). Then the spread leads for swings, and a LEAPS note suggests waiting for calmer
+  pricing.
 - **Skew** (`tp_core.smile`): each expiry's smile is fitted with SVI, and the 25-delta risk
   reversal (the 25-delta call's implied volatility minus the put's) read off the fit. For stocks
   it's negative: protection costs more than upside. Steeply negative skew pays put sellers well

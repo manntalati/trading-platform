@@ -51,7 +51,7 @@ const idea: ResearchIdea = {
   spot: 102,
   setup: { direction: "bullish", tags: ["uptrend", "pullback"], rs_3m: 0.06 },
   stock: { price: 102 },
-  vol: { iv30: 0.32, hv20: 0.2, iv_hv: 1.6, rank: null, percentile: null, history_days: 5, event: null, rich: true, as_of: null },
+  vol: { iv30: 0.32, hv20: 0.2, iv_hv: 1.6, rv_forecast: 0.22, iv_rv: 1.45, rank: null, percentile: null, history_days: 5, event: null, rich: true, as_of: null },
   pick: spread,
   alternative: call,
   why: ["Uptrend: +3.0% vs its 50-day and +12.0% vs its 200-day average (price above both)."],
@@ -64,7 +64,7 @@ describe("IdeaCard", () => {
     render(<IdeaCard idea={idea} />);
     expect(screen.getByRole("link", { name: "XYZ" })).toHaveAttribute("href", "#/research/lookup/XYZ");
     expect(screen.getByText("pullback")).toBeInTheDocument();
-    expect(screen.getByText(/options expensive/)).toBeInTheDocument();
+    expect(screen.getByText(/options expensive · IV 1.5x forecast/)).toBeInTheDocument();
     expect(screen.getByText("$590.00")).toBeInTheDocument(); // max gain
     expect(screen.getByText(/Uptrend: \+3.0%/)).toBeInTheDocument();
     expect(screen.getByText("Already held: 100 shares.")).toBeInTheDocument();

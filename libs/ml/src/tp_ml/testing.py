@@ -66,3 +66,53 @@ def write_lake(
     )
     build_clean_bars(lake, now=NOW)
     return lake
+
+
+def ohlc_from_returns(
+    returns: np.ndarray, sigma: np.ndarray | float, *, seed: int = 0, start: str = "2010-01-04"
+) -> pd.DataFrame:
+    """Daily OHLC bars (business days) for simulated log ``returns`` whose daily volatility was
+    ``sigma``: a small overnight gap, and a high and low that widen with the volatility."""
+    rng = np.random.default_rng(seed)
+    n = len(returns)
+    sig = np.broadcast_to(np.asarray(sigma, dtype=float), (n,))
+    gap = rng.normal(0, 0.2, n) * sig
+    close = 100 * np.exp(np.cumsum(returns))
+    prev = np.concatenate([[100.0], close[:-1]])
+    open_ = prev * np.exp(gap)
+    reach = np.abs(rng.normal(0, 0.6, (2, n))) * sig
+    high = np.maximum(open_, close) * np.exp(reach[0])
+    low = np.minimum(open_, close) * np.exp(-reach[1])
+    index = pd.bdate_range(start, periods=n)
+    return pd.DataFrame({"open": open_, "high": high, "low": low, "close": close}, index=index)
+
+
+def simulate_garch(
+    n: int, omega: float, alpha: float, beta: float, *, seed: int = 0
+) -> tuple[np.ndarray, np.ndarray]:
+    """Daily log returns of a GARCH(1,1) process (parameters in squared percent) and the
+    daily volatility (decimal) each day had."""
+    rng = np.random.default_rng(seed)
+    var = omega / (1 - alpha - beta)
+    out, sig = np.empty(n), np.empty(n)
+    for t in range(n):
+        sig[t] = np.sqrt(var) / 100
+        out[t] = sig[t] * rng.standard_normal()
+        var = omega + alpha * (out[t] * 100) ** 2 + beta * var
+    return out, sig
+
+
+def simulate_regimes(
+    n: int, vols: tuple[float, ...] = (0.006, 0.02), stay: float = 0.98, *, seed: int = 0
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Daily log returns from a Markov-switching volatility model: the returns, each day's
+    true state and its daily volatility."""
+    rng = np.random.default_rng(seed)
+    k = len(vols)
+    state = np.empty(n, dtype=int)
+    state[0] = 0
+    for t in range(1, n):
+        stays = rng.random() < stay
+        state[t] = state[t - 1] if stays else rng.choice([s for s in range(k) if s != state[t - 1]])
+    sig = np.asarray(vols)[state]
+    return sig * rng.standard_normal(n) + 0.0003, state, sig
