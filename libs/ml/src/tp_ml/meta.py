@@ -30,7 +30,7 @@ from tp_core.indicators import wilder_rsi
 from tp_ml.cv import PurgedKFold, oof_predict, uniqueness, walk_forward, weight_arg
 from tp_ml.features import compute_features
 from tp_ml.labels import rule_labels, triple_barrier
-from tp_ml.models import make_model
+from tp_ml.models import make_model, usable_columns
 
 PRICE_FEATURES = (
     "ret_1", "ret_5", "ret_21", "ret_63", "ret_126", "rel_market_63", "rel_sector_63",
@@ -111,17 +111,6 @@ def bet_size(p: Any) -> Any:
     z = (p - 0.5) / np.sqrt(p * (1 - p))
     normal = 0.5 * (1 + np.vectorize(math.erf)(z / math.sqrt(2)))
     return np.clip(2 * normal - 1, 0.0, 1.0)
-
-
-def usable_columns(data: pd.DataFrame, columns: tuple[str, ...]) -> tuple[str, ...]:
-    """The columns with something to learn from: present, and not all one value or missing
-    (no macro data in the lake leaves its columns empty)."""
-
-    def varies(c: str) -> bool:
-        values = data[c].dropna().to_numpy()
-        return len(values) > 0 and bool((values != values[0]).any())
-
-    return tuple(c for c in columns if c in data.columns and varies(c))
 
 
 def evaluate(

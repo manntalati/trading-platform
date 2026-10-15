@@ -9,9 +9,10 @@ import pandas as pd
 import pytest
 
 from tp_core.calendar import sessions
+from tp_ml.cv import retrain_date
 from tp_ml.meta import MetaModel, bet_size
 from tp_strategies.library import REGISTRY, build, rsi2_meta
-from tp_strategies.library.rsi2_meta import Rsi2Meta, retrain_date
+from tp_strategies.library.rsi2_meta import Rsi2Meta
 from tp_trading.data import MarketData
 from tp_trading.engine import BacktestEngine, BacktestResult
 

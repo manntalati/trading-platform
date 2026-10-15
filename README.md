@@ -117,8 +117,9 @@ The first six paper-trade (`config/paper.toml`); by the plan each is an experime
 passes the backtest gate (`tp-backtest validate`, shown under Paper trading in the dashboard).
 7 to 9 run on the same engine and can be added to the paper book once validated; 10 and 11 are
 research backtests (`tp-backtest research vrp|orb`) until the paper bot can place option and
-intraday orders. 12 is the first machine-learning strategy: strategy 5's signals, filtered by a
-model trained on their past outcomes ([docs/ml.md](docs/ml.md)).
+intraday orders. 12 and 13 are machine-learning strategies ([docs/ml.md](docs/ml.md)). 12 takes
+strategy 5's signals, filtered by a model trained on their past outcomes. 13 is strategy 3's
+portfolio, ranked by a model instead of by 12-1 momentum.
 
 | # | Strategy | Spec |
 |---|---|---|
@@ -134,6 +135,7 @@ model trained on their past outcomes ([docs/ml.md](docs/ml.md)).
 | 10 | Volatility risk premium: buy-write and put-write (research) | [10-vrp.md](docs/strategies/10-vrp.md) |
 | 11 | Opening-range breakout on 5-minute bars (research) | [11-orb.md](docs/strategies/11-orb.md) |
 | 12 | RSI(2) with a meta-labeling filter (machine learning) | [12-rsi2-meta.md](docs/strategies/12-rsi2-meta.md) |
+| 13 | Cross-sectional ranking model, top large caps (machine learning) | [13-ml-rank.md](docs/strategies/13-ml-rank.md) |
 
 ## Machine learning
 
@@ -143,6 +145,7 @@ experiment tracking with MLflow ([docs/ml.md](docs/ml.md)):
 ```bash
 uv run tp-ml features                                   # versioned feature set in the lake
 uv run tp-ml meta                                       # evaluate the RSI(2) meta-labeling filter
+uv run tp-ml rank                                       # cross-sectional ranking vs 12-1 momentum
 uv run tp-ml runs                                       # what's been tried; tp-ml ui for MLflow
 ```
 

@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from tp_core.bars import build_clean_bars
+from tp_core.calendar import sessions
 from tp_core.schemas import RAW_BARS_SCHEMA, RAW_STOCK_BARS_1D, conform
 from tp_core.storage import Lake, write_raw
 from tp_core.testing import raw_bars
@@ -35,16 +36,26 @@ def random_bars(
     return {"open": open_, "high": high, "low": low, "close": close, "volume": volume}
 
 
-def write_lake(root: Path, symbols: list[str], n: int = 420, seed: int = 0) -> Lake:
-    """A lake with clean daily bars: random walks for ``symbols`` from 2022."""
+def write_lake(
+    root: Path,
+    symbols: list[str],
+    n: int = 420,
+    seed: int = 0,
+    drifts: list[float] | None = None,
+) -> Lake:
+    """A lake with clean daily bars: ``n`` sessions of random walks for ``symbols`` ending in
+    2023 (``drifts``: each symbol's daily drift, to plant a cross-sectional signal)."""
     lake = Lake(root)
     rng = np.random.default_rng(seed)
+    days = sessions(date(2010, 1, 4), date(2023, 12, 29))[-n:]
     frames = []
-    for symbol in symbols:
-        closes = 100 * np.exp(np.cumsum(rng.normal(0.0003, 0.015, size=n)))
-        frames.append(
-            raw_bars(symbol, [round(float(c), 4) for c in closes], start=date(2022, 1, 3))
-        )
+    for i, symbol in enumerate(symbols):
+        drift = drifts[i] if drifts else 0.0003
+        closes = 100 * np.exp(np.cumsum(rng.normal(drift, 0.015, size=n)))
+        prices = [round(float(c), 4) for c in closes]
+        # raw_bars covers up to two calendar years from its start: build it in chunks
+        for k in range(0, n, 250):
+            frames.append(raw_bars(symbol, prices[k : k + 250], start=days[k]))
     write_raw(
         lake,
         RAW_STOCK_BARS_1D,

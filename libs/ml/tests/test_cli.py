@@ -16,7 +16,7 @@ CONFIG = Path(__file__).parents[3] / "config"
 @pytest.fixture(scope="module")
 def root(tmp_path_factory: pytest.TempPathFactory) -> Path:
     path = tmp_path_factory.mktemp("ml")
-    write_lake(path, SYMBOLS, n=500, seed=4)
+    write_lake(path, SYMBOLS, n=800, seed=4)
     return path
 
 
@@ -77,3 +77,28 @@ def test_runs_on_an_empty_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     out = runner.invoke(app, ["runs"])
     assert out.exit_code == 0, out.output
     assert "no runs yet" in out.output
+
+
+def test_rank_evaluates_and_logs_to_mlflow() -> None:
+    symbols = ",".join(SYMBOLS[1:])
+    out = runner.invoke(app, ["rank", "--symbols", symbols, "--model", "ridge"])
+    assert out.exit_code == 0, out.output
+    for phrase in ("19 stocks", "Model, walk-forward", "12-1 momentum (baseline)", "logged"):
+        assert phrase in out.output
+    runs = runner.invoke(app, ["runs", "--experiment", "cross-sectional-ranking"])
+    assert runs.exit_code == 0, runs.output
+    assert "rank-ridge-21d" in runs.output
+    both = runner.invoke(app, ["runs"])
+    assert "cross-sectional-ranking" in both.output
+
+
+def test_rank_without_logging_and_bad_options() -> None:
+    symbols = ",".join(SYMBOLS[1:])
+    out = runner.invoke(app, ["rank", "--symbols", symbols, "--model", "gbm", "--no-log"])
+    assert out.exit_code == 0, out.output
+    assert "Model: gbm" in out.output
+    assert "logged" not in out.output
+    assert runner.invoke(app, ["rank", "--model", "forest"]).exit_code == 2
+    none = runner.invoke(app, ["rank"])  # the default large caps aren't in this lake
+    assert none.exit_code == 2
+    assert "tp-data bars backfill" in none.output

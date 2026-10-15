@@ -11,9 +11,11 @@ can reach a broker. The rules are the same as for any strategy:
 ```bash
 uv run tp-ml features              # compute and store the feature set (versioned)
 uv run tp-ml meta                  # evaluate the RSI(2) meta-labeling filter; logged to MLflow
+uv run tp-ml rank                  # evaluate cross-sectional ranking against 12-1 momentum
 uv run tp-ml runs                  # what's been tried, and how it scored
 uv run tp-ml ui                    # MLflow's UI on http://127.0.0.1:5000
 uv run tp-backtest run rsi2-meta   # the filter as an engine strategy (spec 12)
+uv run tp-backtest run ml-rank     # the ranker as an engine strategy (spec 13)
 ```
 
 All of it runs on the daily bars you already have. The macro and earnings features are filled
@@ -87,7 +89,7 @@ change makes noise look predictable, the change leaks.
 
 ## Models
 
-[`tp_ml.models`](../libs/ml/src/tp_ml/models.py) provides two models:
+[`tp_ml.models`](../libs/ml/src/tp_ml/models.py) provides two classifiers for meta-labeling:
 
 - **`logistic`**: median imputation, standardization, then L2-penalised logistic regression. The
   baseline.
@@ -95,6 +97,14 @@ change makes noise look predictable, the change leaks.
   rate, on features cut into 32 quantile bins first. The bins regularize, and they are also how
   this stays fast: with sample weights, scikit-learn otherwise re-sorts every feature once per
   bin edge.
+
+It also provides two regressors for ranking, both on features already ranked across stocks:
+
+- **`ridge`**: the linear baseline. A missing rank is the middle, 0.
+- **`gbm`**: gradient-boosted regression trees.
+
+Columns with nothing in them, such as macro features before `tp-data macro` has run, are left
+out before fitting.
 
 ## Meta-labeling
 
@@ -132,14 +142,18 @@ are cached, so `tp-backtest validate rsi2-meta` reuses them across its threshold
 
 ## Experiment tracking (MLflow)
 
-Every `tp-ml meta` run is recorded in MLflow. The store is a SQLite file,
+Every `tp-ml meta` and `tp-ml rank` run is recorded in MLflow, under the experiments
+`meta-labeling` and `cross-sectional-ranking`. The store is a SQLite file,
 `data/mlflow/mlflow.db`, with artifacts beside it, so no server is needed. Each run records:
 
 - **Parameters**: the full config (labels, model, threshold, folds, features, symbols)
 - **Tags**: the git commit and whether the tree was dirty, the feature set version, and the data
   version
-- **Metrics**: events, base rate and average trade, plus for each scheme (`cv_*`, `wf_*`): AUC,
-  log loss, Brier, kept share, precision and average trade, kept vs all
+- **Metrics**:
+  - for meta-labeling: events, base rate and average trade, plus for each scheme (`cv_*`,
+    `wf_*`) the AUC, log loss, Brier, kept share, precision and average trade, kept vs all;
+  - for ranking: rank IC and its t-stat, IC, spread and its Sharpe, and top-bucket turnover, for
+    the walk-forward (`wf_*`), the k-fold (`cv_*`) and momentum (`mom_*`)
 - **Artifacts**: `report.txt`, `report.json`, and `predictions.csv` (every signal with its label,
   return and both out-of-fold probabilities)
 
@@ -159,12 +173,50 @@ data versions ([backtesting.md](backtesting.md)).
 - **A model has to beat its baseline.** `rsi2-meta` is promoted only if it beats plain `rsi2` on
   the same validation, not merely if it passes the gate.
 
+## Cross-sectional ranking
+
+[`tp_ml.ranking`](../libs/ml/src/tp_ml/ranking.py) and [spec 13](strategies/13-ml-rank.md)
+cover it in full. Each month end, every stock is described by its features. Each feature is
+*ranked* against that day's stocks, so the model learns about relative standing and a
+market-wide move changes nothing. The target is the stock's rank on the next 21 sessions'
+return, entered at the next open.
+
+`tp-ml rank` scores every stock-month out of sample, walk-forward (the main scheme) and purged
+k-fold. It reports what the factor literature measures, next to 12-1 momentum over the same
+months:
+
+```
+                            rank IC  t-stat   IC>0  spread/mo  Sharpe  top turnover
+Model, walk-forward          +0.022    +1.2    56%     +0.20%    0.30           61%
+Model, purged k-fold         +0.003    +0.2    50%     -0.13%   -0.17           64%
+12-1 momentum (baseline)     +0.007    +0.4    51%     +0.51%    0.61           23%
+```
+
+That ran on synthetic random walks. A t-stat of 1.2 is noise, and so is the momentum row's
+Sharpe of 0.6: with 38 stocks in 5 buckets, spreads are noisy. On real data, look for:
+
+- a rank IC with a t-stat above 2;
+- a rank IC above momentum's;
+- bucket returns that rise from the worst bucket to the best.
+
+Options:
+
+- `--model gbm`
+- `--horizon 63` (rank the next quarter's return)
+- `--buckets 3`
+- `--features all` (adds the earnings features)
+- `--no-log`
+
+Runs go to the MLflow experiment `cross-sectional-ranking`.
+
+The engine strategy `ml-rank` holds strategy 3's portfolio, the top 10 at equal weight with at
+most 3 per sector, but ranked by the model. It retrains every 3 months on the month ends before
+that month, and ranks by 12-1 momentum until it has 24 month ends to learn from. A 10-year
+backtest takes about 15 seconds.
+
 ## What's next in Phase 4
 
-1. **Cross-sectional ranking.** Predict next month's relative returns across the universe, with
-   ridge first and then gradient boosting. Measure it with the information coefficient, rank IC
-   and decile spreads.
-2. **Regimes and volatility.** A hidden Markov model on returns and volatility. GARCH(1,1) and
+1. **Regimes and volatility.** A hidden Markov model on returns and volatility. GARCH(1,1) and
    HAR-RV volatility forecasts against a gradient-boosted one. Implied against forecast volatility
    for the options work.
-3. **Strategy search**, guarded by the Deflated Sharpe and walk-forward.
+2. **Strategy search**, guarded by the Deflated Sharpe and walk-forward.

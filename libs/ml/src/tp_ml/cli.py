@@ -4,11 +4,13 @@ tp-ml features                 # compute and store the daily feature set (versio
 tp-ml features --list          # the stored versions
 tp-ml meta                     # evaluate the RSI(2) meta-labeling filter; logged to MLflow
 tp-ml meta --model logistic --label barrier
+tp-ml rank                     # evaluate cross-sectional ranking (IC, buckets) vs 12-1 momentum
+tp-ml rank --model gbm
 tp-ml runs                     # recent runs and their scores
 tp-ml ui                       # MLflow's web UI on http://127.0.0.1:5000
 
-Every ``meta`` run records its parameters, the feature set version, the data version and the git
-commit, so a number in a note can always be traced back to what produced it.
+Every run records its parameters, the feature set version, the data version and the git commit,
+so a number in a note can always be traced back to what produced it.
 """
 
 from __future__ import annotations
@@ -30,15 +32,16 @@ from tp_core.config import Settings
 from tp_core.portfolio import Classifier
 from tp_core.storage import Lake
 from tp_core.versions import data_version
-from tp_ml import meta, tracking
-from tp_ml.features import FEATURES
-from tp_ml.models import MODELS
+from tp_ml import meta, ranking, tracking
+from tp_ml.features import EARNINGS, FEATURES
+from tp_ml.models import MODELS, REGRESSORS
 from tp_ml.store import build_feature_set, load_feature_set, registry, wide_bars
 
 app = typer.Typer(help="Features, models and experiment tracking.", no_args_is_help=True)
 
 INDEX_ETFS = ("SPY", "QQQ", "IWM", "DIA")
 EXPERIMENT = "meta-labeling"
+RANKING = "cross-sectional-ranking"
 
 
 def default_symbols(universes: Path) -> list[str]:
@@ -48,12 +51,13 @@ def default_symbols(universes: Path) -> list[str]:
     return list(dict.fromkeys([*INDEX_ETFS, *raw.get("bars", {}).get("stocks", [])]))
 
 
-def _symbols(value: str | None, settings: Settings, lake: Lake) -> list[str]:
-    wanted = (
-        [s.strip().upper() for s in value.split(",") if s.strip()]
-        if value
-        else default_symbols(settings.universes_file)
-    )
+def _symbols(
+    value: str | None, settings: Settings, lake: Lake, *, stocks_only: bool = False
+) -> list[str]:
+    defaults = default_symbols(settings.universes_file)
+    if stocks_only:
+        defaults = [s for s in defaults if s not in INDEX_ETFS]
+    wanted = [s.strip().upper() for s in value.split(",") if s.strip()] if value else defaults
     missing = set(missing_symbols(lake, wanted))
     return [s for s in wanted if s not in missing]
 
@@ -170,29 +174,105 @@ def _flat_metrics(report: dict[str, Any]) -> dict[str, float | None]:
     return out
 
 
+@app.command("rank")
+def rank_cmd(
+    symbols: Annotated[
+        str | None, typer.Option(help="Comma-separated; default: the large caps.")
+    ] = None,
+    model: Annotated[str, typer.Option(help=f"One of {', '.join(REGRESSORS)}.")] = "ridge",
+    horizon: Annotated[int, typer.Option(help="Sessions ahead the return is ranked.")] = 21,
+    buckets: Annotated[int, typer.Option(help="Groups by score (5 for a small universe).")] = 5,
+    features: Annotated[
+        str, typer.Option(help="'price' (what the strategy uses) or 'all' (+ earnings).")
+    ] = "price",
+    log: Annotated[bool, typer.Option(help="Record the run in MLflow.")] = True,
+) -> None:
+    """Evaluate a cross-sectional ranking model out of sample, against 12-1 momentum."""
+    if model not in REGRESSORS or features not in ("price", "all") or buckets < 2:
+        typer.echo(f"model: {REGRESSORS}; features: price or all; buckets: 2 or more")
+        raise typer.Exit(code=2)
+    settings = Settings()
+    lake = Lake(settings.data_root)
+    chosen = _symbols(symbols, settings, lake, stocks_only=True)
+    if len(chosen) < max(buckets, 5):
+        typer.echo("needs daily bars for at least 5 stocks: tp-data bars backfill")
+        raise typer.Exit(code=2)
+    cfg = ranking.RankConfig(model=model, horizon=horizon, buckets=buckets)
+    columns = ranking.RANK_FEATURES + (EARNINGS if features == "all" else ())
+    classifier = Classifier.load(settings.classifications_file)
+    entry = build_feature_set(
+        lake, name="ranking", symbols=chosen, classifier=classifier, now=datetime.now(UTC)
+    )
+    panel = load_feature_set(lake, entry["name"], entry["version"])
+    raw = load_bars(lake, chosen)
+    data = ranking.ranking_dataset(wide_bars(raw), panel, cfg, columns)
+    months = data.index.get_level_values("date").nunique() if len(data) else 0
+    if months < 24:
+        typer.echo(f"only {months} month ends with a known next month: too few to evaluate")
+        raise typer.Exit(code=2)
+    typer.echo(f"feature set {entry['name']} {entry['version']}\n")
+    report = ranking.evaluate_ranking(data, cfg, columns)
+    text = ranking.report_text(report)
+    typer.echo(text)
+    if not log:
+        return
+    version = data_version(raw)
+    with tracking.run(
+        lake,
+        RANKING,
+        name=f"rank-{model}-{horizon}d",
+        params={**asdict(cfg), "features": features, "symbols": len(chosen)},
+        tags={
+            "feature_set": f"{entry['name']}:{entry['version']}",
+            "data_rows": version["rows"],
+            "data_last_session": version["last_session"],
+        },
+    ) as active:
+        metrics: dict[str, float | None] = {"rows": report["rows"]}
+        for name, prefix in (("walk_forward", "wf"), ("cv", "cv"), ("momentum", "mom")):
+            for key, value in (report.get(name) or {}).items():
+                if isinstance(value, int | float):
+                    metrics[f"{prefix}_{key}"] = value
+        tracking.log_metrics(metrics)
+        tracking.log_text(text, "report.txt")
+        summary = {k: v for k, v in report.items() if not k.startswith("_")}
+        tracking.log_text(json.dumps(summary, indent=2, default=str), "report.json")
+        scored = report["_scored"][["fwd", "momentum", "p_walk_forward", "p_cv"]]
+        tracking.log_text(scored.reset_index().to_csv(index=False), "predictions.csv")
+    typer.echo(f"\nlogged to MLflow ({RANKING}, run {active.info.run_id[:8]}): tp-ml ui")
+
+
 @app.command("runs")
 def runs_cmd(
-    experiment: Annotated[str, typer.Option(help="MLflow experiment.")] = EXPERIMENT,
+    experiment: Annotated[
+        str | None, typer.Option(help="MLflow experiment; default: both.")
+    ] = None,
     limit: Annotated[int, typer.Option(help="Most recent N.")] = 10,
 ) -> None:
     """Recent runs: what was tried and how it scored out of sample."""
     lake = Lake(Settings().data_root)
-    try:
-        frame = tracking.runs(lake, experiment)
-    except Exception as exc:  # mlflow raises several kinds for a missing store
-        typer.echo(f"no runs yet ({exc.__class__.__name__}): tp-ml meta")
-        raise typer.Exit(code=0) from None
-    if frame.empty:
-        typer.echo("no runs yet: tp-ml meta")
-        return
-    typer.echo(runs_table(frame.head(limit)))
+    shown = 0
+    for name in [experiment] if experiment else [EXPERIMENT, RANKING]:
+        try:
+            frame = tracking.runs(lake, name)
+        except Exception:  # mlflow raises several kinds for a missing store
+            continue
+        if frame.empty:
+            continue
+        table = ranking_table if name == RANKING else runs_table
+        typer.echo(f"{'' if not shown else chr(10)}{name}\n{table(frame.head(limit))}")
+        shown += 1
+    if not shown:
+        typer.echo("no runs yet: tp-ml meta, tp-ml rank")
+
+
+def _cell(row: pd.Series, key: str, fmt: str) -> str:
+    value = row.get(key)
+    return "—" if value is None or pd.isna(value) else format(float(value), fmt)
 
 
 def runs_table(frame: pd.DataFrame) -> str:
-    def cell(row: pd.Series, key: str, fmt: str) -> str:
-        value = row.get(key)
-        return "—" if value is None or pd.isna(value) else format(float(value), fmt)
-
+    cell = _cell
     lines = [
         f"{'started':<17} {'run':<22} {'events':>6} {'CV AUC':>7} {'WF AUC':>7} "
         f"{'kept':>5} {'trade kept':>10} {'all':>7}"
@@ -206,6 +286,25 @@ def runs_table(frame: pd.DataFrame) -> str:
             f"{cell(row, 'metrics.wf_kept_share', '.0%'):>5} "
             f"{cell(row, 'metrics.wf_avg_trade_kept', '+.2%'):>10} "
             f"{cell(row, 'metrics.wf_avg_trade_all', '+.2%'):>7}"
+        )
+    return "\n".join(lines)
+
+
+def ranking_table(frame: pd.DataFrame) -> str:
+    cell = _cell
+    lines = [
+        f"{'started':<17} {'run':<22} {'months':>6} {'rank IC':>8} {'t':>5} {'spread':>8} "
+        f"{'momentum IC':>12}"
+    ]
+    for _, row in frame.iterrows():
+        started = pd.Timestamp(row["start_time"]).strftime("%Y-%m-%d %H:%M")
+        lines.append(
+            f"{started:<17} {str(row.get('tags.mlflow.runName', ''))[:22]:<22} "
+            f"{cell(row, 'metrics.wf_dates', '.0f'):>6} "
+            f"{cell(row, 'metrics.wf_rank_ic', '+.3f'):>8} "
+            f"{cell(row, 'metrics.wf_rank_ic_t', '+.1f'):>5} "
+            f"{cell(row, 'metrics.wf_spread', '+.2%'):>8} "
+            f"{cell(row, 'metrics.mom_rank_ic', '+.3f'):>12}"
         )
     return "\n".join(lines)
 
