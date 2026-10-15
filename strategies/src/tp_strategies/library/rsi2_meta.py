@@ -16,31 +16,18 @@ from __future__ import annotations
 import math
 from collections import Counter
 from dataclasses import dataclass
-from typing import Any, ClassVar
+from typing import ClassVar
 
-import numpy as np
 import pandas as pd
 
 from tp_ml.features import LOOKBACK, latest_price_features
 from tp_ml.meta import MetaConfig, MetaModel, bet_size, train
+from tp_strategies.library.ml import ModelCache, latest_bars, sectors_of
 from tp_strategies.library.rsi2 import INDEX_ETFS, rsi2_decisions
 from tp_strategies.library.xs_momentum import LARGE_CAPS
-from tp_trading.data import FIELDS
 from tp_trading.strategy import Context, Strategy
 
-_CACHE_SIZE = 64
-# Fitted models by (training parameters, retrain date, data fingerprint): a backtest retrains
-# once per period instead of every session, and validation's variants (other thresholds) reuse
-# the same models; a paper run (a fresh process each day) trains once.
-_MODELS: dict[tuple[Any, ...], MetaModel | None] = {}
-
-
-def retrain_date(now: pd.Timestamp, months: int) -> pd.Timestamp:
-    """The first day of the latest month that starts a ``months``-month period (Jan, Apr, Jul,
-    Oct for 3): the model in use was trained on the bars before it."""
-    index = now.year * 12 + now.month - 1
-    start = index - index % months
-    return pd.Timestamp(year=start // 12, month=start % 12 + 1, day=1)
+_MODELS = ModelCache()
 
 
 @dataclass(frozen=True)
@@ -132,51 +119,26 @@ class Rsi2Meta(Strategy):
             cash -= quantity * price
             ctx.order(symbol, quantity, reason=why, target_weight=size / self.slots)
 
-    def _sectors(self, ctx: Context, symbols: pd.Index) -> dict[str, str]:
-        return {str(s): sector for s in symbols if (sector := ctx.sector(str(s)))}
-
     def _model(self, ctx: Context) -> MetaModel | None:
         """The model for today: trained on the bars before the current retrain date (cached)."""
-        cutoff = retrain_date(pd.Timestamp(ctx.now), self.retrain)
-        history = ctx.history("close")
-        close = history[history.index < cutoff]
-        if len(close) <= self.trend:
-            return None
-        key = (
-            self.universe,
-            self.entry,
-            self.trend,
-            self.exit_ma,
-            self.max_hold,
-            self.model,
-            self.min_events,
-            cutoff,
-            tuple(map(str, close.columns)),
-            close.shape,
-            float(np.nansum(close.to_numpy(dtype=float))),
-        )
-        if key not in _MODELS:
-            past: dict[str, pd.DataFrame] = {"close": close}
-            for field in FIELDS:
-                frame = ctx.history(field)
-                past[field] = frame[frame.index < cutoff]
+
+        def fit(past: dict[str, pd.DataFrame]) -> MetaModel | None:
+            sectors = sectors_of(ctx, past["close"].columns)
             try:
-                model = train(
-                    past, self.config(), sectors=self._sectors(ctx, close.columns),
-                    min_events=self.min_events,
-                )  # fmt: skip
+                return train(past, self.config(), sectors=sectors, min_events=self.min_events)
             except ValueError:
-                model = None
-            if len(_MODELS) >= _CACHE_SIZE:
-                _MODELS.pop(next(iter(_MODELS)))
-            _MODELS[key] = model
-        return _MODELS[key]
+                return None
+
+        params = (self.universe, self.entry, self.trend, self.exit_ma, self.max_hold,
+                  self.model, self.min_events)  # fmt: skip
+        model: MetaModel | None = _MODELS.get(
+            ctx, params, months=self.retrain, min_sessions=self.trend, train=fit
+        )
+        return model
 
     def _score(self, ctx: Context, model: MetaModel, symbols: list[str]) -> dict[str, float]:
         """Today's probability for each signal, from features on the bars up to today."""
-        bars: dict[str, pd.DataFrame] = {
-            field: ctx.history(field, lookback=LOOKBACK) for field in FIELDS
-        }
-        sectors = self._sectors(ctx, bars["close"].columns)
+        bars = latest_bars(ctx, LOOKBACK)
+        sectors = sectors_of(ctx, bars["close"].columns)
         today = latest_price_features(bars, sectors=sectors).reindex(symbols)
         return dict(zip(symbols, model.predict(today).tolist(), strict=True))

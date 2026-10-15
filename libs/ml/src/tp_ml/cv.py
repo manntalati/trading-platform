@@ -89,6 +89,29 @@ def oof_predict(
     return out
 
 
+def oof_regress(
+    make_model: Callable[[], Any],
+    x: pd.DataFrame,
+    y: pd.Series,
+    splits: Iterator[tuple[np.ndarray, np.ndarray]],
+) -> pd.Series:
+    """Out-of-fold predictions of a regressor; samples in no test fold stay NaN."""
+    out = pd.Series(np.nan, index=x.index, dtype=float)
+    for train, test in splits:
+        model = make_model()
+        model.fit(x.iloc[train], y.iloc[train])
+        out.iloc[test] = model.predict(x.iloc[test])
+    return out
+
+
+def retrain_date(now: pd.Timestamp, months: int) -> pd.Timestamp:
+    """The first day of the latest month that starts a ``months``-month period (Jan, Apr, Jul,
+    Oct for 3): a model retrained on that schedule was trained on the bars before it."""
+    index = now.year * 12 + now.month - 1
+    start = index - index % months
+    return pd.Timestamp(year=start // 12, month=start % 12 + 1, day=1)
+
+
 def weight_arg(model: Any) -> str:
     """``sample_weight`` for a plain estimator, ``<last step>__sample_weight`` in a pipeline."""
     steps = getattr(model, "steps", None)

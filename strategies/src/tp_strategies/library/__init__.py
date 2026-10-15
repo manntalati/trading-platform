@@ -16,6 +16,7 @@ from tp_strategies.library.dual_momentum import DualMomentum
 from tp_strategies.library.factors import FactorPortfolio
 from tp_strategies.library.leveraged_momentum import LeveragedMomentum
 from tp_strategies.library.ma_timing import MaTiming
+from tp_strategies.library.ml_rank import MlRank
 from tp_strategies.library.pairs import Pairs
 from tp_strategies.library.pead import EarningsDrift
 from tp_strategies.library.rsi2 import Rsi2Reversion
@@ -35,6 +36,7 @@ STRATEGIES: tuple[type[Strategy], ...] = (
     FactorPortfolio,
     EarningsDrift,
     Rsi2Meta,
+    MlRank,
 )
 REGISTRY: dict[str, type[Strategy]] = {cls.name: cls for cls in STRATEGIES}
 
