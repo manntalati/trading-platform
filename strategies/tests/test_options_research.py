@@ -265,3 +265,36 @@ def test_a_chain_missing_whole_expiry_windows_still_analyzes() -> None:
     empty = priced(short, 100.0, NOW, 0.04, right="C", dte=(50, 120))
     assert empty.empty
     assert {"mid", "spread_pct", "years", "iv", "delta", "theta", "vega"} <= set(empty.columns)
+
+
+def test_expensive_is_judged_against_the_volatility_forecast() -> None:
+    """Implied 30% looks rich against a quiet month's 10% realized; not against a forecast that
+    the next month will be 28% (a calm stretch that won't last)."""
+    rising = closes(0.003, seed=2)
+    c = chain(rising.iloc[-1])
+    trailing = analyze("XYZ", rising, chain=c, benchmark=None, iv_hist=None, now=NOW, rate=0.04)
+    assert trailing["vol"]["rich"] is True
+    assert trailing["vol"]["iv_rv"] is None
+    ahead = analyze("XYZ", rising, chain=c, benchmark=None, iv_hist=None, now=NOW, rate=0.04,
+                    forecast=0.28)  # fmt: skip
+    vol = ahead["vol"]
+    assert vol["rv_forecast"] == 0.28
+    assert vol["iv_rv"] == pytest.approx(0.3 / 0.28, abs=0.05)
+    assert vol["iv_hv"] > 2  # still reported
+    assert vol["rich"] is False
+    cheap = analyze("XYZ", rising, chain=c, benchmark=None, iv_hist=None, now=NOW, rate=0.04,
+                    forecast=0.15)  # fmt: skip
+    assert cheap["vol"]["rich"] is True  # 2x the forecast
+
+
+def test_rv_forecast_from_bars() -> None:
+    from tp_ml.testing import random_bars
+    from tp_strategies.options_research import rv_forecast
+
+    bars = random_bars(["XYZ"], n=300)
+    frame = pd.DataFrame({k: v["XYZ"] for k, v in bars.items() if k != "volume"})
+    value = rv_forecast(frame)
+    assert value is not None
+    assert 0.1 < value < 0.4  # the walk's volatility is about 24% a year
+    assert rv_forecast(frame.iloc[:100]) is None  # too little history
+    assert rv_forecast(None) is None

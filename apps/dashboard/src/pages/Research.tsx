@@ -174,7 +174,14 @@ export function IdeaCard({ idea }: { idea: ResearchIdea }) {
 
 function VolTag({ vol }: { vol: VolContext }) {
   if (vol.iv30 == null) return null;
-  const label = vol.rank != null ? `IV rank ${pct(vol.rank, 0)}` : vol.iv_hv != null ? `IV ${num(vol.iv_hv, 1)}x realized` : `IV ${pct(vol.iv30, 0)}`;
+  const label =
+    vol.rank != null
+      ? `IV rank ${pct(vol.rank, 0)}`
+      : vol.iv_rv != null
+        ? `IV ${num(vol.iv_rv, 1)}x forecast`
+        : vol.iv_hv != null
+          ? `IV ${num(vol.iv_hv, 1)}x realized`
+          : `IV ${pct(vol.iv30, 0)}`;
   return (
     <>
       <span className={`pill ${vol.rich ? "rich" : ""}`}>{vol.rich ? `options expensive · ${label}` : label}</span>
@@ -436,7 +443,7 @@ function SymbolDepth({ symbol, live }: { symbol: string; live: LiveState }) {
           sub={
             v.iv30 == null
               ? "no chain yet"
-              : `${v.rank != null ? `rank ${pct(v.rank, 0)} · ` : ""}${v.iv_hv != null ? `${num(v.iv_hv, 1)}x realized ${pct(v.hv20, 0)}` : ""}${v.rich ? " · expensive" : ""}${
+              : `${v.rank != null ? `rank ${pct(v.rank, 0)} · ` : ""}${v.iv_rv != null ? `${num(v.iv_rv, 1)}x the ${pct(v.rv_forecast, 0)} forecast · ` : ""}${v.iv_hv != null ? `${num(v.iv_hv, 1)}x realized ${pct(v.hv20, 0)}` : ""}${v.rich ? " · expensive" : ""}${
                   v.skew_25d != null ? ` · put skew ${num(-v.skew_25d * 100, 1)} pts` : ""
                 }${v.term_shape ? ` · ${v.term_shape}` : ""}`
           }

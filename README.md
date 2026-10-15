@@ -140,13 +140,15 @@ portfolio, ranked by a model instead of by 12-1 momentum.
 
 ## Machine learning
 
-Point-in-time features, triple-barrier and rule-based labels, purged cross-validation and
-experiment tracking with MLflow ([docs/ml.md](docs/ml.md)):
+Point-in-time features, triple-barrier and rule-based labels, purged cross-validation,
+volatility forecasts, regimes and experiment tracking with MLflow ([docs/ml.md](docs/ml.md)):
 
 ```bash
 uv run tp-ml features                                   # versioned feature set in the lake
 uv run tp-ml meta                                       # evaluate the RSI(2) meta-labeling filter
 uv run tp-ml rank                                       # cross-sectional ranking vs 12-1 momentum
+uv run tp-ml vol                                        # volatility forecasts (GARCH, HAR) vs the VIX
+uv run tp-ml regime                                     # market regimes (hidden Markov model)
 uv run tp-ml runs                                       # what's been tried; tp-ml ui for MLflow
 ```
 

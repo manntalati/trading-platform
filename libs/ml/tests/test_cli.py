@@ -102,3 +102,38 @@ def test_rank_without_logging_and_bad_options() -> None:
     none = runner.invoke(app, ["rank"])  # the default large caps aren't in this lake
     assert none.exit_code == 2
     assert "tp-data bars backfill" in none.output
+
+
+@pytest.fixture(scope="module")
+def spy_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    path = tmp_path_factory.mktemp("spy")
+    write_lake(path, ["SPY", "XYZ"], n=1400, seed=6)
+    return path
+
+
+def test_vol_and_regime_report_and_log(spy_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TP_DATA_ROOT", str(spy_root))
+    out = runner.invoke(app, ["vol"])
+    assert out.exit_code == 0, out.output
+    for phrase in ("SPY", "GARCH(1,1)", "HAR-RV", "Now (", "logged"):
+        assert phrase in out.output
+    assert "Implied now" not in out.output  # no VIX in this lake
+    other = runner.invoke(app, ["vol", "--symbol", "xyz", "--no-log"])
+    assert other.exit_code == 0, other.output
+    assert other.output.startswith("XYZ")
+    regimes = runner.invoke(app, ["regime"])
+    assert regimes.exit_code == 0, regimes.output
+    for phrase in ("calm", "stressed", "Today:", "logged"):
+        assert phrase in regimes.output
+    runs = runner.invoke(app, ["runs"])
+    assert "volatility" in runs.output
+    assert "vol-SPY-21d" in runs.output
+    assert "hmm-2" in runs.output
+
+
+def test_vol_and_regime_need_enough_history() -> None:
+    short = runner.invoke(app, ["vol", "--symbol", "S00"])  # 800 sessions in this lake
+    assert short.exit_code == 2
+    assert "sessions of S00 bars" in short.output
+    assert runner.invoke(app, ["regime"]).exit_code == 2
+    assert runner.invoke(app, ["regime", "--states", "4"]).exit_code == 2

@@ -17,14 +17,16 @@ Contracts (from the latest chain snapshot, priced at the ask to buy and the bid 
 
 - **Swing** (weeks to a couple of months): 30-100 days out, nearest 60; delta about 0.55 (at or
   slightly in the money, so the stock doesn't need a big move just to break even).
-- **Debit spread** instead when options are expensive (IV rank 60%+ or implied 1.3x the stock's
-  realized volatility): buy the swing contract, sell the 0.30-delta one in the same expiry.
+- **Debit spread** instead when options are expensive (IV rank 60%+, or implied 1.3x the
+  volatility forecast for the next month, ``tp_ml.vol``'s HAR-RV; 1.3x the trailing realized
+  when there's too little history to forecast): buy the swing contract, sell the 0.30-delta one
+  in the same expiry.
   Cheaper, less hurt by a volatility drop, profit capped.
 - **LEAPS** (stock replacement, 9+ months out): delta about 0.80; among those, the expiry and
   strike with the least time value paid per year.
 - **Covered call** on 100+ shares: 21-50 days out, delta about 0.25.
 
-The IV rank needs ``MIN_RANK_DAYS`` of daily snapshots; until then the IV-to-realized ratio
+The IV rank needs ``MIN_RANK_DAYS`` of daily snapshots; until then the IV-to-forecast ratio
 stands in.
 """
 
@@ -50,6 +52,7 @@ from tp_core.positions import OptionPosition, scenarios, stock_stats, years_unti
 from tp_core.smile import ExpiryFit, fit_expiry, term_shape
 from tp_core.storage import Lake
 from tp_core.volatility import atm_term, chain_spot, event_expiry, iv_at, iv_history, iv_rank
+from tp_ml.vol import har_forecast
 
 Right = Literal["C", "P"]
 log = logging.getLogger(__name__)
@@ -73,6 +76,7 @@ EXCLUDED_CLASSES = frozenset(
 CHAIN_MAX_AGE_DAYS = 5
 RICH_IV_RANK = 0.6
 RICH_IV_RATIO = 1.3
+FORECAST_DAYS = 21  # the volatility forecast's horizon: about the 30-day implied's
 MAX_SPREAD = 0.15  # bid/ask spread as a share of the mid
 
 
@@ -571,15 +575,23 @@ def vol_context(
     spot: float | None = None,
     now: datetime | None = None,
     rate: float = 0.0,
+    forecast: float | None = None,
 ) -> dict[str, Any]:
     """Implied volatility 30 days out, its rank in its own history, against realized
-    volatility, and any event the term structure shows; with ``spot`` and ``now``, also the
-    skew of the ~30-day smile (SVI fit) and the term structure's slope (``tp_core.smile``)."""
+    volatility and against the forecast of the next month's (``forecast``), and any event the
+    term structure shows; with ``spot`` and ``now``, also the skew of the ~30-day smile (SVI
+    fit) and the term structure's slope (``tp_core.smile``).
+
+    Expensive (``rich``) means a high IV rank, or implied at least ``RICH_IV_RATIO`` times the
+    forecast volatility (the trailing realized when there is no forecast): what a seller is
+    paid for is implied minus the volatility still to come, not the volatility already past."""
     if chain is None or chain.empty:
         return {
             "iv30": None,
             "hv20": hv20,
             "iv_hv": None,
+            "rv_forecast": forecast,
+            "iv_rv": None,
             "rank": None,
             "percentile": None,
             "history_days": 0,
@@ -605,14 +617,18 @@ def vol_context(
             }
     rank = iv_rank(history if history is not None else pd.Series(dtype=float), iv30)
     ratio = iv30 / hv20 if iv30 and hv20 else None
+    to_forecast = iv30 / forecast if iv30 and forecast else None
+    judged = to_forecast if to_forecast is not None else ratio
     rich = bool(
         (rank["rank"] is not None and rank["rank"] >= RICH_IV_RANK)
-        or (ratio is not None and ratio >= RICH_IV_RATIO)
+        or (judged is not None and judged >= RICH_IV_RATIO)
     )
     return {
         "iv30": iv30,
         "hv20": hv20,
         "iv_hv": ratio,
+        "rv_forecast": forecast,
+        "iv_rv": to_forecast,
         "rank": rank["rank"],
         "percentile": rank["percentile"],
         "history_days": rank["days"],
@@ -687,16 +703,20 @@ def analyze(
     now: datetime,
     rate: float,
     rules: Rules | None = None,
+    forecast: float | None = None,
 ) -> dict[str, Any]:
     """Everything the research knows about one symbol: the stock, its options' pricing, and the
-    contract each approach would use."""
+    contract each approach would use. ``forecast``: the next month's volatility forecast."""
     rules = rules or Rules()
     stats = stock_stats(closes, None, benchmark)
     spot_now = chain_spot(chain) if chain is not None and not chain.empty else None
     spot = spot_now or _num(stats.get("price"))
     rs = _relative_strength(closes, benchmark)
     setup = stock_setup(stats, rs)
-    vol = vol_context(chain, _num(stats.get("vol_20d")), iv_hist, spot=spot, now=now, rate=rate)
+    vol = vol_context(
+        chain, _num(stats.get("vol_20d")), iv_hist, spot=spot, now=now, rate=rate,
+        forecast=forecast,
+    )  # fmt: skip
     out: dict[str, Any] = {
         "symbol": symbol,
         "spot": spot,
@@ -959,6 +979,11 @@ def _vol_lines(vol: Mapping[str, Any], kind: str) -> list[str]:
         if vol.get("iv_hv")
         else ""
     )
+    if vol.get("iv_rv"):
+        ratio += (
+            f" and {vol['iv_rv']:.1f}x the {_pct(vol.get('rv_forecast'), 0)} forecast for the "
+            "next month"
+        )
     lines.append(f"Options: 30-day implied volatility {_pct(iv, 0)}{ratio}; {rank_text}.")
     if kind == "income":
         lines.append(
@@ -1005,17 +1030,29 @@ def eligible(symbol: str, classifier: Classifier) -> bool:
     return classifier.funds.get(symbol) not in EXCLUDED_CLASSES
 
 
-def closes_from_lake(lake: Lake, symbols: list[str], today: date) -> dict[str, pd.Series]:
+def bars_from_lake(
+    lake: Lake, symbols: list[str], today: date, days: int = 420
+) -> dict[str, pd.DataFrame]:
+    """Adjusted daily ``open``, ``high``, ``low``, ``close`` per symbol (DatetimeIndex)."""
     present = [s for s in dict.fromkeys(symbols) if s not in missing_symbols(lake, [s])]
     if not present:
         return {}
-    bars = load_bars(lake, present, start=today - timedelta(days=420))
-    return {
-        str(s): pd.Series(
-            g["adj_close"].to_numpy(dtype=float), index=pd.DatetimeIndex(g["session"])
-        )
-        for s, g in bars.groupby("symbol")
-    }
+    bars = load_bars(lake, present, start=today - timedelta(days=days))
+    out = {}
+    for symbol, g in bars.groupby("symbol"):
+        frame = g[["adj_open", "adj_high", "adj_low", "adj_close"]].astype(float)
+        frame.columns = ["open", "high", "low", "close"]
+        frame.index = pd.DatetimeIndex(g["session"])
+        out[str(symbol)] = frame
+    return out
+
+
+def rv_forecast(bars: pd.DataFrame | None) -> float | None:
+    """The next month's volatility as HAR-RV forecasts it (``tp_ml.vol``): what implied
+    volatility should be compared with, rather than last month's realized."""
+    if bars is None:
+        return None
+    return har_forecast(bars, horizon=FORECAST_DAYS, min_sessions=200)
 
 
 def scan(
@@ -1033,7 +1070,8 @@ def scan(
     rules = rules or Rules()
     today = now.astimezone(NEW_YORK).date()
     wanted = [s for s in dict.fromkeys(symbols) if eligible(s, classifier)]
-    closes = closes_from_lake(lake, [*wanted, "SPY"], today)
+    bars = bars_from_lake(lake, [*wanted, "SPY"], today)
+    closes = {symbol: b["close"] for symbol, b in bars.items()}
     bench = closes.get("SPY")
     history = iv_history(lake)
     by_symbol = {
@@ -1056,6 +1094,7 @@ def scan(
                     now=now,
                     rate=rate,
                     rules=rules,
+                    forecast=rv_forecast(bars.get(symbol)),
                 )
             )
         except Exception as exc:  # one odd chain must not take the whole scan down
