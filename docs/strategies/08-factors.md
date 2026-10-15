@@ -28,7 +28,7 @@
 | | |
 |---|---|
 | Universe | The 38 large caps |
-| Data | Fundamentals from SEC filings, point in time: each figure only from the day it was filed, as first reported (`tp-data fundamentals`; `tp_strategies.reference`) |
+| Data | Fundamentals from SEC filings, point in time: each figure only from the day it was filed, as first reported (`tp-data fundamentals`; `tp_core.reference`) |
 | Value | Average of the percentile ranks of earnings yield (trailing net income over market cap) and book to market (equity over market cap); negative equity excluded |
 | Quality | Gross profit (trailing twelve months) over total assets; return on equity where gross profit isn't reported (banks) |
 | Low volatility | Lowest standard deviation of daily returns over the last 252 sessions |

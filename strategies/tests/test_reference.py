@@ -9,6 +9,7 @@ import pytest
 
 from tp_core.bars import load_bars
 from tp_core.fundamentals import load_facts, quarterly
+from tp_core.reference import LakeReference
 from tp_core.storage import Lake
 from tp_ingest.jobs.bars import run_backfill
 from tp_ingest.jobs.fundamentals import run_fundamentals
@@ -16,7 +17,6 @@ from tp_ingest.jobs.macro import run_backfill as macro_backfill
 from tp_ingest.sources.fake import FakeSource, FakeSplit
 from tp_ingest.sources.macro import FakeMacroSource
 from tp_ingest.sources.sec import FakeSecSource
-from tp_strategies.reference import LakeReference
 
 NOW = datetime(2025, 12, 31, 23, 0, tzinfo=UTC)
 SPLIT = date(2023, 6, 1)

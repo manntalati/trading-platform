@@ -38,3 +38,4 @@ leveraged-momentum = { lookback = [5, 10, 20] }
 pairs = { entry = [1.5, 2.0, 2.5] }
 factor = { lookback = [126, 252, 504] }
 pead = { threshold = [1.5, 2.0, 3.0] }
+rsi2-meta = { threshold = [0.5, 0.55, 0.6] }

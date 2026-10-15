@@ -1,0 +1,26 @@
+[project]
+name = "tp-ml"
+version = "0.1.0"
+description = "Machine learning for signals: point-in-time features, triple-barrier labels, purged cross-validation, meta-labeling, experiment tracking."
+requires-python = ">=3.12"
+dependencies = [
+    "mlflow>=2.17",
+    "numpy>=2.0",
+    "pandas>=2.2",
+    "scikit-learn>=1.5",
+    "tp-core",
+    "typer>=0.12",
+]
+
+[project.scripts]
+tp-ml = "tp_ml.cli:main"
+
+[tool.uv.sources]
+tp-core = { workspace = true }
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tp_ml"]

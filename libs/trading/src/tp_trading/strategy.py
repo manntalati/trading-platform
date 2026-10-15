@@ -31,7 +31,7 @@ from tp_trading.sizing import Sizing
 
 class Reference(Protocol):
     """Data beyond the bars (fundamentals, earnings, macro), point in time: ``get`` returns only
-    what was known on ``as_of``. Provided by the runtime (``tp_strategies.reference``)."""
+    what was known on ``as_of``. Provided by the runtime (``tp_core.reference``)."""
 
     def get(self, name: str, as_of: date) -> pd.DataFrame: ...
 

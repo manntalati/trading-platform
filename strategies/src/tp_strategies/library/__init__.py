@@ -19,6 +19,7 @@ from tp_strategies.library.ma_timing import MaTiming
 from tp_strategies.library.pairs import Pairs
 from tp_strategies.library.pead import EarningsDrift
 from tp_strategies.library.rsi2 import Rsi2Reversion
+from tp_strategies.library.rsi2_meta import Rsi2Meta
 from tp_strategies.library.ts_momentum import TimeSeriesMomentum
 from tp_strategies.library.xs_momentum import CrossSectionalMomentum
 from tp_trading.strategy import Strategy
@@ -33,6 +34,7 @@ STRATEGIES: tuple[type[Strategy], ...] = (
     Pairs,
     FactorPortfolio,
     EarningsDrift,
+    Rsi2Meta,
 )
 REGISTRY: dict[str, type[Strategy]] = {cls.name: cls for cls in STRATEGIES}
 

@@ -59,6 +59,10 @@ run the backtest gate (`uv run tp-backtest validate --all`; the reports appear u
 trading → Strategy backtests), then start the bot: `uv run tp-paper bot`
 ([paper-trading.md](paper-trading.md)).
 
+Optional, for the machine-learning work ([ml.md](ml.md)): `uv run tp-ml meta` evaluates the
+RSI(2) meta-labeling filter on your bars and records the run in MLflow (`data/mlflow/`, no
+server); `uv run tp-ml ui` browses the runs. Nothing to schedule.
+
 ## 6. Schedules
 
 Nothing above refreshes itself. These keep it current; the machine has to be on (and awake) at
