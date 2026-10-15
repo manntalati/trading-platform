@@ -1,6 +1,6 @@
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 from typer.testing import CliRunner
@@ -42,14 +42,16 @@ def test_second_sync_fetches_activities_with_overlap(tmp_path: Path) -> None:
     run_sync(lake, FakeBroker(as_of=NOW.date()), now=NOW)
 
     class Recording(FakeBroker):
-        seen: date | None = None
+        seen: Any = None
 
-        def activities(self, since: date | None) -> Any:
+        def activities(self, since: Any) -> Any:
             Recording.seen = since
             return super().activities(since)
 
     run_sync(lake, Recording(as_of=NOW.date()), now=NOW.replace(day=13))
-    assert Recording.seen == date(2024, 7, 7) - ACTIVITY_OVERLAP  # newest: the 7 July sweep
+    # per account, from a month before its newest stored transaction (the 7 July sweep); the
+    # Roth account has none stored, so it isn't listed and gets its whole history
+    assert Recording.seen == {"demo-indiv": date(2024, 7, 7) - ACTIVITY_OVERLAP}
     # Re-fetched activities do not double count.
     assert pf.external_flows(lake).sum() == pytest.approx(12 * 500)
 
@@ -113,8 +115,73 @@ def test_cli_show_before_sync(env: Path) -> None:
     assert "no portfolio synced yet" in result.output
 
 
-@pytest.mark.parametrize("args", [["sync"], ["link"]])
+@pytest.mark.parametrize("args", [["sync"], ["link"], ["check"]])
 def test_cli_missing_snaptrade_keys(env: Path, args: list[str]) -> None:
     result = runner.invoke(cli.app, args)
     assert result.exit_code == 2
     assert "SNAPTRADE_CLIENT_ID" in result.output
+
+
+def test_cli_check_with_the_demo_source(env: Path) -> None:
+    assert runner.invoke(cli.app, ["sync", "--source", "fake"]).exit_code == 0
+    result = runner.invoke(cli.app, ["check", "--source", "fake"])
+    assert result.exit_code == 0, result.output
+    assert "Last sync here: 2024-07-12 17:30 ET (0 hours ago)" in result.output
+    assert "status unknown" in result.output  # the demo has no connection to report on
+    assert "the lake has" in result.output
+
+
+class PortalApi:
+    """Stands in for the SnapTrade SDK client in ``tp-broker link``."""
+
+    links: ClassVar[list[dict[str, Any]]] = []
+    reconnect: str | None = None
+
+    def __init__(self, client_id: str, key: str) -> None:
+        pass
+
+    def list_connections(self) -> list[dict[str, Any]]:
+        return PortalApi.links
+
+    def list_accounts(self) -> list[dict[str, Any]]:
+        return []
+
+    def connection_portal_url(self, broker: str | None, reconnect: str | None = None) -> str:
+        PortalApi.reconnect = reconnect
+        return "https://app.snaptrade.com/portal?x"
+
+
+@pytest.fixture
+def portal(env: Path, monkeypatch: pytest.MonkeyPatch) -> type[PortalApi]:
+    from tp_broker import snaptrade
+
+    monkeypatch.setenv("SNAPTRADE_CLIENT_ID", "client")
+    monkeypatch.setenv("SNAPTRADE_CONSUMER_KEY", "key")
+    monkeypatch.setattr(snaptrade, "SdkSnapTradeApi", PortalApi)
+    PortalApi.reconnect = None
+    return PortalApi
+
+
+def test_link_reconnects_the_disabled_connection(portal: type[PortalApi]) -> None:
+    portal.links = [
+        {"id": "ok-1", "disabled": False, "brokerage": {"name": "Alpaca"}},
+        {"id": "broken-2", "disabled": True, "brokerage": {"name": "Fidelity"}},
+    ]
+    result = runner.invoke(cli.app, ["link", "--reconnect"])
+    assert result.exit_code == 0, result.output
+    assert portal.reconnect == "broken-2"
+    assert "reconnecting the disabled connection" in result.output
+    assert "https://app.snaptrade.com/portal" in result.output
+    # a plain link adds a connection instead
+    assert runner.invoke(cli.app, ["link"]).exit_code == 0
+    assert portal.reconnect is None
+
+
+def test_link_reconnect_refuses_to_guess(portal: type[PortalApi]) -> None:
+    portal.links = [
+        {"id": "a", "disabled": False, "brokerage": {"name": "Fidelity"}},
+        {"id": "b", "disabled": False, "brokerage": {"name": "Alpaca"}},
+    ]
+    result = runner.invoke(cli.app, ["link", "--reconnect"])
+    assert result.exit_code == 2
+    assert "can't tell which to repair" in result.output

@@ -69,6 +69,7 @@ Setup and caveats: [docs/portfolio.md](docs/portfolio.md).
 uv run tp-broker link                     # one-time: connect Fidelity (read-only)
 uv run tp-broker sync                     # snapshot holdings + transactions
 uv run tp-broker show                     # print the latest portfolio
+uv run tp-broker check                    # trades missing? compares SnapTrade with the lake
 uv run tp-broker sync --source fake       # demo portfolio, no keys needed
 uv run tp-ideas                           # rules-based research ideas, with the numbers behind each
 ```

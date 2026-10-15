@@ -489,6 +489,15 @@ th.num {
   border: 1px solid var(--critical);
 }
 
+.banner.warning {
+  border: 1px solid var(--warning);
+}
+
+.banner ul {
+  margin: 6px 0;
+  padding-left: 18px;
+}
+
 .toolbar {
   display: flex;
   gap: 8px;

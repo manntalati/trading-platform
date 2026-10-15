@@ -95,3 +95,6 @@ uv run tp-doctor
 
 Each line is ✓ (done), ✗ (to set up, with the command), ! (set up but stale or worth a look) or
 · (optional). The System page of the dashboard shows the same freshness while it runs.
+
+Trades from Fidelity missing? `uv run tp-broker check` compares what SnapTrade has with what's
+stored here and says why ([portfolio.md](portfolio.md#when-trades-are-missing)).

@@ -60,6 +60,43 @@ Fidelity data reaches the platform through SnapTrade, which keeps its own copy:
 - A pending trade has the quantity and, for a buy, the price paid (from the change in the
   position's cost). Its realized P&L comes with the real transaction the next day.
 
+## When trades are missing
+
+```bash
+uv run tp-broker check
+```
+
+It only reads: no refresh, no fees. For each linked account it shows three things, then says
+what to do about each problem:
+
+- **The connection's state**: connected, or disabled.
+- **How current SnapTrade's data is**: when it last pulled positions, and the last day of
+  transactions it has.
+- **SnapTrade against the lake**: how many transactions SnapTrade lists for the last 45 days,
+  and how many of those are stored here. Any that aren't stored are listed.
+
+The usual causes, in order of likelihood:
+
+1. **The trade was made today**, or after SnapTrade's last transaction day. It arrives with
+   Fidelity's overnight posting. Until then the Trades tab shows it as *pending*, once
+   SnapTrade has refreshed your positions.
+2. **The connection is disabled.**
+   - What happens: Fidelity ended SnapTrade's session (a password change, a security prompt,
+     an expiry). SnapTrade keeps answering with the last data it got, so syncs "succeed" and
+     nothing new arrives.
+   - Where you see it: the dashboard shows a warning above the Fidelity data, `tp-doctor` marks
+     it ✗, and `tp-broker sync` prints a warning.
+   - The fix: `uv run tp-broker link --reconnect`, then log in to Fidelity on the page it
+     opens. That repairs the existing connection, so the account keeps its id and history.
+3. **The sync isn't running.** `check` shows when the last sync was. Look at
+   `data/logs/broker.log` and the schedule (`tp-doctor` → Schedules).
+4. **SnapTrade has the transaction but the lake doesn't.** `check` lists them, and
+   `tp-broker sync` fetches them. If they stay missing, the output of `check` is what to look at.
+
+Re-linking from scratch (`tp-broker link` without `--reconnect`) can give the account a new id.
+The old account then drops off the dashboard, and `check` says so. The new account's whole
+transaction history is fetched on its first sync.
+
 ## Up or down: profit and loss
 
 The Portfolio section answers "how much am I up or down" three ways:

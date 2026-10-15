@@ -39,7 +39,22 @@ export function FidelityFreshness(props: { freshness?: BrokerFreshness | null; o
   }
 
   const f = props.freshness;
+  const problems = f?.problems ?? [];
   return (
+    <>
+    {problems.length > 0 && (
+      <div className="banner warning" role="alert">
+        <strong>Fidelity data isn't updating.</strong>
+        <ul>
+          {problems.map((p) => (
+            <li key={p}>{p}</li>
+          ))}
+        </ul>
+        <span className="small muted">
+          Run <code>uv run tp-broker check</code> for the details: it compares SnapTrade's transactions with what's stored here.
+        </span>
+      </div>
+    )}
     <div className="toolbar small">
       <span className="muted">
         {f?.positions_as_of ? <>Fidelity positions as of {when(f.positions_as_of)}</> : "Fidelity positions: not synced yet"}
@@ -65,6 +80,7 @@ export function FidelityFreshness(props: { freshness?: BrokerFreshness | null; o
       )}
       {error && <span className="muted">{error}</span>}
     </div>
+    </>
   );
 }
 

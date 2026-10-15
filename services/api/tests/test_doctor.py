@@ -1,13 +1,17 @@
 """``tp-doctor`` on an empty setup and on the demo lake (synthetic data only)."""
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
+import pandas as pd
 import pytest
 from pydantic import SecretStr
 
 from tp_api import doctor
+from tp_broker.base import ACCOUNT_COLUMNS, ACTIVITY_COLUMNS, HOLDING_COLUMNS, BrokerSnapshot
+from tp_broker.jobs import run_sync
 from tp_core.config import Settings
+from tp_core.storage import Lake
 
 from .test_api import lake_root, settings_for  # noqa: F401  (lake_root is a fixture)
 
@@ -86,3 +90,54 @@ def test_render_and_the_paper_bot(tmp_path: Path) -> None:
     assert "→ tp-data options snapshot" in text
     assert "1 to set up, 0 to look at." in text
     assert "→" not in text.split("FRED API key")[1]  # optional items don't nag
+
+
+class OneAccount:
+    """A broker source with one synthetic account, its connection state and freshness given."""
+
+    name = "snaptrade"
+
+    def __init__(self, disabled: bool, positions: str, through: str) -> None:
+        self.row = {
+            "account_id": "acct-1", "account_name": "Individual", "institution": "Fidelity",
+            "account_number_masked": "…0001", "cash": 10.0, "total_value": 10.0,
+            "currency": "USD", "holdings_as_of": pd.Timestamp(positions),
+            "transactions_as_of": date.fromisoformat(through), "connection_disabled": disabled,
+        }  # fmt: skip
+
+    def snapshot(self) -> BrokerSnapshot:
+        return BrokerSnapshot(
+            accounts=pd.DataFrame([self.row], columns=list(ACCOUNT_COLUMNS)),
+            holdings=pd.DataFrame(columns=list(HOLDING_COLUMNS)),
+        )
+
+    def activities(self, since: object) -> pd.DataFrame:
+        return pd.DataFrame(columns=list(ACTIVITY_COLUMNS))
+
+
+@pytest.mark.parametrize(
+    ("source", "status", "fix"),
+    [
+        (OneAccount(True, "2024-07-15T13:00Z", "2024-07-14"), "todo", "tp-broker link --reconnect"),
+        (OneAccount(False, "2024-07-01T13:00Z", "2024-06-28"), "warn", "tp-broker check"),
+    ],
+)
+def test_a_broken_or_stale_fidelity_connection_is_flagged(
+    tmp_path: Path, source: OneAccount, status: str, fix: str
+) -> None:
+    lake = Lake(tmp_path)
+    run_sync(lake, source, now=NOW)
+    checks = [c for c in doctor.data(Settings(data_root=tmp_path), NOW) if c.area == "Data"]
+    positions = next(c for c in checks if c.name == "Fidelity positions")
+    assert positions.status == "ok"  # our sync ran on time...
+    assert "transactions through" in positions.detail
+    problems = [c for c in checks if c.name == "Fidelity connection"]
+    assert problems  # ...but SnapTrade's data behind it isn't moving
+    assert {c.status for c in problems} == {status}
+    assert {c.fix for c in problems} == {fix}
+
+
+def test_a_healthy_connection_adds_no_lines(tmp_path: Path) -> None:
+    run_sync(Lake(tmp_path), OneAccount(False, "2024-07-15T13:00Z", "2024-07-14"), now=NOW)
+    names = [c.name for c in doctor.data(Settings(data_root=tmp_path), NOW)]
+    assert "Fidelity connection" not in names

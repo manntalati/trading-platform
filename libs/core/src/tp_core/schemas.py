@@ -151,6 +151,9 @@ RAW_BROKER_ACCOUNTS_SCHEMA = pa.schema(
         ("transactions_as_of", pa.date32()),
         # Cash available to trade now, as the broker reports it. Added later.
         ("buying_power", pa.float64()),
+        # The aggregator's connection to the brokerage is disabled (it serves stale data until
+        # reconnected); null when unknown. Added later.
+        ("connection_disabled", pa.bool_()),
     ]
 )
 

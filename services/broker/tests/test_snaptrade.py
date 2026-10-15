@@ -1,12 +1,16 @@
 """SnapTrade adapter against payloads shaped like the live API (no network, synthetic values)."""
 
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
 import pytest
 
+from tp_broker.jobs import check_sync, render_check, run_sync
 from tp_broker.snaptrade import SnapTradeSource
+from tp_core import portfolio as pf
+from tp_core.storage import Lake
 
 ACCOUNT = {
     "id": "acct-1",
@@ -38,9 +42,19 @@ class FakeApi:
         self.pages = activity_pages or [[]]
         self.calls: list[tuple[str, Any]] = []
         self.positions_key = "positions"
+        self.accounts: list[dict[str, Any]] = [ACCOUNT]
+        self.links: list[dict[str, Any]] | Exception = [
+            {"id": "auth-1", "disabled": False, "disabled_date": None,
+             "brokerage": {"name": "Fidelity"}},
+        ]  # fmt: skip
 
     def list_accounts(self) -> list[dict[str, Any]]:
-        return [ACCOUNT]
+        return self.accounts
+
+    def list_connections(self) -> list[dict[str, Any]]:
+        if isinstance(self.links, Exception):
+            raise self.links
+        return self.links
 
     def account_balances(self, account_id: str) -> list[dict[str, Any]]:
         # Cash includes the money-market sweep below.
@@ -80,10 +94,12 @@ class FakeApi:
         self.calls.append(("activities", (start, offset)))
         index = offset // limit if limit else 0
         data = self.pages[index] if index < len(self.pages) else []
+        data = [a for a in data if a.get("account", account_id) == account_id]
         total = sum(len(p) for p in self.pages)
         return {"data": data, "pagination": {"offset": offset, "limit": limit, "total": total}}
 
-    def connection_portal_url(self, broker: str | None) -> str:
+    def connection_portal_url(self, broker: str | None, reconnect: str | None = None) -> str:
+        self.calls.append(("portal", reconnect))
         return "https://app.snaptrade.com/portal?x"
 
     def refresh_connection(self, authorization_id: str) -> None:
@@ -196,3 +212,106 @@ def test_activities_paginate_and_map() -> None:
         ("activities", (date(2024, 6, 1), 0)),
         ("activities", (date(2024, 6, 1), 1000)),
     ]
+
+
+# -- connection state, per-account history, and the check ------------------------------------
+
+NOW = datetime(2026, 10, 7, 21, 30, tzinfo=UTC)
+
+
+def test_snapshot_records_whether_the_connection_is_disabled() -> None:
+    api = FakeApi()
+    assert not SnapTradeSource(api).snapshot().accounts.iloc[0]["connection_disabled"]
+    api.links = [{"id": "auth-1", "disabled": True, "disabled_date": "2026-10-01T12:00:00Z"}]
+    assert SnapTradeSource(api).snapshot().accounts.iloc[0]["connection_disabled"]
+    api.links = RuntimeError("SnapTrade is down")  # advisory: the snapshot still works
+    snap = SnapTradeSource(api).snapshot()
+    assert pd.isna(snap.accounts.iloc[0]["connection_disabled"])
+    assert len(snap.holdings) == 3
+
+
+def test_activities_start_per_account() -> None:
+    api = FakeApi()
+    api.accounts = [ACCOUNT, ACCOUNT | {"id": "acct-2"}]
+    SnapTradeSource(api).activities({"acct-1": date(2026, 9, 1)})
+    starts = [c[1][0] for c in api.calls if c[0] == "activities"]
+    assert starts == [date(2026, 9, 1), None]  # acct-2: nothing stored yet, so all history
+
+
+def test_sync_warns_about_a_disabled_connection(tmp_path: Path) -> None:
+    api = FakeApi()
+    api.links = [{"id": "auth-1", "disabled": True, "disabled_date": "2026-10-01T12:00:00Z"}]
+    result = run_sync(Lake(tmp_path), SnapTradeSource(api), now=NOW)
+    assert len(result.warnings) == 1
+    assert "disabled" in result.warnings[0]
+    assert "tp-broker link --reconnect" in result.warnings[0]
+    stored = pf.latest_snapshot(Lake(tmp_path)).accounts
+    assert bool(stored.iloc[0]["connection_disabled"])
+
+
+def test_sync_warns_when_snapshot_data_is_stale(tmp_path: Path) -> None:
+    later = NOW + timedelta(days=6)  # positions from Oct 6, transactions through Oct 5
+    result = run_sync(Lake(tmp_path), SnapTradeSource(FakeApi()), now=later)
+    assert len(result.warnings) == 2
+    assert "positions are from 2026-10-06" in result.warnings[0]
+    assert "transactions stop at 2026-10-05" in result.warnings[1]
+    assert run_sync(Lake(tmp_path), SnapTradeSource(FakeApi()), now=NOW).warnings == []
+
+
+def test_unlinked_accounts_leave_the_snapshot(tmp_path: Path) -> None:
+    lake = Lake(tmp_path)
+    api = FakeApi()
+    run_sync(lake, SnapTradeSource(api), now=NOW)
+    # re-linked: SnapTrade now returns the account under a new id
+    api.accounts = [ACCOUNT | {"id": "acct-new"}]
+    run_sync(lake, SnapTradeSource(api), now=NOW + timedelta(hours=1))
+    snap = pf.latest_snapshot(lake)
+    assert snap.accounts["account_id"].tolist() == ["acct-new"]
+    assert set(snap.holdings["account_id"]) == {"acct-new"}
+
+
+def trade(i: int, day: str, account: str = "acct-1") -> dict[str, Any]:
+    return act(i) | {"trade_date": f"{day}T04:00:00Z", "account": account}
+
+
+def test_check_finds_transactions_missing_from_the_lake(tmp_path: Path) -> None:
+    lake = Lake(tmp_path)
+    api = FakeApi([[trade(1, "2026-09-20"), trade(2, "2026-10-01")]])
+    run_sync(lake, SnapTradeSource(api), now=NOW)
+    # SnapTrade later lists two more, and re-issues trade 2 under a new id
+    api.pages = [[trade(1, "2026-09-20"), trade(3, "2026-10-02"), trade(4, "2026-10-05")]]
+    check = check_sync(lake, SnapTradeSource(api), now=NOW, days=45)
+    (account,) = check.accounts
+    assert (account.remote, account.stored, account.orphaned) == (3, 1, 1)
+    assert account.missing["trade_date"].tolist() == [date(2026, 10, 2), date(2026, 10, 5)]
+    assert account.disabled is False
+    text = render_check(check, NOW)
+    assert "Fidelity …5678" in text
+    assert "SnapTrade lists 3 transactions, the lake has 1 of them" in text
+    assert "✗ 2 of SnapTrade's transactions aren't in the lake" in text
+    assert "2026-10-05  BUY" in text
+    assert "! 1 stored transactions" in text
+
+
+def test_check_explains_a_disabled_connection_and_a_clean_state(tmp_path: Path) -> None:
+    lake = Lake(tmp_path)
+    api = FakeApi([[trade(1, "2026-10-01")]])
+    run_sync(lake, SnapTradeSource(api), now=NOW)
+    clean = render_check(check_sync(lake, SnapTradeSource(api), now=NOW), NOW)
+    assert "✓ Every transaction SnapTrade has is stored" in clean
+    assert "✗" not in clean
+    api.links = [{"id": "auth-1", "disabled": True, "disabled_date": "2026-10-03T08:00:00Z"}]
+    broken = render_check(check_sync(lake, SnapTradeSource(api), now=NOW), NOW)
+    assert "DISABLED" in broken
+    assert "disabled since 2026-10-03" in broken
+    assert "tp-broker link --reconnect" in broken
+
+
+def test_check_lists_accounts_no_longer_linked(tmp_path: Path) -> None:
+    lake = Lake(tmp_path)
+    api = FakeApi()
+    run_sync(lake, SnapTradeSource(api), now=NOW)
+    api.accounts = [ACCOUNT | {"id": "acct-new"}]
+    check = check_sync(lake, SnapTradeSource(api), now=NOW)
+    assert check.unlinked == ["Fidelity …5678"]
+    assert "no longer returns it" in render_check(check, NOW)
