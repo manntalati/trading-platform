@@ -277,11 +277,15 @@ def trials_path(lake: Lake, strategy: str) -> Path:
 
 
 def record_trials(
-    lake: Lake, strategy: str, rows: list[dict[str, Any]], now: datetime
+    lake: Lake,
+    strategy: str,
+    rows: list[dict[str, Any]],
+    now: datetime,
+    path: Path | None = None,
 ) -> list[float]:
-    """Append this run's variants to the strategy's trial log; every distinct parameter set ever
-    run (latest Sharpe each) is what the Deflated Sharpe has to beat."""
-    path = trials_path(lake, strategy)
+    """Append this run's variants to the strategy's trial log (or ``path``); every distinct
+    parameter set ever run (latest Sharpe each) is what the Deflated Sharpe has to beat."""
+    path = path or trials_path(lake, strategy)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as f:
         for r in rows:

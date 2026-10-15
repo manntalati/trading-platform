@@ -18,6 +18,7 @@ from typing import Annotated, Any
 
 import typer
 
+from tp_core.bars import close_matrix, load_bars, missing_symbols
 from tp_core.config import Settings
 from tp_core.portfolio import Classifier
 from tp_core.storage import Lake
@@ -25,6 +26,8 @@ from tp_risk.manager import RiskManager
 from tp_strategies.backtest import risk_gate, run_backtest
 from tp_strategies.library import REGISTRY, build, parameters
 from tp_strategies.research_cli import app as research_app
+from tp_strategies.search import FAMILIES, SearchConfig, rule_sets, run_search, universe
+from tp_strategies.search import report_text as search_report_text
 from tp_strategies.validation import ValidationConfig, paper_params
 from tp_strategies.validation import validate as run_validation
 from tp_trading.costs import CostModel
@@ -270,6 +273,82 @@ def validate(
         failed |= not report["gate"]["passed"]
     if failed:
         raise typer.Exit(1)
+
+
+@app.command("search")
+def search_cmd(
+    families: Annotated[
+        str, typer.Option(help=f"Comma-separated, from {', '.join(FAMILIES)}.")
+    ] = ",".join(FAMILIES),
+    top: Annotated[int, typer.Option(help="Rule sets taken from train to validation.")] = 5,
+    cost_bps: Annotated[float, typer.Option(help="Cost per unit traded, basis points.")] = 5.0,
+    record: Annotated[
+        bool,
+        typer.Option(help="Count this search in the trials ledger and the test looks (keep on)."),
+    ] = True,
+    log: Annotated[bool, typer.Option(help="Record the run in MLflow.")] = True,
+) -> None:
+    """Search many simple rule sets at once, guarded by train/validation/test, the Deflated
+    Sharpe over every rule set ever tried, the probability of backtest overfitting and a
+    walk-forward of the search itself (vectorized: a screen; the engine's validate is the gate)."""
+    chosen = tuple(f.strip() for f in families.split(",") if f.strip())
+    if not chosen or any(f not in FAMILIES for f in chosen):
+        raise typer.BadParameter(f"families: {', '.join(FAMILIES)}")
+    settings = Settings()
+    lake = Lake(settings.data_root)
+    periods = (
+        ValidationConfig.load(settings.validation_file)
+        if settings.validation_file.exists()
+        else ValidationConfig()
+    )
+    wanted = sorted({s for rule in rule_sets(chosen) for s in universe(rule)})
+    have = [s for s in wanted if s not in missing_symbols(lake, [s])]
+    if not have:
+        typer.echo("needs daily bars: tp-data bars backfill --years 10")
+        raise typer.Exit(code=2)
+    closes = close_matrix(load_bars(lake, have))
+    now = datetime.now(UTC)
+    cfg = SearchConfig(top=top, cost_bps=cost_bps, families=chosen)
+    try:
+        report, looks = run_search(lake, closes, cfg, periods, now=now, record=record)
+    except ValueError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(code=2) from None
+    text = search_report_text(report, looks)
+    typer.echo(text)
+    if not log:
+        return
+    from tp_ml import tracking
+
+    d, p, wf, test = report["deflated"], report["pbo"], report["walk_forward"], report["test"]
+    with tracking.run(
+        lake,
+        "strategy-search",
+        name=f"search-{'+'.join(chosen)}",
+        params={
+            "families": ",".join(chosen),
+            "top": top,
+            "cost_bps": cost_bps,
+            "rule_sets": report["rule_sets"],
+            "chosen": report["chosen"].label,
+        },
+        tags={"data_last_session": report["last"]},
+    ) as active:
+        tracking.log_metrics(
+            {
+                "trials_all_time": d["trials"],
+                "dsr_probability": d["probability"],
+                "dsr_sharpe": d["sharpe"],
+                "dsr_threshold": d["threshold"],
+                "pbo": p["pbo"],
+                "wf_sharpe": wf.get("sharpe"),
+                "wf_efficiency": wf.get("efficiency"),
+                "test_sharpe": test["sharpe"] if test else None,
+            }
+        )
+        tracking.log_text(text, "report.txt")
+        tracking.log_text(report["table"].to_csv(), "rule_sets.csv")
+    typer.echo(f"\nlogged to MLflow (strategy-search, run {active.info.run_id[:8]}): tp-ml ui")
 
 
 def _print_report(r: dict[str, Any]) -> None:

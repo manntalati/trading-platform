@@ -82,6 +82,52 @@ the first day the strategy held anything (warm-up days would flatter it). Report
 backtest gate**, which can also run them. A weekly cron entry keeps them current
 ([infra](../infra/README.md)).
 
+## Strategy search
+
+```bash
+uv run tp-backtest search                              # all three families, 41 rule sets
+uv run tp-backtest search --families momentum,reversion
+```
+
+Searching is how backtests lie. Try enough variations and one of them looks great by luck. So
+`search` tries many simple rule sets at once and then checks the winner:
+
+- **Trend**: strategy 1's monthly moving-average timing at 4 to 12 months, and strategy 2's
+  time-series momentum at 3 to 12 months.
+- **Momentum**: strategy 3's top names by 3- to 12-month return, with and without the last month
+  skipped, holding 5 or 10.
+- **Reversion**: strategy 5's RSI(2) dips at entry levels 5 to 20, trend filters of 100 and 200
+  days, and exits above the 5- and 10-day average.
+
+The rule sets are vectorized versions of the library strategies: decided at a close, earning from
+the next session, with costs on turnover. That's fast (a few seconds), but it's a screen, not the
+gate: no sector caps, slots or risk limits. The protocol:
+
+1. **Train, validation, test** (the periods above). Rank every rule set on train, take the best
+   five (`--top`) to validation, pick one there, and show only that one the locked test period.
+   Each look is counted.
+2. **Deflated Sharpe** of the pick on train and validation, against what the best of *every rule
+   set the search has ever tried* would show by luck. The ledger is
+   `data/reports/search/trials.jsonl`, so searching again raises the bar for everything.
+3. **Probability of backtest overfitting** (PBO, Bailey, Borwein, López de Prado and Zhu 2014).
+   Cut train and validation into 16 blocks. For each of the 12,870 ways to split them in half,
+   pick the best rule set on one half and see where it ranks on the other. PBO is the share of
+   splits where the winner fell below the median. Near 0, what wins keeps winning. At 50% or
+   more, picking the best is no better than picking at random.
+4. **Walk-forward of the search itself.** Every six months, re-pick the best rule set on the last
+   two years and trade it. The stitched record is what searching would actually have earned, and
+   its *efficiency* (out-of-sample Sharpe over in-sample) is the haircut.
+
+The search says "worth validating on the engine" only if all of these hold:
+
+- the Deflated Sharpe probability is at least 95%;
+- PBO is under 50%;
+- the walk-forward Sharpe is positive;
+- the locked test Sharpe is positive.
+
+It then prints the `tp-backtest validate` command with the pick's parameters. Every run is also
+saved under `data/reports/search/` and logged to MLflow (`strategy-search`).
+
 ## Realism
 
 | | Default | Why |
