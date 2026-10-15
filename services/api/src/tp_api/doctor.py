@@ -24,7 +24,7 @@ from tp_core.config import Settings
 from tp_core.fundamentals import load_events
 from tp_core.intraday import load_intraday
 from tp_core.macro import load_macro
-from tp_core.portfolio import latest_snapshot
+from tp_core.portfolio import connection_problems, latest_snapshot
 from tp_core.storage import Lake, parquet_files
 from tp_paper.jobs import bot_status
 from tp_paper.store import PaperStore
@@ -133,9 +133,20 @@ def data(settings: Settings, now: datetime) -> list[Check]:
     else:
         synced = max(snap.accounts["taken_at"]).to_pydatetime(warn=False)
         stale = now - synced > timedelta(days=3)
-        out.append(Check(area, "Fidelity positions", "warn" if stale else "ok",
-                         f"{len(snap.accounts)} account(s), synced {synced:%Y-%m-%d %H:%M} UTC",
+        through = snap.accounts["transactions_as_of"].dropna()
+        detail = f"{len(snap.accounts)} account(s), synced {synced:%Y-%m-%d %H:%M} UTC" + (
+            f", transactions through {min(through)}" if len(through) else ""
+        )
+        out.append(Check(area, "Fidelity positions", "warn" if stale else "ok", detail,
                          "tp-broker sync"))  # fmt: skip
+        # SnapTrade can keep answering with old data (a disabled connection): our sync running
+        # on time doesn't mean new trades are arriving.
+        for problem in connection_problems(snap.accounts, now):
+            disabled = "disabled" in problem
+            out.append(Check(area, "Fidelity connection", "todo" if disabled else "warn",
+                             problem.split(". ")[0],
+                             "tp-broker link --reconnect" if disabled
+                             else "tp-broker check"))  # fmt: skip
 
     macro = load_macro(lake)
     if macro.empty:

@@ -6,6 +6,9 @@ identifies the user, so no user id/secret has to be stored.
 
 Data freshness: on SnapTrade's daily plans positions are cached and refreshed once a day, which
 is fine here: quantities rarely change intraday, and live values come from the quote stream.
+Transactions arrive the next day. A *disabled* connection (Fidelity password changed, session
+expired) keeps serving the last data SnapTrade got, so nothing new arrives until it is
+reconnected (``tp-broker link --reconnect``); every snapshot records whether it is.
 """
 
 from __future__ import annotations
@@ -25,7 +28,9 @@ from tp_broker.base import (
     HOLDING_COLUMNS,
     BrokerSnapshot,
     RefreshResult,
+    Since,
     mask_account_number,
+    since_for,
 )
 from tp_core.config import Settings
 
@@ -57,7 +62,9 @@ class SnapTradeApi(Protocol):
         self, account_id: str, start: date | None, offset: int, limit: int
     ) -> dict[str, Any]: ...
 
-    def connection_portal_url(self, broker: str | None) -> str: ...
+    def list_connections(self) -> list[dict[str, Any]]: ...
+
+    def connection_portal_url(self, broker: str | None, reconnect: str | None = None) -> str: ...
 
     def refresh_connection(self, authorization_id: str) -> None: ...
 
@@ -103,10 +110,15 @@ class SdkSnapTradeApi:
     def refresh_connection(self, authorization_id: str) -> None:
         self._client.connections.refresh_brokerage_authorization(authorization_id=authorization_id)
 
-    def connection_portal_url(self, broker: str | None) -> str:
+    def list_connections(self) -> list[dict[str, Any]]:
+        return list(self._plain(self._client.connections.list_brokerage_authorizations().body))
+
+    def connection_portal_url(self, broker: str | None, reconnect: str | None = None) -> str:
         kwargs: dict[str, Any] = {"connection_type": "read"}
         if broker:
             kwargs["broker"] = broker
+        if reconnect:
+            kwargs["reconnect"] = reconnect
         body = self._plain(self._client.authentication.login_snap_trade_user(**kwargs).body)
         return str(body.get("redirectURI") or body.get("redirect_uri") or body)
 
@@ -122,16 +134,41 @@ class SnapTradeSource:
         client_id, consumer_key = settings.require_snaptrade_keys()
         return cls(SdkSnapTradeApi(client_id, consumer_key))
 
+    def connections(self) -> dict[str, dict[str, Any]]:
+        """Each connection (brokerage login) by id, with ``disabled`` and ``disabled_date``.
+        Empty if SnapTrade can't be asked (nothing depends on it)."""
+        try:
+            return {str(c.get("id")): c for c in self.api.list_connections()}
+        except Exception as exc:  # status is advisory; never fail a sync on it
+            log.warning("couldn't read SnapTrade connection status: %s", exc)
+            return {}
+
+    def account_connections(self) -> dict[str, dict[str, Any]]:
+        """Each account's connection, by account id."""
+        connections = self.connections()
+        out = {}
+        for account in self.api.list_accounts():
+            link = connections.get(str(account.get("brokerage_authorization")))
+            if link is not None:
+                out[str(account["id"])] = link
+        return out
+
     def snapshot(self) -> BrokerSnapshot:
         accounts: list[dict[str, Any]] = []
         holdings: list[dict[str, Any]] = []
+        connections = self.connections()
         for account in self.api.list_accounts():
             account_id = str(account["id"])
             balances = self.api.account_balances(account_id)
             body = self.api.account_positions(account_id)
             # The live API returns "positions"; older SDK type stubs call it "results".
             positions = body.get("positions") or body.get("results") or []
-            accounts.append(_account_row(account, balances))
+            row = _account_row(account, balances)
+            connection = connections.get(str(account.get("brokerage_authorization")))
+            row["connection_disabled"] = (
+                bool(connection.get("disabled")) if connection is not None else None
+            )
+            accounts.append(row)
             # Cash-equivalent positions (the money-market sweep) are already inside the cash
             # balance; keeping them as holdings would count that money twice.
             holdings.extend(
@@ -187,13 +224,14 @@ class SnapTradeSource:
                 )
             sleep(poll)
 
-    def activities(self, since: date | None) -> pd.DataFrame:
+    def activities(self, since: Since) -> pd.DataFrame:
         rows: list[dict[str, Any]] = []
         for account in self.api.list_accounts():
             account_id = str(account["id"])
+            start = since_for(since, account_id)
             offset = 0
             while True:
-                page = self.api.account_activities(account_id, since, offset, _ACTIVITY_PAGE)
+                page = self.api.account_activities(account_id, start, offset, _ACTIVITY_PAGE)
                 data = page.get("data") or []
                 rows.extend(_activity_row(account_id, a) for a in data)
                 total = (page.get("pagination") or {}).get("total")

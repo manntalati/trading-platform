@@ -170,6 +170,7 @@ export interface BrokerFreshness {
   synced_at: string | null; // when we last pulled from SnapTrade
   positions_as_of: string | null; // how old SnapTrade's copy of the positions was then
   transactions_through: string | null; // the last day of transactions it has
+  problems?: string[]; // why the data may have stopped updating (a disabled connection, stale data)
 }
 
 export interface BrokerSyncState {

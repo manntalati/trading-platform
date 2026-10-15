@@ -34,6 +34,7 @@ from tp_core.portfolio import (
     account_cash,
     benchmark_returns,
     concentration,
+    connection_problems,
     exposures,
     external_flows,
     holdings_backtest,
@@ -481,11 +482,13 @@ def cash_summary(snap: PortfolioSnapshot) -> dict[str, Any]:
     return out
 
 
-def freshness(accounts: pd.DataFrame) -> dict[str, Any]:
+def freshness(accounts: pd.DataFrame, now: datetime | None = None) -> dict[str, Any]:
     """How current the brokerage data is: when we last synced, how old the positions in that
-    sync were (the aggregator caches them), and the last day of transactions it has."""
+    sync were (the aggregator caches them), the last day of transactions it has, and why it may
+    have stopped updating (a disabled connection, stale data)."""
     if accounts.empty:
-        return {"synced_at": None, "positions_as_of": None, "transactions_through": None}
+        return {"synced_at": None, "positions_as_of": None, "transactions_through": None,
+                "problems": []}  # fmt: skip
     held = accounts["holdings_as_of"].dropna()
     txns = accounts["transactions_as_of"].dropna()
     out: dict[str, Any] = clean(
@@ -493,6 +496,7 @@ def freshness(accounts: pd.DataFrame) -> dict[str, Any]:
             "synced_at": accounts["taken_at"].max(),
             "positions_as_of": held.min() if len(held) else None,
             "transactions_through": txns.min() if len(txns) else None,
+            "problems": connection_problems(accounts, now or datetime.now(UTC)),
         }
     )
     return out

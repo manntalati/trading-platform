@@ -15,6 +15,8 @@ from tp_broker.base import (
     HOLDING_COLUMNS,
     BrokerSnapshot,
     RefreshResult,
+    Since,
+    since_for,
 )
 from tp_core.occ import Right, format_occ
 
@@ -119,7 +121,7 @@ class FakeBroker:
     def refresh(self, *, timeout: float = 180.0) -> RefreshResult:
         return RefreshResult(1, True, 0.0, "demo positions are always fresh")
 
-    def activities(self, since: date | None) -> pd.DataFrame:
+    def activities(self, since: Since) -> pd.DataFrame:
         """A $500 contribution on the first of each of the last 12 months, a dividend, the buys
         behind the individual account's holdings, and a few closed trades."""
         rows = []
@@ -151,7 +153,9 @@ class FakeBroker:
         ]
         df = pd.DataFrame(rows, columns=list(ACTIVITY_COLUMNS))
         if since is not None:
-            df = df[df["trade_date"] >= since]
+            starts = [since_for(since, str(a)) for a in df["account_id"]]
+            keep = [s is None or d >= s for d, s in zip(df["trade_date"], starts, strict=True)]
+            df = df[keep]
         return df.reset_index(drop=True)
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
 from typing import Protocol
@@ -19,6 +20,9 @@ ACCOUNT_COLUMNS = (
     "holdings_as_of",  # when the aggregator last pulled positions from the brokerage (UTC)
     "transactions_as_of",  # the last day of transactions it has
     "buying_power",  # cash available to trade now: excludes purchases that haven't settled
+    # The aggregator's link to the brokerage is broken (password changed, session expired):
+    # it keeps serving the last data it got, so nothing new arrives until it is reconnected.
+    "connection_disabled",
 )
 HOLDING_COLUMNS = (
     "account_id",
@@ -55,6 +59,17 @@ class BrokerSnapshot:
     holdings: pd.DataFrame  # HOLDING_COLUMNS
 
 
+# Where to start fetching transactions: one date for every account, or a date per account id
+# (an account missing from the mapping, such as a newly linked one, gets its whole history).
+Since = Mapping[str, date] | date | None
+
+
+def since_for(since: Since, account_id: str) -> date | None:
+    if isinstance(since, Mapping):
+        return since.get(account_id)
+    return since
+
+
 class BrokerSource(Protocol):
     name: str
 
@@ -62,7 +77,7 @@ class BrokerSource(Protocol):
         """Current balances and positions of every linked account."""
         ...
 
-    def activities(self, since: date | None) -> pd.DataFrame:
+    def activities(self, since: Since) -> pd.DataFrame:
         """Transactions with trade date on or after ``since`` (all history if None)."""
         ...
 

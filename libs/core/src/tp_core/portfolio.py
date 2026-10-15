@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import math
 import tomllib
+from collections.abc import Hashable, Mapping
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -133,16 +135,65 @@ def read_activities(lake: Lake) -> pd.DataFrame:
 
 
 def latest_snapshot(lake: Lake) -> PortfolioSnapshot:
+    """The accounts (and their holdings) from each source's latest sync. An account that sync
+    didn't return (unlinked, or re-linked under a new id) is gone, not frozen at its last
+    positions."""
     accounts = read_accounts(lake)
     holdings = read_holdings(lake)
     if accounts.empty:
         return PortfolioSnapshot(accounts, holdings)
     key = ["source", "account_id"]
-    newest = accounts.groupby(key)["taken_at"].transform("max")
+    newest = accounts.groupby("source")["taken_at"].transform("max")
     accounts = accounts[accounts["taken_at"] == newest].reset_index(drop=True)
     if not holdings.empty:
         holdings = holdings.merge(accounts[[*key, "taken_at"]], on=[*key, "taken_at"])
     return PortfolioSnapshot(accounts, holdings.reset_index(drop=True))
+
+
+# SnapTrade refreshes positions daily and transactions overnight; older than this, something
+# upstream has stopped (allowing for a weekend).
+STALE_POSITIONS = timedelta(days=3)
+STALE_TRANSACTIONS = timedelta(days=4)
+
+
+def account_label(account: Mapping[Hashable, Any]) -> str:
+    """``Fidelity …1234`` (or the account's name when there's no number)."""
+    institution = account.get("institution") or account.get("source") or "Brokerage"
+    number = account.get("account_number_masked") or account.get("account_name") or ""
+    return f"{institution} {number}".strip()
+
+
+def connection_problems(accounts: pd.DataFrame, now: datetime) -> list[str]:
+    """Why an account's brokerage data may have stopped updating, in plain words: a disabled
+    connection, or positions or transactions that are older than the aggregator's schedule."""
+    out = []
+    for a in accounts.to_dict("records"):
+        label = account_label(a)
+        disabled = a.get("connection_disabled")
+        if disabled is not None and not pd.isna(disabled) and bool(disabled):
+            out.append(
+                f"{label}: SnapTrade's connection to the broker is disabled, so it keeps serving "
+                "the last data it got and new trades won't arrive. Reconnect: "
+                "`tp-broker link --reconnect`"
+            )
+            continue
+        held = a.get("holdings_as_of")
+        if held is not None and not pd.isna(held) and now - pd.Timestamp(held) > STALE_POSITIONS:
+            out.append(
+                f"{label}: SnapTrade's positions are from {pd.Timestamp(held):%Y-%m-%d}; it "
+                "hasn't refreshed them since. Run `tp-broker check`"
+            )
+        through = a.get("transactions_as_of")
+        if (
+            through is not None
+            and not pd.isna(through)
+            and now.date() - pd.Timestamp(through).date() > STALE_TRANSACTIONS
+        ):
+            out.append(
+                f"{label}: SnapTrade's transactions stop at {pd.Timestamp(through):%Y-%m-%d}. "
+                "Run `tp-broker check`"
+            )
+    return out
 
 
 def account_totals(accounts: pd.DataFrame, holdings: pd.DataFrame) -> pd.Series:

@@ -3,7 +3,6 @@ later to track the paper-trading bots alongside the real account."""
 
 from __future__ import annotations
 
-from datetime import date
 from typing import Any, cast
 
 import pandas as pd
@@ -14,6 +13,7 @@ from tp_broker.base import (
     ACTIVITY_COLUMNS,
     HOLDING_COLUMNS,
     BrokerSnapshot,
+    Since,
     mask_account_number,
 )
 from tp_core.config import Settings
@@ -81,7 +81,7 @@ class AlpacaAccountSource:
             holdings=pd.DataFrame(holdings, columns=list(HOLDING_COLUMNS)),
         )
 
-    def activities(self, since: date | None) -> pd.DataFrame:
+    def activities(self, since: Since) -> pd.DataFrame:
         # Paper accounts have no deposits/withdrawals; fills will come from the execution
         # gateway's own records once it exists.
         return pd.DataFrame(columns=list(ACTIVITY_COLUMNS))
