@@ -49,6 +49,9 @@ data/
   reports/options_snapshot/<date>-<run id>.json
   reports/macro/<date>.json
   reports/fundamentals/<date>.json
+  features/<name>/<version>/part.parquet  derived: ML feature sets (`tp-ml features`, docs/ml.md)
+  features/registry.json
+  mlflow/mlflow.db, mlflow/artifacts/   ML experiment runs (`tp-ml runs`, `tp-ml ui`)
 ```
 
 - **Raw is append-only.** Each run writes new files stamped with `ingested_at` and `run_id`.

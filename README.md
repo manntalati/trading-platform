@@ -117,7 +117,8 @@ The first six paper-trade (`config/paper.toml`); by the plan each is an experime
 passes the backtest gate (`tp-backtest validate`, shown under Paper trading in the dashboard).
 7 to 9 run on the same engine and can be added to the paper book once validated; 10 and 11 are
 research backtests (`tp-backtest research vrp|orb`) until the paper bot can place option and
-intraday orders.
+intraday orders. 12 is the first machine-learning strategy: strategy 5's signals, filtered by a
+model trained on their past outcomes ([docs/ml.md](docs/ml.md)).
 
 | # | Strategy | Spec |
 |---|---|---|
@@ -132,6 +133,18 @@ intraday orders.
 | 9 | Post-earnings-announcement drift (SUE) | [09-pead.md](docs/strategies/09-pead.md) |
 | 10 | Volatility risk premium: buy-write and put-write (research) | [10-vrp.md](docs/strategies/10-vrp.md) |
 | 11 | Opening-range breakout on 5-minute bars (research) | [11-orb.md](docs/strategies/11-orb.md) |
+| 12 | RSI(2) with a meta-labeling filter (machine learning) | [12-rsi2-meta.md](docs/strategies/12-rsi2-meta.md) |
+
+## Machine learning
+
+Point-in-time features, triple-barrier and rule-based labels, purged cross-validation and
+experiment tracking with MLflow ([docs/ml.md](docs/ml.md)):
+
+```bash
+uv run tp-ml features                                   # versioned feature set in the lake
+uv run tp-ml meta                                       # evaluate the RSI(2) meta-labeling filter
+uv run tp-ml runs                                       # what's been tried; tp-ml ui for MLflow
+```
 
 Where the project stands against the plan, and what's next: [docs/progress.md](docs/progress.md).
 

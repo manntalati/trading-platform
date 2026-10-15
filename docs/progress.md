@@ -43,7 +43,7 @@ plan's phase table didn't survive the import, so the phases here follow the bran
 | ✓ | Portfolio risk monitoring: correlation, beta, aggregate Greeks, VaR | Portfolio → Risk, with a scenario grid (S&P ±10%, IV ±5 points), [risk.md](risk.md#portfolio-risk) |
 | ✓ | Rest of the options module: American (binomial) pricing, SVI smile fits, 25-delta skew, options backtesting | `tp_core.american`, `tp_core.smile`, Newton IV, rho/vanna/charm/vomma; cash-secured puts, credit spreads, iron condors, calendars and premium-selling ideas ([research.md](research.md)); [options-backtesting.md](options-backtesting.md) |
 | ✓ | Rate regime from FRED, VIX for the volatility regime | `tp-data macro` (Cboe and the Treasury, or FRED's API), the 3-month yield as the risk-free rate, [data.md](data.md#macro-series-vix-and-treasury-yields) |
-| ◐ | Experiment tracking | every backtest and validation run is saved with its git commit, data version and config; MLflow moves to Phase 4, where model experiments need it |
+| ✓ | Experiment tracking | every backtest and validation run is saved with its git commit, data version and config; model experiments in MLflow (Phase 4) |
 
 ## Phase 3: the platform (`step3/…`)
 
@@ -59,13 +59,17 @@ plan's phase table didn't survive the import, so the phases here follow the bran
 
 ## Phase 4: machine learning (`step4/…`)
 
-| | Item |
-|---|---|
-| ○ | MLflow experiment tracking (deferred from Phase 2) |
-| ○ | Meta-labeling with triple-barrier labels |
-| ○ | Cross-sectional ranking (ridge, then LightGBM) |
-| ○ | Regime HMM; GARCH and HAR volatility forecasts (feeding IV vs forecast) |
-| ○ | Strategy search, guarded by Deflated Sharpe and walk-forward |
+Taken ahead of Phase 3 at your call; nothing in it depends on the platform. See [ml.md](ml.md).
+
+| | Item | Notes |
+|---|---|---|
+| ✓ | MLflow experiment tracking (deferred from Phase 2) | SQLite store in the data root, `tp-ml runs`, `tp-ml ui` |
+| ✓ | Point-in-time features and a versioned feature store | `tp-ml features`; returns, volatility, volume, trend, macro, earnings |
+| ✓ | Purged, embargoed cross-validation; walk-forward; uniqueness weights | `tp_ml.cv`, with a leak check on random data |
+| ✓ | Meta-labeling with triple-barrier labels | `tp-ml meta`; strategy 12 (`rsi2-meta`) on the engine; labels by the strategy's own exits or the triple barrier |
+| ○ | Cross-sectional ranking (ridge, then gradient boosting) | IC, rank IC, decile spreads |
+| ○ | Regime HMM; GARCH and HAR volatility forecasts (feeding IV vs forecast) | |
+| ○ | Strategy search, guarded by Deflated Sharpe and walk-forward | |
 
 ## The money gates
 
@@ -80,8 +84,9 @@ plan's phase table didn't survive the import, so the phases here follow the bran
 Phase 2 is done; what's left of it is waiting on time, not code: the paper gate's 60 trading days
 for each sleeve, and the fill-in-the-numbers tables in the strategy specs.
 
-1. **The platform** (`step3/…`): Docker images first, then the message bus, then k3s with
-   monitoring and Discord alerts. The plan puts this ahead of ML: "cut scope from ML experiments
-   before cutting infrastructure".
-2. **Machine learning** (`step4/…`), starting with meta-labeling, with MLflow for the
-   experiments.
+1. **Machine learning** (`step4/…`), in progress: cross-sectional ranking next, then regimes
+   and volatility forecasts, then strategy search. Run `tp-ml meta` on your lake and fill in
+   spec 12's table.
+2. **The platform** (`step3/…`): Docker images first, then the message bus, then k3s with
+   monitoring and Discord alerts. The plan puts this ahead of ML ("cut scope from ML experiments
+   before cutting infrastructure"); it comes after Phase 4 here by choice.

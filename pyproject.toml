@@ -9,6 +9,7 @@ dependencies = [
     "tp-broker",
     "tp-core",
     "tp-ingest",
+    "tp-ml",
     "tp-paper",
     "tp-strategies",
     "tp-research",
@@ -28,6 +29,7 @@ tp-api = { workspace = true }
 tp-broker = { workspace = true }
 tp-core = { workspace = true }
 tp-ingest = { workspace = true }
+tp-ml = { workspace = true }
 tp-paper = { workspace = true }
 tp-strategies = { workspace = true }
 tp-research = { workspace = true }
@@ -85,7 +87,7 @@ ignore = [
 [tool.ruff.lint.isort]
 known-first-party = [
     "tp_api", "tp_broker", "tp_core", "tp_ingest", "tp_paper", "tp_strategies", "tp_research",
-    "tp_risk", "tp_trading",
+    "tp_ml", "tp_risk", "tp_trading",
 ]
 
 [tool.mypy]
@@ -95,6 +97,7 @@ warn_unreachable = true
 files = [
     "libs/core/src",
     "libs/trading/src",
+    "libs/ml/src",
     "services/ingest/src",
     "services/broker/src",
     "services/api/src",
@@ -106,13 +109,14 @@ files = [
 
 [[tool.mypy.overrides]]
 # Third-party packages that ship without type information.
-module = ["pyarrow.*", "exchange_calendars.*", "matplotlib.*", "cycler.*"]
+module = ["pyarrow.*", "exchange_calendars.*", "matplotlib.*", "cycler.*", "sklearn.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = [
     "libs/core/tests",
     "libs/trading/tests",
+    "libs/ml/tests",
     "services/ingest/tests",
     "services/broker/tests",
     "services/api/tests",
@@ -128,4 +132,6 @@ filterwarnings = [
     "error",
     # alpaca-py imports websockets' legacy client at import time; not our code.
     "ignore:websockets.legacy is deprecated:DeprecationWarning",
+    # MLflow's tracking store uses an SQLAlchemy loader option deprecated in 2.1; not our code.
+    "ignore:The ``noload`` loader strategy is deprecated:DeprecationWarning",
 ]
