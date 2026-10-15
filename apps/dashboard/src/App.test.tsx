@@ -20,3 +20,19 @@ describe("parseRoute", () => {
     expect(parseRoute("#/strategies")).toEqual({ section: "paper", sub: "strategies", detail: null });
   });
 });
+
+describe("SectionMenu", () => {
+  it("lists every section and jumps with number keys", async () => {
+    const { render, screen, fireEvent } = await import("@testing-library/react");
+    const { SectionMenu } = await import("./App");
+    window.location.hash = "#/home";
+    render(<SectionMenu current="home" pending={2} />);
+    fireEvent.click(screen.getByRole("button", { name: /Home/ }));
+    const items = screen.getAllByRole("menuitem");
+    expect(items).toHaveLength(6);
+    expect(items[3]).toHaveTextContent("Trades");
+    expect(items[4]).toHaveTextContent("2"); // approvals waiting, on Paper trading
+    fireEvent.keyDown(window, { key: "4" });
+    expect(window.location.hash).toBe("#/trades");
+  });
+});

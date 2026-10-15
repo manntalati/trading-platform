@@ -204,6 +204,10 @@ def create_app(
     ) -> dict[str, Any]:
         return queries.trades(c, source, limit)
 
+    @app.get("/api/trades/stats", dependencies=auth)
+    def trade_stats(c: Ctx) -> dict[str, Any]:
+        return queries.trade_stats(c)
+
     @app.get("/api/portfolio/performance", dependencies=auth)
     def performance(c: Ctx, days: Annotated[int, Query(ge=30, le=5000)] = 365) -> dict[str, Any]:
         return queries.performance(c, days)

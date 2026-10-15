@@ -85,8 +85,8 @@ with the options you hold): [docs/research.md](docs/research.md). Your own ticke
 A FastAPI service with live prices over WebSocket, serving a React dashboard: portfolio and what
 you're up or down (options included), every position's statistics (options with live quotes,
 greeks, odds and scenarios) and a Claude chat about each ([docs/positions.md](docs/positions.md)),
-every trade (yours and the paper bot's) with its P&L,
-paper trading, benchmarks, ideas, strategies, options and system health. `tp-api` rebuilds the
+every trade (yours and the paper bot's) with its P&L, how you trade (win rate, typical return,
+how long you hold calls and shares), paper trading, benchmarks, ideas, strategies, options and system health. `tp-api` rebuilds the
 UI when its source changed. Details: [docs/dashboard.md](docs/dashboard.md).
 
 ```bash

@@ -57,8 +57,16 @@ export function Loading() {
 }
 
 /** Horizontal bars for part-to-whole by category (sorted, labelled, no legend needed). */
-export function BarList(props: { data: Record<string, number>; cap?: number; capLabel?: string }) {
-  const rows = Object.entries(props.data).sort((a, b) => b[1] - a[1]);
+export function BarList(props: {
+  data: Record<string, number>;
+  cap?: number;
+  capLabel?: string;
+  /** Keep the data's own order (e.g. time buckets) instead of largest first. */
+  keepOrder?: boolean;
+  format?: (v: number) => string;
+}) {
+  const rows = Object.entries(props.data);
+  if (!props.keepOrder) rows.sort((a, b) => b[1] - a[1]);
   const max = Math.max(...rows.map(([, v]) => v), props.cap ?? 0, 0.0001);
   return (
     <div className="bars">
@@ -71,7 +79,7 @@ export function BarList(props: { data: Record<string, number>; cap?: number; cap
               <div className={`bar-fill ${over ? "over" : ""}`} style={{ width: `${(value / max) * 100}%` }} />
             </div>
             <span className="num small">
-              {pct(value, 0)}
+              {props.format ? props.format(value) : pct(value, 0)}
               {over && <span aria-label="over cap"> ⚠</span>}
             </span>
           </div>

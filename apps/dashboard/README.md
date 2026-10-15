@@ -44,7 +44,7 @@ CI runs both plus the build.
 
 ## Actions
 
-The Paper tab is the only place the dashboard changes anything: approving or rejecting
+The Paper trading section is the only place the dashboard changes anything: approving or rejecting
 paper-trading proposals and the kill switch. Those requests go through `postJson` in `api.ts`,
 which adds the `X-TP-Client: dashboard` header the API requires for writes.
 
@@ -58,12 +58,15 @@ removes it from the address bar, and sends it on every API call and on the WebSo
 
 ```
 src/
-  api.ts            fetch + useApi hook (token, refresh)
+  App.tsx           the workspace: top bar with the section menu, the page, the right column
+  api.ts            fetch + useApi hook (token, refresh; one request shared by every panel)
   live.ts           /ws/live client: reducer + reconnecting hook
   format.ts         money, percent, time formatting
-  theme.css         design tokens (light and dark), layout, components
-  components/       Card, Stat, Delta, BarList, StatsTable; charts (Recharts)
-  pages/            Overview, Portfolio, Ideas, Strategies, Paper, Market, Options, System
+  theme.css         design tokens (dark and light), layout, components
+  components/       Card, Stat, Delta, BarList, StatsTable; rail.tsx (the right column's
+                    panels); charts (Recharts)
+  pages/            one file per view: Home, Portfolio, Positions, Research, Trades,
+                    TradeStats, Paper, System, ...
 ```
 
 Colours come from CSS variables in `theme.css`; charts read them at runtime so they follow the

@@ -7,6 +7,7 @@ import Portfolio from "./pages/Portfolio";
 import Research from "./pages/Research";
 import System from "./pages/System";
 import Trades from "./pages/Trades";
+import { Rail } from "./components/rail";
 import type { PaperProposal } from "./types";
 
 /** Six sections, each answering one question. */
@@ -51,13 +52,14 @@ export function parseRoute(hash: string): Route {
 }
 
 type Theme = "auto" | "light" | "dark";
+const THEMES: Theme[] = ["dark", "light", "auto"];
 
 function useTheme(): [Theme, (t: Theme) => void] {
   const [theme, setTheme] = useState<Theme>(() => {
     try {
-      return (localStorage.getItem("tp-theme") as Theme | null) ?? "auto";
+      return (localStorage.getItem("tp-theme") as Theme | null) ?? "dark";
     } catch {
-      return "auto";
+      return "dark";
     }
   });
   useEffect(() => {
@@ -73,9 +75,76 @@ function useTheme(): [Theme, (t: Theme) => void] {
   return [theme, setTheme];
 }
 
+function useFlag(key: string, initial: boolean): [boolean, (v: boolean) => void] {
+  const [value, setValue] = useState<boolean>(() => {
+    try {
+      const stored = localStorage.getItem(key);
+      return stored == null ? initial : stored === "1";
+    } catch {
+      return initial;
+    }
+  });
+  const set = (v: boolean) => {
+    setValue(v);
+    try {
+      localStorage.setItem(key, v ? "1" : "0");
+    } catch {
+      /* not remembered */
+    }
+  };
+  return [value, set];
+}
+
+/** The section switcher: the current section's name opens the list of all of them. Number keys
+ * 1-6 jump straight to one (when not typing). */
+export function SectionMenu(props: { current: Section; pending: number }) {
+  const [open, setOpen] = useState(false);
+  const current = SECTIONS.find((s) => s.path === props.current)!;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+      const typing = e.target instanceof Element && e.target.closest("input, textarea, select, [contenteditable]");
+      if (e.metaKey || e.ctrlKey || e.altKey || typing) return;
+      const index = Number(e.key) - 1;
+      if (Number.isInteger(index) && index >= 0 && index < SECTIONS.length) {
+        window.location.hash = `#/${SECTIONS[index]!.path}`;
+        setOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  return (
+    <div className="section-menu">
+      <button className="section-button" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)}>
+        {current.label}
+        <span className="chevron" aria-hidden="true">⌄</span>
+      </button>
+      {open && (
+        <>
+          <div className="menu-scrim" onClick={() => setOpen(false)} aria-hidden="true" />
+          <div className="menu" role="menu">
+            {SECTIONS.map((s, i) => (
+              <a key={s.path} role="menuitem" href={`#/${s.path}`} aria-current={s.path === props.current ? "page" : undefined} onClick={() => setOpen(false)}>
+                <span className="menu-title">
+                  {s.label}
+                  {s.path === "paper" && props.pending > 0 && <span className="badge">{props.pending}</span>}
+                </span>
+                <span className="menu-purpose">{s.purpose}</span>
+                <kbd>{i + 1}</kbd>
+              </a>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [route, setRoute] = useState<Route>(() => parseRoute(window.location.hash));
   const [theme, setTheme] = useTheme();
+  const [railShown, setRailShown] = useFlag("tp-rail-shown", true);
   const live = useLive();
   const waiting = useApi<PaperProposal[]>("/api/paper/proposals", 60_000);
   const pendingCount = waiting.data?.length ?? 0;
@@ -83,7 +152,7 @@ export default function App() {
   useEffect(() => {
     const onHash = () => {
       setRoute(parseRoute(window.location.hash));
-      window.scrollTo?.({ top: 0 });
+      document.querySelector(".center")?.scrollTo?.({ top: 0 });
     };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
@@ -91,48 +160,50 @@ export default function App() {
 
   const connected = live.connection === "open" && !live.error;
   const section = SECTIONS.find((s) => s.path === route.section)!;
+  const nextTheme = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length] ?? "dark";
   return (
-    <div className="shell">
+    <div className={`workspace ${railShown ? "with-rail" : ""}`}>
       <header className="topbar">
-        <a className="brand" href="#/home">
-          <img src="/favicon.svg" alt="" /> Trading Platform
+        <a className="brand" href="#/home" aria-label="Trading platform home">
+          <img src="/favicon.svg" alt="" />
+          <span>Trading platform</span>
         </a>
+        <span className="crumb" aria-hidden="true">/</span>
+        <SectionMenu current={route.section} pending={pendingCount} />
+        <span className="topbar-purpose">{section.purpose}</span>
         <span className="spacer" />
-        <span className="pill" title={live.error ?? undefined}>
+        <span className="status-chip" title={live.error ?? undefined}>
           <span className={`dot ${connected ? "good pulse" : live.connection === "connecting" ? "warning" : "critical"}`} aria-hidden="true" />
-          {connected ? `Live · ${live.source}` : live.connection === "connecting" ? "Connecting…" : "Offline, retrying"}
+          {connected ? `Live · ${live.source}` : live.connection === "connecting" ? "Connecting…" : "Offline"}
         </span>
-        <select aria-label="Theme" value={theme} onChange={(e) => setTheme(e.target.value as Theme)}>
-          <option value="auto">Auto</option>
-          <option value="light">Light</option>
-          <option value="dark">Dark</option>
-        </select>
+        <button className="icon-button" onClick={() => setTheme(nextTheme)} aria-label={`Theme: ${theme}. Switch to ${nextTheme}`} title={`Theme: ${theme}`}>
+          ◐
+        </button>
+        <button
+          className="icon-button"
+          aria-pressed={railShown}
+          aria-label={railShown ? "Hide the side panels" : "Show the side panels"}
+          title={railShown ? "Hide the side panels" : "Show the side panels"}
+          onClick={() => setRailShown(!railShown)}
+        >
+          ◫
+        </button>
       </header>
-      <nav className="nav" aria-label="Sections">
-        {SECTIONS.map((s) => (
-          <a key={s.path} href={`#/${s.path}`} aria-current={s.path === route.section ? "page" : undefined} title={s.purpose}>
-            {s.label}
-            {s.path === "paper" && pendingCount > 0 && (
-              <span className="badge" aria-label={`${pendingCount} waiting for approval`}>
-                {pendingCount}
-              </span>
-            )}
-          </a>
-        ))}
-      </nav>
-      <p className="purpose">{section.purpose}</p>
-      <main>
-        {route.section === "home" && <Home live={live} pendingApprovals={pendingCount} />}
-        {route.section === "portfolio" && <Portfolio live={live} sub={route.sub} detail={route.detail} />}
-        {route.section === "research" && <Research live={live} sub={route.sub} detail={route.detail} />}
-        {route.section === "trades" && <Trades />}
-        {route.section === "paper" && <PaperTrading sub={route.sub} onChange={waiting.reload} />}
-        {route.section === "system" && <System live={live} />}
-      </main>
-      <footer className="small muted" style={{ marginTop: 32 }}>
-        Fidelity is read-only. Orders go only to Alpaca's paper account, and only ones you (or an
-        auto-approval you configured) approved. Ideas are research prompts, not advice.
-      </footer>
+      <div className="workspace-body">
+        <main className="center">
+          {route.section === "home" && <Home live={live} pendingApprovals={pendingCount} />}
+          {route.section === "portfolio" && <Portfolio live={live} sub={route.sub} detail={route.detail} />}
+          {route.section === "research" && <Research live={live} sub={route.sub} detail={route.detail} />}
+          {route.section === "trades" && <Trades sub={route.sub} />}
+          {route.section === "paper" && <PaperTrading sub={route.sub} onChange={waiting.reload} />}
+          {route.section === "system" && <System live={live} />}
+          <footer className="small muted footer">
+            Fidelity is read-only. Orders go only to Alpaca's paper account, and only ones you (or
+            an auto-approval you configured) approved. Ideas are research prompts, not advice.
+          </footer>
+        </main>
+        {railShown && <Rail />}
+      </div>
     </div>
   );
 }

@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { useApi } from "../api";
 import { FidelityFreshness } from "../components/broker";
-import { Card, Delta, Empty, ErrorBanner, Loading, Stat } from "../components/ui";
+import { Card, Delta, Empty, ErrorBanner, Loading, Stat, SubNav } from "../components/ui";
 import { money, pct, qty } from "../format";
 import type { Trade, Trades as TradesData } from "../types";
+import TradeStatsView from "./TradeStats";
 
 const SOURCES = [
   { key: "all", label: "All" },
@@ -14,7 +15,18 @@ type Source = (typeof SOURCES)[number]["key"];
 
 /** Every trade in one place: yours (from the brokerage sync) and the paper bot's fills, each
  * with the profit or loss it locked in. */
-export default function Trades() {
+/** Two views: how you trade (the numbers behind your closed trades), and every trade. */
+export default function Trades(props: { sub?: string | null }) {
+  const view = props.sub === "all" ? "all" : "stats";
+  return (
+    <div className="grid">
+      <SubNav base="trades" current={view} items={[{ key: "stats", label: "How you trade" }, { key: "all", label: "All trades" }]} />
+      {view === "stats" ? <TradeStatsView /> : <TradeList />}
+    </div>
+  );
+}
+
+function TradeList() {
   const [source, setSource] = useState<Source>("all");
   const trades = useApi<TradesData>(`/api/trades?source=${source}&limit=500`, 60_000);
   const t = trades.data;

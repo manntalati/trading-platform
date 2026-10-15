@@ -59,6 +59,36 @@ function detail(text: string): string {
   return text;
 }
 
+// The side panels and the page in the middle often ask for the same thing at once: requests for
+// one path share a single fetch, and an answer is reused for a few seconds.
+const inflight = new Map<string, Promise<unknown>>();
+const recent = new Map<string, { at: number; body: unknown }>();
+const REUSE_MS = 5_000;
+
+/** GET ``path``, shared with any other caller asking for it now; ``fresh`` skips the reuse. */
+export function sharedGet<T>(path: string, fresh = false): Promise<T> {
+  const hit = recent.get(path);
+  if (!fresh && hit && Date.now() - hit.at < REUSE_MS) return Promise.resolve(hit.body as T);
+  const pending = inflight.get(path);
+  if (!fresh && pending) return pending as Promise<T>;
+  const request = getJson<unknown>(path)
+    .then((body) => {
+      recent.set(path, { at: Date.now(), body });
+      return body;
+    })
+    .finally(() => {
+      if (inflight.get(path) === request) inflight.delete(path);
+    });
+  inflight.set(path, request);
+  return request as Promise<T>;
+}
+
+/** Forget shared answers (tests, and after an action that changes the data). */
+export function clearApiCache() {
+  inflight.clear();
+  recent.clear();
+}
+
 export interface Resource<T> {
   data: T | null;
   error: string | null;
@@ -77,24 +107,28 @@ export function useApi<T>(path: string | null, refreshMs = 0): Resource<T> {
 
   useEffect(() => {
     if (path === null) return;
-    const controller = new AbortController();
+    let gone = false;
     if (first.current) setLoading(true);
-    getJson<T>(path, controller.signal)
+    // a reload (tick > 0) wants new data, not a shared answer from a moment ago
+    sharedGet<T>(path, tick > 0)
       .then((body) => {
+        if (gone) return;
         setData(body);
         setError(null);
       })
       .catch((err: unknown) => {
-        if (controller.signal.aborted) return;
+        if (gone) return;
         setError(err instanceof Error ? err.message : String(err));
       })
       .finally(() => {
-        if (!controller.signal.aborted) {
+        if (!gone) {
           setLoading(false);
           first.current = false;
         }
       });
-    return () => controller.abort();
+    return () => {
+      gone = true;
+    };
   }, [path, tick]);
 
   useEffect(() => {
