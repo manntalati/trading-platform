@@ -22,25 +22,12 @@ from typing import ClassVar
 
 import pandas as pd
 
+from tp_core.indicators import wilder_rsi
 from tp_strategies.library.xs_momentum import LARGE_CAPS
 from tp_trading.portfolio import Position
 from tp_trading.strategy import Context, Strategy
 
 INDEX_ETFS = ("SPY", "QQQ", "IWM", "DIA")
-
-
-def wilder_rsi(closes: pd.DataFrame, period: int) -> pd.DataFrame:
-    """Relative strength index with Wilder's smoothing (an EMA with alpha = 1 / period).
-
-    100 when a window has no down moves; NaN until ``period`` changes exist.
-    """
-    delta = closes.diff()
-    gain = delta.clip(lower=0.0)
-    loss = -delta.clip(upper=0.0)
-    avg_gain = gain.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
-    avg_loss = loss.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
-    rsi = 100.0 - 100.0 / (1.0 + avg_gain / avg_loss)
-    return rsi.where(avg_loss > 0, 100.0).where(avg_gain.notna())
 
 
 @dataclass(frozen=True)

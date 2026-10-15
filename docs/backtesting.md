@@ -102,7 +102,7 @@ impact.
 ## Data beyond the bars
 
 `ctx.reference(name)` gives a strategy what was known at today's close and nothing later
-(`tp_strategies.reference`, the same in backtests and paper trading):
+(`tp_core.reference`, the same in backtests and paper trading):
 
 | Name | What | Needs |
 |---|---|---|

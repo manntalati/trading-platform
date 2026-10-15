@@ -26,7 +26,7 @@ trading days after the announcement.
 |---|---|
 | Universe | The 38 large caps |
 | Surprise | Standardized unexpected earnings (SUE), seasonal random walk with drift: this quarter's diluted EPS minus the same quarter a year earlier, less the average such change over the previous 8 quarters, over their standard deviation (at least 6 needed). EPS is as first reported and split adjusted (`tp_core.fundamentals.sue`) |
-| Event date | The first session the figure is in the data: the day of the 10-Q or 10-K (`tp_strategies.reference`). That is days to weeks after the earnings release (8-K); see below |
+| Event date | The first session the figure is in the data: the day of the 10-Q or 10-K (`tp_core.reference`). That is days to weeks after the earnings release (8-K); see below |
 | Entry | SUE of 2 or more, the largest first, into at most 10 positions of 10% each |
 | Exit | 60 sessions after entry, or when the next results come in with a negative SUE |
 | Long only | Negative surprises are not shorted (the risk service blocks shorts); a held name with a negative new SUE is sold |

@@ -6,11 +6,12 @@ import pandas as pd
 import pytest
 
 from tp_core.calendar import sessions
+from tp_core.indicators import wilder_rsi
 from tp_core.portfolio import Classifier
 from tp_risk.limits import Limits
 from tp_risk.manager import RiskManager
 from tp_strategies.library import build
-from tp_strategies.library.rsi2 import rsi2_decisions, wilder_rsi
+from tp_strategies.library.rsi2 import rsi2_decisions
 from tp_trading.data import MarketData
 from tp_trading.engine import BacktestEngine, EngineConfig
 from tp_trading.portfolio import Position

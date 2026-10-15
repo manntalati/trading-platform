@@ -8,7 +8,6 @@ produced it.
 
 from __future__ import annotations
 
-import subprocess
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
@@ -20,11 +19,12 @@ import pandas as pd
 from tp_core import metrics
 from tp_core.bars import load_bars
 from tp_core.portfolio import Classifier
+from tp_core.reference import LakeReference
 from tp_core.storage import Lake, new_run_id, write_json, write_parquet
+from tp_core.versions import data_version, git_version
 from tp_risk.limits import Limits
 from tp_risk.manager import RiskManager
 from tp_risk.state import MemoryRiskState
-from tp_strategies.reference import LakeReference
 from tp_trading.data import MarketData
 from tp_trading.engine import BacktestEngine, BacktestResult, EngineConfig
 from tp_trading.risk import RiskGate
@@ -117,32 +117,6 @@ def _risk_summary(risk: RiskGate | None) -> dict[str, Any]:
             "drawdown_breaches": risk.events,
         }
     return {"gate": type(risk).__name__ if risk is not None else "AllowAll"}
-
-
-def data_version(bars: pd.DataFrame) -> dict[str, Any]:
-    """Enough to tell whether two runs saw the same data."""
-    if bars.empty:
-        return {"rows": 0}
-    return {
-        "rows": len(bars),
-        "symbols": int(bars["symbol"].nunique()),
-        "first_session": str(bars["session"].min()),
-        "last_session": str(bars["session"].max()),
-        "latest_ingest": str(bars["ingested_at"].max()),
-    }
-
-
-def git_version() -> dict[str, Any]:
-    try:
-        commit = subprocess.run(
-            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True, timeout=5
-        ).stdout.strip()
-        dirty = subprocess.run(
-            ["git", "status", "--porcelain"], capture_output=True, text=True, check=True, timeout=5
-        ).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        return {"commit": None, "dirty": None}
-    return {"commit": commit, "dirty": bool(dirty)}
 
 
 def _jsonable(value: Any) -> Any:

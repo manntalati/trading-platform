@@ -16,6 +16,7 @@ from tp_core import metrics
 from tp_core.bars import load_bars, missing_symbols
 from tp_core.calendar import NEW_YORK, is_session, last_completed_session
 from tp_core.portfolio import Classifier
+from tp_core.reference import LakeReference
 from tp_core.storage import Lake
 from tp_paper.broker import (
     BrokerAccount,
@@ -47,7 +48,6 @@ from tp_paper.store import (
     now_iso,
 )
 from tp_risk.manager import RiskManager
-from tp_strategies.reference import LakeReference
 from tp_trading.costs import CostModel
 from tp_trading.events import OrderIntent, RiskDecision
 from tp_trading.risk import Book

@@ -38,7 +38,8 @@ from tp_core.macro import load_macro
 from tp_core.regime import current, market_regimes, performance_by_regime
 from tp_core.significance import block_bootstrap, deflated_sharpe
 from tp_core.storage import Lake, new_run_id, write_json
-from tp_strategies.backtest import BacktestRun, _jsonable, git_version, run_backtest
+from tp_core.versions import git_version
+from tp_strategies.backtest import BacktestRun, _jsonable, run_backtest
 from tp_strategies.library import build
 from tp_trading.engine import EngineConfig
 from tp_trading.risk import RiskGate
