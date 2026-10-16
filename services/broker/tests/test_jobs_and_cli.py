@@ -37,6 +37,18 @@ def test_sync_can_refresh_first(tmp_path: Path) -> None:
     assert accounts["holdings_as_of"].notna().all()
 
 
+def test_a_failed_refresh_does_not_stop_the_sync(tmp_path: Path) -> None:
+    class Unrefreshable(FakeBroker):
+        def refresh(self, *, timeout: float = 180.0) -> Any:
+            raise RuntimeError("(503)\nReason: Service Unavailable\nHTTP response headers: ...")
+
+    lake = Lake(tmp_path)
+    result = run_sync(lake, Unrefreshable(as_of=NOW.date()), now=NOW, refresh=True)
+    assert result.refresh == ("refresh failed (RuntimeError: (503)); synced what fake already had")
+    assert result.activities == 28  # the sync itself still ran
+    assert pf.latest_snapshot(lake).total_value > 0
+
+
 def test_second_sync_fetches_activities_with_overlap(tmp_path: Path) -> None:
     lake = Lake(tmp_path)
     run_sync(lake, FakeBroker(as_of=NOW.date()), now=NOW)

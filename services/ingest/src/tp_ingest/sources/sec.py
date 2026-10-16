@@ -66,7 +66,14 @@ class SecSource:
         return {str(v["ticker"]).upper(): int(v["cik_str"]) for v in doc.values()}
 
     def company_facts(self, cik: int) -> dict[str, Any]:
-        out: dict[str, Any] = self._get(FACTS_URL.format(cik=cik))
+        try:
+            out: dict[str, Any] = self._get(FACTS_URL.format(cik=cik))
+        except requests.HTTPError as exc:
+            # EDGAR answers 404 for filers without XBRL financial data, such as the trusts behind
+            # many ETFs (they are in the ticker list all the same): no facts, not a failure
+            if exc.response is not None and exc.response.status_code == 404:
+                return {"cik": cik, "facts": {}}
+            raise
         return out
 
     def submissions(self, cik: int) -> tuple[dict[str, Any], list[dict[str, Any]]]:

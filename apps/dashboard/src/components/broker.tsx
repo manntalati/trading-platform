@@ -73,7 +73,7 @@ export function FidelityFreshness(props: { freshness?: BrokerFreshness | null; o
               <span className={`dot ${state.ok ? "good" : "critical"}`} aria-hidden="true" /> {state.ok ? "Updated" : "Refresh failed"} {timeAgo(state.finished_at)}
             </span>
           )}
-          <button onClick={refresh} title="Has SnapTrade re-pull your positions from Fidelity now (a small SnapTrade fee per refresh)">
+          <button onClick={refresh} title="Has SnapTrade re-pull your positions from Fidelity now (a small SnapTrade fee per refresh; skipped on SnapTrade's real-time plan, where they are live already)">
             Refresh from Fidelity
           </button>
         </>

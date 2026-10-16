@@ -54,7 +54,9 @@ Fidelity data reaches the platform through SnapTrade, which keeps its own copy:
 - **Refresh from Fidelity** (the button on the Portfolio and Trades sections, or
   `tp-broker sync --refresh`) first has SnapTrade re-pull your positions from Fidelity, which
   takes up to a few minutes. SnapTrade charges a small fee per refresh (see the billing page
-  of your SnapTrade dashboard), so it's on demand rather than scheduled.
+  of your SnapTrade dashboard), so it's on demand rather than scheduled. On SnapTrade's
+  **real-time plan** there is no manual refresh (SnapTrade answers 403, code 1141) and none is
+  needed: every sync reads live positions, so the button just syncs and says so.
 - The tabs say how current the data is: when positions were last pulled from Fidelity, the
   last day of transactions, and when the platform last synced.
 - A pending trade has the quantity and, for a buy, the price paid (from the change in the

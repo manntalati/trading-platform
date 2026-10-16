@@ -1,5 +1,6 @@
 """SnapTrade adapter against payloads shaped like the live API (no network, synthetic values)."""
 
+import json
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -8,7 +9,7 @@ import pandas as pd
 import pytest
 
 from tp_broker.jobs import check_sync, render_check, run_sync
-from tp_broker.snaptrade import SnapTradeSource
+from tp_broker.snaptrade import RefreshNotOfferedError, SnapTradeSource, realtime_plan_refusal
 from tp_core import portfolio as pf
 from tp_core.storage import Lake
 
@@ -172,6 +173,38 @@ def test_refresh_gives_up_waiting_without_failing() -> None:
     assert "next sync" in result.message
 
 
+class RealtimePlanApi(FakeApi):
+    def refresh_connection(self, authorization_id: str) -> None:
+        self.calls.append(("refresh", authorization_id))
+        raise RefreshNotOfferedError("Data endpoints already return real-time data")
+
+
+def test_refresh_on_the_real_time_plan_is_not_needed() -> None:
+    api = RealtimePlanApi()
+    result = SnapTradeSource(api).refresh(sleep=lambda s: pytest.fail("should not wait"))
+    assert result.completed
+    assert result.requested == 0
+    assert "real-time plan" in result.message
+
+
+def test_real_time_plan_refusal_is_recognised_and_nothing_else_is() -> None:
+    body = {"detail": "Manual refresh not enabled on the real-time plan.", "status_code": 403,
+            "code": "1141"}  # fmt: skip
+    assert realtime_plan_refusal(403, body) == body["detail"]
+    assert realtime_plan_refusal(403, json.dumps(body).encode()) == body["detail"]
+    assert realtime_plan_refusal(403, {"detail": "Forbidden", "code": "1076"}) is None
+    assert realtime_plan_refusal(500, body) is None
+    assert realtime_plan_refusal(403, b"<html>") is None
+
+
+def test_sync_goes_ahead_when_the_plan_has_no_refresh(tmp_path: Path) -> None:
+    result = run_sync(Lake(tmp_path), SnapTradeSource(RealtimePlanApi()), now=NOW, refresh=True)
+    assert result.refresh is not None
+    assert "not needed" in result.refresh
+    assert result.accounts == 1
+    assert result.holdings == 3
+
+
 def test_positions_key_fallback_for_older_payloads() -> None:
     api = FakeApi()
     api.positions_key = "results"
@@ -315,3 +348,29 @@ def test_check_lists_accounts_no_longer_linked(tmp_path: Path) -> None:
     check = check_sync(lake, SnapTradeSource(api), now=NOW)
     assert check.unlinked == ["Fidelity …5678"]
     assert "no longer returns it" in render_check(check, NOW)
+
+
+def test_sdk_adapter_turns_the_real_time_plan_403_into_refresh_not_offered() -> None:
+    from types import SimpleNamespace
+
+    from snaptrade_client.exceptions import ApiException
+
+    from tp_broker.snaptrade import SdkSnapTradeApi
+
+    def refusing(**_: Any) -> None:
+        exc = ApiException(status=403, reason="Forbidden")
+        exc.body = {"detail": "Manual refresh not enabled on the real-time plan.", "code": "1141"}
+        raise exc
+
+    def broken(**_: Any) -> None:
+        raise ApiException(status=500, reason="Server Error")
+
+    api = SdkSnapTradeApi.__new__(SdkSnapTradeApi)  # no credentials or network needed
+    api._client = SimpleNamespace(  # type: ignore[assignment]
+        connections=SimpleNamespace(refresh_brokerage_authorization=refusing)
+    )
+    with pytest.raises(RefreshNotOfferedError, match="real-time plan"):
+        api.refresh_connection("auth-1")
+    api._client.connections.refresh_brokerage_authorization = broken  # type: ignore[attr-defined]
+    with pytest.raises(ApiException):
+        api.refresh_connection("auth-1")

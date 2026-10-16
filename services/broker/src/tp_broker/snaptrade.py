@@ -47,6 +47,27 @@ _KINDS = {
     "crypto": "crypto",
 }
 _ACTIVITY_PAGE = 1000
+# SnapTrade's answer to a refresh on its real-time plan, where the data endpoints are live already.
+_REALTIME_PLAN_CODE = "1141"
+
+
+class RefreshNotOfferedError(RuntimeError):
+    """SnapTrade declined an on-demand refresh because the plan doesn't need one."""
+
+
+def realtime_plan_refusal(status: int | None, body: Any) -> str | None:
+    """SnapTrade's explanation when ``status``/``body`` (a refresh's error response) says the plan
+    is real-time and has no manual refresh; ``None`` for any other error."""
+    if status != 403:
+        return None
+    if isinstance(body, bytes | str):
+        try:
+            body = json.loads(body)
+        except ValueError:
+            return None
+    if not isinstance(body, Mapping) or str(body.get("code")) != _REALTIME_PLAN_CODE:
+        return None
+    return str(body.get("detail") or "manual refresh is not part of the real-time plan")
 
 
 class SnapTradeApi(Protocol):
@@ -66,7 +87,9 @@ class SnapTradeApi(Protocol):
 
     def connection_portal_url(self, broker: str | None, reconnect: str | None = None) -> str: ...
 
-    def refresh_connection(self, authorization_id: str) -> None: ...
+    def refresh_connection(self, authorization_id: str) -> None:
+        """Raises ``RefreshNotOfferedError`` when the plan has no manual refresh (real-time)."""
+        ...
 
 
 class SdkSnapTradeApi:
@@ -108,7 +131,17 @@ class SdkSnapTradeApi:
         return dict(self._plain(body))
 
     def refresh_connection(self, authorization_id: str) -> None:
-        self._client.connections.refresh_brokerage_authorization(authorization_id=authorization_id)
+        from snaptrade_client.exceptions import ApiException
+
+        connections = self._client.connections
+        try:
+            connections.refresh_brokerage_authorization(authorization_id=authorization_id)
+        except ApiException as exc:
+            body = self._plain(exc.body) if isinstance(exc.body, Mapping) else exc.body
+            reason = realtime_plan_refusal(exc.status, body)
+            if reason is not None:
+                raise RefreshNotOfferedError(reason) from exc
+            raise
 
     def list_connections(self) -> list[dict[str, Any]]:
         return list(self._plain(self._client.connections.list_brokerage_authorizations().body))
@@ -190,6 +223,8 @@ class SnapTradeSource:
         """Ask SnapTrade to pull positions from the brokerage now (it caches them for a day; this
         also pulls the previous day's transactions if it hasn't yet), then wait until every
         account reports positions newer than before. SnapTrade charges a small fee per refresh.
+        On SnapTrade's real-time plan there is no manual refresh, and none is needed: every sync
+        already reads live data.
 
         Transactions are never updated intraday: a trade made today shows in the positions after
         a refresh, but in the transaction history only the next day."""
@@ -202,8 +237,14 @@ class SnapTradeSource:
                 if a.get("brokerage_authorization")
             }
         )
-        for connection in connections:
-            self.api.refresh_connection(connection)
+        try:
+            for connection in connections:
+                self.api.refresh_connection(connection)
+        except RefreshNotOfferedError as exc:
+            log.info("SnapTrade refresh not offered: %s", exc)
+            return RefreshResult(
+                0, True, 0.0, "not needed: SnapTrade's real-time plan already returns live data"
+            )
         start = clock()
         while True:
             now = {str(a["id"]): _holdings_as_of(a) for a in self.api.list_accounts()}
