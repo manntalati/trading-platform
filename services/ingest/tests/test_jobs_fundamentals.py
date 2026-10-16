@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import requests
 import responses
 from typer.testing import CliRunner
 
@@ -50,6 +51,16 @@ def test_sec_source_sends_the_user_agent_and_reads_every_page() -> None:
     assert len(extra) == 1
     assert extra[0]["form"][0] in ("8-K", "10-K")
     assert edgar_ticker("brk.b") == "BRK-B"
+
+
+@responses.activate
+def test_a_filer_without_financial_data_has_no_facts_rather_than_failing() -> None:
+    responses.get(FACTS_URL.format(cik=7), status=404)  # e.g. an ETF's trust
+    responses.get(FACTS_URL.format(cik=8), status=500)
+    sec = SecSource(AGENT, pause=0.0)
+    assert sec.company_facts(7) == {"cik": 7, "facts": {}}
+    with pytest.raises(requests.HTTPError):
+        sec.company_facts(8)
 
 
 def test_job_writes_raw_and_clean_and_lists_what_it_couldnt_get(tmp_path: Path) -> None:

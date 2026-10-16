@@ -53,7 +53,8 @@ def run_sync(
 ) -> SyncResult:
     """Snapshot balances and positions and fetch new transactions. With ``refresh``, first have
     the aggregator pull fresh positions from the brokerage (its data is otherwise up to a day
-    old; SnapTrade charges a small fee per refresh)."""
+    old; SnapTrade charges a small fee per refresh). A refresh that is refused or fails doesn't
+    stop the sync: it is reported in ``refresh`` and the data the source has is synced anyway."""
     run_id = new_run_id(now)
     result = SyncResult(run_id=run_id, source=source.name)
     if refresh:
@@ -61,9 +62,18 @@ def run_sync(
         if refresher is None:
             result.refresh = f"{source.name} can't be refreshed on demand"
         else:
-            outcome: RefreshResult = refresher()
-            result.refresh = outcome.message
-            log.info("%s refresh: %s (%.0fs)", source.name, outcome.message, outcome.waited)
+            try:
+                outcome: RefreshResult = refresher()
+            except Exception as exc:  # the refresh is extra: still sync what the source has
+                log.warning("%s refresh failed, syncing without it", source.name, exc_info=True)
+                first = (str(exc).strip().splitlines() or [""])[0]
+                result.refresh = (
+                    f"refresh failed ({type(exc).__name__}: {first}); synced what "
+                    f"{source.name} already had"
+                )
+            else:
+                result.refresh = outcome.message
+                log.info("%s refresh: %s (%.0fs)", source.name, outcome.message, outcome.waited)
     snapshot_date = now.astimezone(NEW_YORK).date()
     stamp: dict[str, Any] = {
         "taken_at": pd.Timestamp(now),
@@ -282,8 +292,8 @@ def render_check(check: SyncCheck, now: datetime, *, show: int = 15) -> str:
                 "  ✓ Every transaction SnapTrade has is stored. Trades made after "
                 f"{through} arrive with the broker's overnight posting; until then the "
                 "dashboard shows them as pending from the change in positions, once SnapTrade "
-                "has refreshed those (daily, or now with `tp-broker sync --refresh`, for a "
-                "small SnapTrade fee)."
+                "has refreshed those (live on its real-time plan; otherwise daily, or now with "
+                "`tp-broker sync --refresh` for a small SnapTrade fee)."
             )
     for label in check.unlinked:
         lines.append(

@@ -2,7 +2,8 @@
 
 A sync with ``refresh`` first has SnapTrade re-pull the positions from Fidelity, which takes up to
 a few minutes and carries a small SnapTrade fee, so it runs in the background: ``POST`` starts
-it, ``GET`` reports progress. Only one runs at a time.
+it, ``GET`` reports progress. Only one runs at a time. On SnapTrade's real-time plan there is no
+refresh (the data is live already) and the sync just runs.
 """
 
 from __future__ import annotations

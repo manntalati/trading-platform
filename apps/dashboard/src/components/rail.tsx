@@ -311,20 +311,30 @@ export function PositionsPanel(p: PanelProps) {
   );
 }
 
+/** What a job's last report says, the same verdict the System page gives: ``null`` when the job
+ * hasn't run yet. */
+function verdict(report: { ok?: boolean; errors?: unknown } | null | undefined, okDetail: string) {
+  if (!report) return { ok: null, detail: "none yet" };
+  if (report.ok) return { ok: true, detail: okDetail };
+  const failed = report.errors && typeof report.errors === "object" ? Object.keys(report.errors) : [];
+  return { ok: false, detail: failed.length === 0 ? "failed" : failed.length <= 2 ? `failed: ${failed.join(", ")}` : `${failed.length} failed` };
+}
+
 export function SystemPanel(p: PanelProps) {
   const status = useApi<Status>("/api/status", 60_000);
   const d = status.data;
-  const checks: { label: string; ok: boolean | null | undefined; detail: string }[] = d
+  const checks: { label: string; ok: boolean | null; detail: string }[] = d
     ? [
         { label: "Daily bars", ok: d.bars.latest_session != null && !d.bars.stale, detail: d.bars.latest_session ?? "none" },
-        { label: "Option chains", ok: d.options.latest_report?.ok, detail: String(d.options.latest_report?.snapshot_date ?? "none") },
-        { label: "Macro", ok: d.macro?.latest_report?.ok, detail: d.macro?.latest_report ? "ok" : "none" },
-        { label: "Fundamentals", ok: d.fundamentals?.ok, detail: d.fundamentals ? "ok" : "none" },
+        { label: "Option chains", ...verdict(d.options.latest_report, String(d.options.latest_report?.snapshot_date ?? "")) },
+        { label: "Macro", ...verdict(d.macro?.latest_report, "ok") },
+        { label: "Fundamentals", ...verdict(d.fundamentals, `${Object.keys(d.fundamentals?.facts ?? {}).length} companies`) },
         { label: "Fidelity", ok: d.broker.length > 0, detail: d.broker[0] ? timeAgo(d.broker[0].synced_at) : "not linked" },
         { label: "Live prices", ok: !d.live.error, detail: d.live.source },
       ]
     : [];
   const good = checks.filter((c) => c.ok).length;
+  const bad = checks.filter((c) => c.ok === false).length;
   return (
     <RailPanel
       id="system"
@@ -338,7 +348,7 @@ export function SystemPanel(p: PanelProps) {
             <span className="mono">
               {good}/{checks.length}
             </span>{" "}
-            <Meter value={checks.length ? good / checks.length : 0} tone={good === checks.length ? "good" : "critical"} label="Data feeds healthy" />
+            <Meter value={checks.length ? good / checks.length : 0} tone={bad > 1 ? "critical" : good === checks.length ? "good" : "warning"} label="Data feeds healthy" />
           </>
         ) : null
       }

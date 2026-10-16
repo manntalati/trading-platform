@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, vi } from "vitest";
-import { Rail } from "./rail";
+import { Rail, SystemPanel } from "./rail";
 
 const responses: Record<string, unknown> = {
   "/api/portfolio": {
@@ -81,5 +81,27 @@ describe("Rail", () => {
     expect(screen.getByRole("button", { name: /Your trading/ })).toHaveAttribute("aria-expanded", "false");
     // closed panels don't fetch what only their body shows
     expect(screen.getByRole("button", { name: /Positions/ })).toHaveAttribute("aria-expanded", "false");
+  });
+});
+
+describe("SystemPanel", () => {
+  it("gives each feed the System page's verdict, naming what failed", async () => {
+    const status = {
+      market: { is_open: false, next_open: null, next_close: null },
+      bars: { latest_session: "2026-01-09", expected_session: "2026-01-09", stale: false, rows: 10, symbols: 2 },
+      options: { files: 3, latest_report: { snapshot_date: "2026-01-08", ok: true } },
+      macro: { series: {}, latest_report: { ok: true } },
+      fundamentals: { ok: false, facts: { AAA: 10, ABC: 0 }, errors: { XYZ: "HTTPError: 503" } },
+      broker: [{ source: "fake", institution: "Fidelity", account: "…1234", synced_at: "2026-01-09T15:30:00Z" }],
+      live: { source: "alpaca", symbols: [], error: null },
+    };
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify(status)))));
+    render(<SystemPanel open onToggle={() => {}} />);
+    const row = (await screen.findByText("Fundamentals")).closest(".rail-row")!;
+    expect(row).toHaveTextContent("failed: XYZ");
+    expect(row.querySelector(".dot.critical")).not.toBeNull();
+    expect((await screen.findByText("Macro")).closest(".rail-row")).toHaveTextContent("ok");
+    expect(screen.getByText("5/6")).toBeInTheDocument();
+    expect(screen.getByRole("meter", { name: "Data feeds healthy" })).toHaveClass("warning"); // one problem: amber, not red
   });
 });

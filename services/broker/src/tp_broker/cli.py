@@ -112,7 +112,8 @@ def sync(
         bool,
         typer.Option(
             help="First have SnapTrade pull fresh positions from Fidelity (otherwise up to a day "
-            "old). SnapTrade charges a small fee per refresh; see its billing page."
+            "old). SnapTrade charges a small fee per refresh; see its billing page. On its "
+            "real-time plan the data is already live, so the refresh is skipped."
         ),
     ] = False,
 ) -> None:
