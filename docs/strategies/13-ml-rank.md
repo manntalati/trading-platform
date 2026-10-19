@@ -44,7 +44,7 @@ tell which.
 | Universe | The 38 large caps (survivorship caveat in config/universes.toml) |
 | Features | At each month end: returns over 1 to 252 days, return against the sector, 21- and 63-day volatility and their ratio, ATR, range, volume z-score, dollar volume, distance from the 20/50/200-day averages, RSI(2), RSI(14). Each is ranked against that day's stocks ([ml.md](../ml.md#features)) |
 | Target | The next 21 sessions' return, entered at the next open and ranked against that month's stocks |
-| Model | Ridge regression (`model=ridge`, the default) or gradient-boosted trees (`model=gbm`) |
+| Model | Ridge regression (`model=ridge`, the default), gradient-boosted trees (`model=gbm`), or LightGBM with a ranking objective (`model=lgbm-rank`) |
 | Training | Every 3 months (`retrain`), on every past month end whose next month had ended before that month began |
 | Portfolio | The 10 best scores (`top_n`) at equal weight, at most 3 per sector, rebalanced at each month end; as strategy 3 |
 | Warm-up | Until there are 24 month ends to learn from, it ranks by 12-1 momentum, i.e. it is strategy 3. Its orders say so |
@@ -83,6 +83,7 @@ alone can show a spread Sharpe of 0.5 over six years.
 |---|---|---|---|---|
 | Your lake, `tp-ml rank` | _fill in_ | | | |
 | Your lake, `tp-ml rank --model gbm` | | | | |
+| Your lake, `tp-ml rank --model lgbm-rank` | | | | |
 
 ## Known failure regimes
 

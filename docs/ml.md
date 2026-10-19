@@ -101,10 +101,14 @@ change makes noise look predictable, the change leaks.
   this stays fast: with sample weights, scikit-learn otherwise re-sorts every feature once per
   bin edge.
 
-It also provides two regressors for ranking, both on features already ranked across stocks:
+It also provides three models for ranking, all on features already ranked across stocks:
 
 - **`ridge`**: the linear baseline. A missing rank is the middle, 0.
 - **`gbm`**: gradient-boosted regression trees.
+- **`lgbm-rank`**: LightGBM with a ranking objective (lambdarank), as the plan has it: it learns
+  the order of the stocks on each date rather than their returns. The stocks of one date are one
+  ranking group, and each stock's relevance is its quintile of that month's return. On macOS,
+  LightGBM needs the OpenMP runtime: `brew install libomp`.
 
 Columns with nothing in them, such as macro features before `tp-data macro` has run, are left
 out before fitting.
@@ -231,7 +235,7 @@ Sharpe of 0.6: with 38 stocks in 5 buckets, spreads are noisy. On real data, loo
 
 Options:
 
-- `--model gbm`
+- `--model gbm`, or `--model lgbm-rank` (LightGBM's ranking objective)
 - `--horizon 63` (rank the next quarter's return)
 - `--buckets 3`
 - `--features all` (adds the earnings features)
