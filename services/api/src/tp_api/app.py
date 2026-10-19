@@ -249,6 +249,10 @@ def create_app(
             threading.Thread(target=once, name="job-now", daemon=True).start()
         return scheduler.status()
 
+    @app.get("/api/models", dependencies=auth)
+    def models(c: Ctx) -> dict[str, Any]:
+        return queries.models(c)
+
     @app.get("/api/ideas", dependencies=auth)
     def ideas(c: Ctx) -> dict[str, Any]:
         return queries.ideas(c)

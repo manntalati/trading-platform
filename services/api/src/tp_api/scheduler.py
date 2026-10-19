@@ -9,6 +9,8 @@ windows on the exchange calendar, in New York time, on trading days:
     options-midday   12:30 to 30 min before the close   option chains during the day
     options-close    15 minutes before the close  the plan's daily snapshot
     bars             18:30 to the next open      daily bars
+    news             18:45 to the next open      headlines; Claude scores them (TP_NEWS_SCORING)
+    models           19:30 to the next open      the ML strategies' models: retrain, drift, accuracy
     fundamentals     20:00 to 20:00 the next trading day   SEC filings (with TP_SEC_USER_AGENT)
     validation       Saturday 10:00 to Sunday 23:00   the backtest gate, weekly
     recommendations  whenever anything above brought new data
@@ -129,6 +131,16 @@ def _bars(day: date) -> list[tuple[datetime, datetime]]:
     return [(start, session_open(next_session(day)) - timedelta(minutes=30))]
 
 
+def _news(day: date) -> list[tuple[datetime, datetime]]:
+    start = max(ny(day, 18, 45), session_close(day) + timedelta(hours=2))
+    return [(start, session_open(next_session(day)) - timedelta(minutes=30))]
+
+
+def _models(day: date) -> list[tuple[datetime, datetime]]:
+    start = max(ny(day, 19, 30), session_close(day) + timedelta(hours=3))
+    return [(start, session_open(next_session(day)) - timedelta(minutes=30))]
+
+
 def _fundamentals(day: date) -> list[tuple[datetime, datetime]]:
     return [(ny(day, 20), ny(next_session(day), 20))]
 
@@ -199,6 +211,12 @@ def _needs_snaptrade(s: Settings) -> str | None:
     return None if s.snaptrade_client_id and s.snaptrade_consumer_key else "Fidelity isn't linked"
 
 
+def _needs_news_scoring(s: Settings) -> str | None:
+    if not s.news_scoring:
+        return "off: TP_NEWS_SCORING=on in .env to score headlines (costs API tokens)"
+    return None if s.anthropic_api_key else "needs ANTHROPIC_API_KEY in .env"
+
+
 def _needs_sec(s: Settings) -> str | None:
     return None if s.sec_user_agent else "needs TP_SEC_USER_AGENT in .env"
 
@@ -249,6 +267,35 @@ JOBS: tuple[Job, ...] = (
         written_since(REPORTS / "validation", "stock_bars_1d-*.json"),
         _bars,
         needs=_needs_alpaca,
+    ),
+    Job(
+        "news",
+        "News headlines",
+        "trading days from 18:45",
+        ("tp-data", "news", "fetch"),
+        written_since(REPORTS / "news", "*.json"),
+        _news,
+        needs=_needs_alpaca,
+        timeout=900.0,
+    ),
+    Job(
+        "news-scores",
+        "News sentiment (Claude)",
+        "trading days from 18:45, after the headlines",
+        ("tp-data", "news", "score"),
+        written_since(REPORTS / "news_scores", "*.json"),
+        _news,
+        needs=_needs_news_scoring,
+        timeout=1800.0,
+    ),
+    Job(
+        "models",
+        "Model monitoring",
+        "trading days from 19:30 (after the bars)",
+        ("tp-models", "monitor"),
+        written_since(REPORTS / "ml_monitor", "*.json"),
+        _models,
+        timeout=2 * 3600.0,
     ),
     Job(
         "fundamentals",

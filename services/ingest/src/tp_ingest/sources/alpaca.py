@@ -17,6 +17,7 @@ from alpaca.data.historical.option import OptionHistoricalDataClient
 from alpaca.data.historical.stock import StockHistoricalDataClient
 from alpaca.data.requests import (
     CorporateActionsRequest,
+    NewsRequest,
     OptionChainRequest,
     OptionSnapshotRequest,
     StockBarsRequest,
@@ -31,6 +32,7 @@ from tp_core.config import Settings
 from tp_ingest.sources.base import (
     BAR_COLUMNS,
     CORPORATE_ACTION_COLUMNS,
+    NEWS_COLUMNS,
     OPTION_CONTRACT_COLUMNS,
     OPTION_QUOTE_COLUMNS,
     UNDERLYING_COLUMNS,
@@ -67,6 +69,7 @@ class AlpacaSource:
         self.quotes_feed = quotes_feed
         self._paper = paper
         self._keys = (api_key, secret_key)
+        self._data_url = data_url
         self._stocks = StockHistoricalDataClient(
             api_key, secret_key, raw_data=True, url_override=data_url
         )
@@ -92,6 +95,36 @@ class AlpacaSource:
 
     def trading_client(self) -> TradingClient:
         return self._trading
+
+    # -- news ---------------------------------------------------------------------------------
+
+    def news(self, symbols: Sequence[str], start: datetime, end: datetime) -> pd.DataFrame:
+        """Alpaca's news feed (Benzinga headlines; free with the market data keys)."""
+        from alpaca.data.historical.news import NewsClient
+
+        client = NewsClient(*self._keys, raw_data=True, url_override=self._data_url)
+        rows: list[dict[str, Any]] = []
+        wanted = list(dict.fromkeys(symbols))
+        for k in range(0, len(wanted), 50):  # a long symbol list in chunks
+            request = NewsRequest(
+                symbols=",".join(wanted[k : k + 50]), start=start, end=end, limit=5000,
+                include_content=False, exclude_contentless=False,
+            )  # fmt: skip
+            raw = cast(dict[str, Any], client.get_news(request))
+            for item in raw.get("news", []):
+                rows.append(
+                    {
+                        "id": str(item["id"]),
+                        "created_at": pd.Timestamp(item["created_at"]).tz_convert("UTC"),
+                        "headline": str(item.get("headline") or ""),
+                        "summary": str(item.get("summary") or ""),
+                        "source": str(item.get("source") or ""),
+                        "url": str(item.get("url") or ""),
+                        "symbols": ",".join(item.get("symbols") or []),
+                    }
+                )
+        out = pd.DataFrame(rows, columns=list(NEWS_COLUMNS))
+        return out.drop_duplicates("id").reset_index(drop=True)
 
     # -- bars ---------------------------------------------------------------------------------
 

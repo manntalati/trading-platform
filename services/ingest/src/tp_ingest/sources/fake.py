@@ -22,6 +22,7 @@ from tp_core.occ import Right, format_occ
 from tp_ingest.sources.base import (
     BAR_COLUMNS,
     CORPORATE_ACTION_COLUMNS,
+    NEWS_COLUMNS,
     OPTION_CONTRACT_COLUMNS,
     OPTION_QUOTE_COLUMNS,
     UNDERLYING_COLUMNS,
@@ -58,6 +59,24 @@ class FakeSource:
     feed: str = "synthetic"
     options_feed: str = "synthetic"
     calls: list[tuple[str, tuple[str, ...], date, date]] = field(default_factory=list)
+
+    def news(self, symbols: Sequence[str], start: datetime, end: datetime) -> pd.DataFrame:
+        """One headline per symbol per day at 14:00 UTC, alternating good and bad news."""
+        self.calls.append(("news", tuple(symbols), start.date(), end.date()))
+        rows = []
+        day = start.date()
+        while day <= end.date():
+            at = datetime.combine(day, time(14), tzinfo=UTC)
+            if start <= at <= end:
+                for symbol in symbols:
+                    good = (zlib.crc32(f"{symbol}{day}".encode()) % 2) == 0
+                    rows.append({
+                        "id": f"{symbol}-{day.isoformat()}", "created_at": pd.Timestamp(at),
+                        "headline": f"{symbol} {'beats estimates' if good else 'misses estimates'}",
+                        "summary": "", "source": "synthetic", "url": "", "symbols": symbol,
+                    })  # fmt: skip
+            day += timedelta(days=1)
+        return pd.DataFrame(rows, columns=list(NEWS_COLUMNS))
 
     def daily_bars(self, symbols: Sequence[str], start: date, end: date) -> pd.DataFrame:
         self.calls.append(("daily_bars", tuple(symbols), start, end))

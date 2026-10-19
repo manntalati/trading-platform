@@ -7,7 +7,7 @@ vendors (Massive/Polygon, IBKR, Databento) are interchangeable.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import date
+from datetime import date, datetime
 from typing import Protocol
 
 import pandas as pd
@@ -127,3 +127,15 @@ class OptionsSource(Protocol):
 
 class FullSource(MarketDataSource, OptionsSource, IntradaySource, Protocol):
     """Bars, corporate actions and options from one vendor (Alpaca and the fake both are)."""
+
+
+NEWS_COLUMNS = ("id", "created_at", "headline", "summary", "source", "url", "symbols")
+
+
+class NewsSource(Protocol):
+    name: str
+
+    def news(self, symbols: Sequence[str], start: datetime, end: datetime) -> pd.DataFrame:
+        """Headlines tagged with any of ``symbols`` published in ``[start, end]``: NEWS_COLUMNS,
+        ``symbols`` comma-separated, ``created_at`` UTC."""
+        ...

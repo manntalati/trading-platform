@@ -59,7 +59,7 @@ def test_dataset_labels_the_next_months_return_from_the_next_open() -> None:
     assert set(data.index.get_level_values("date")) <= set(ranking.rebalance_dates(opens.index))
 
 
-@pytest.mark.parametrize("model", ["ridge", "gbm"])
+@pytest.mark.parametrize("model", ["ridge", "gbm", "lgbm-rank"])
 def test_a_planted_signal_is_found_out_of_sample(model: str) -> None:
     bars = drifting_bars(0.004)
     cfg = ranking.RankConfig(model=model)
@@ -72,7 +72,7 @@ def test_a_planted_signal_is_found_out_of_sample(model: str) -> None:
     assert wf["spread"] > 0
 
 
-@pytest.mark.parametrize("model", ["ridge", "gbm"])
+@pytest.mark.parametrize("model", ["ridge", "gbm", "lgbm-rank"])
 def test_noise_ranks_at_chance(model: str) -> None:
     """The leak check: with nothing to find, the out-of-sample rank IC stays near zero."""
     bars = drifting_bars(0.0, seed=3)
@@ -137,3 +137,18 @@ def test_report_text() -> None:
     text = ranking.report_text(report)
     for phrase in ("20 stocks", "Model, walk-forward", "12-1 momentum (baseline)", "by bucket"):
         assert phrase in text
+
+
+def test_lightgbm_ranks_with_a_ranking_objective_and_can_be_stored() -> None:
+    import pickle
+
+    bars = drifting_bars(0.004)
+    cfg = ranking.RankConfig(model="lgbm-rank")
+    features = compute_features(bars)
+    model = ranking.fit_ranker(ranking.ranking_dataset(bars, features, cfg), cfg)
+    assert type(model.estimator).__name__ == "LambdaRanker"
+    latest = features.loc[bars["close"].index[-1]]
+    scores = model.score(latest)
+    assert scores[SYMBOLS[-5:]].mean() > scores[SYMBOLS[:5]].mean()
+    again = pickle.loads(pickle.dumps(model))  # the model registry pickles it
+    assert again.score(latest).equals(scores)

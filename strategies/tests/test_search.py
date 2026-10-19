@@ -34,7 +34,7 @@ def closes(drift_spread: float, seed: int = 0) -> pd.DataFrame:
 def test_rule_sets_map_to_engine_strategies() -> None:
     rules = search.rule_sets()
     assert len(rules) == 41
-    assert {r.family for r in rules} == set(search.FAMILIES)
+    assert {r.family for r in rules} == set(search.DEFAULT_FAMILIES)  # grammar: bred, not listed
     assert len({r.label for r in rules}) == len(rules)
     momentum = next(r for r in rules if r.engine == "xs-momentum")
     assert set(momentum.engine_params) == {"lookback", "skip", "top_n"}

@@ -1026,3 +1026,26 @@ export interface JobsStatus {
   here: boolean;
   jobs: JobInfo[];
 }
+
+// /api/models (strategies/src/tp_strategies/model_monitor.py)
+export interface ModelCheck {
+  model: string;
+  title?: string;
+  status: "ok" | "warn" | "skipped" | "waiting" | "error" | "never run";
+  reasons?: string[];
+  checked_at?: string;
+  as_of?: string;
+  retrained?: boolean;
+  versions: number;
+  version?: {
+    version: string;
+    cutoff: string;
+    trained_at: string;
+    trained_to: string;
+    examples: number | null;
+    validation: Record<string, number | null>;
+  };
+  predictions_today?: number;
+  drift?: { feature: string; psi: number; level: "stable" | "moving" | "shifted" }[];
+  live?: Record<string, number | null | unknown>;
+}

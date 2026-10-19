@@ -207,3 +207,11 @@ def test_one_failing_symbol_does_not_break_the_scan(
     body = c.get("/api/research?refresh=true").json()
     assert body["errors"] == {"MSFT": "KeyError: 'spread_pct'"}
     assert body["scanned"] >= 9
+
+
+def test_models_before_any_check(client: tuple[TestClient, Any]) -> None:
+    c, _ = client
+    body = c.get("/api/models").json()
+    assert [m["model"] for m in body["models"]] == ["ml-rank", "rsi2-meta"]
+    assert {m["status"] for m in body["models"]} == {"never run"}
+    assert {m["versions"] for m in body["models"]} == {0}

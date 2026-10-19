@@ -38,7 +38,7 @@ from tp_core.storage import Lake
 from tp_core.versions import data_version
 from tp_core.volatility import iv_history
 from tp_ml import meta, ranking, regime, tracking, vol
-from tp_ml.features import EARNINGS, FEATURES
+from tp_ml.features import EARNINGS, FEATURES, NEWS
 from tp_ml.models import MODELS, REGRESSORS
 from tp_ml.store import build_feature_set, load_feature_set, registry, wide_bars
 
@@ -113,7 +113,8 @@ def meta_cmd(
     threshold: Annotated[float, typer.Option(help="Keep trades the model gives this.")] = 0.55,
     folds: Annotated[int, typer.Option(help="Cross-validation folds.")] = 5,
     features: Annotated[
-        str, typer.Option(help="'price' (what the strategy uses) or 'all' (+ macro, earnings).")
+        str,
+        typer.Option(help="'price' (what the strategy uses) or 'all' (+ macro, earnings, news)."),
     ] = "price",
     log: Annotated[bool, typer.Option(help="Record the run in MLflow.")] = True,
 ) -> None:
@@ -190,7 +191,7 @@ def rank_cmd(
     horizon: Annotated[int, typer.Option(help="Sessions ahead the return is ranked.")] = 21,
     buckets: Annotated[int, typer.Option(help="Groups by score (5 for a small universe).")] = 5,
     features: Annotated[
-        str, typer.Option(help="'price' (what the strategy uses) or 'all' (+ earnings).")
+        str, typer.Option(help="'price' (what the strategy uses) or 'all' (+ earnings, news).")
     ] = "price",
     log: Annotated[bool, typer.Option(help="Record the run in MLflow.")] = True,
 ) -> None:
@@ -205,7 +206,7 @@ def rank_cmd(
         typer.echo("needs daily bars for at least 5 stocks: tp-data bars backfill")
         raise typer.Exit(code=2)
     cfg = ranking.RankConfig(model=model, horizon=horizon, buckets=buckets)
-    columns = ranking.RANK_FEATURES + (EARNINGS if features == "all" else ())
+    columns = ranking.RANK_FEATURES + ((*EARNINGS, *NEWS) if features == "all" else ())
     classifier = Classifier.load(settings.classifications_file)
     entry = build_feature_set(
         lake, name="ranking", symbols=chosen, classifier=classifier, now=datetime.now(UTC)

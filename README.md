@@ -75,6 +75,7 @@ uv run tp-ideas                           # rules-based research ideas, with the
 uv run tp-recs show                       # the latest stored options ideas (new ones starred)
 uv run tp-recs scorecard                  # how past recommendations have done since
 uv run tp-jobs status                     # the job scheduler: each job's last run and next window
+uv run tp-models monitor                  # the ML strategies' models: retrain if due, drift, live accuracy
 ```
 
 `tp-api` runs a job scheduler while it's up: the data jobs in their windows on the exchange
@@ -147,6 +148,7 @@ portfolio, ranked by a model instead of by 12-1 momentum.
 | 11 | Opening-range breakout on 5-minute bars (research) | [11-orb.md](docs/strategies/11-orb.md) |
 | 12 | RSI(2) with a meta-labeling filter (machine learning) | [12-rsi2-meta.md](docs/strategies/12-rsi2-meta.md) |
 | 13 | Cross-sectional ranking model, top large caps (machine learning) | [13-ml-rank.md](docs/strategies/13-ml-rank.md) |
+| 14 | Timing by a rule bred by the grammar search | [14-rule-timing.md](docs/strategies/14-rule-timing.md) |
 
 ## Machine learning
 

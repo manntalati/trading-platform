@@ -3,7 +3,7 @@ import { ApiError, postJson, useApi } from "../api";
 import { Card, ErrorBanner, Loading } from "../components/ui";
 import { issueSummary, nyTime, timeAgo } from "../format";
 import type { LiveState } from "../live";
-import type { DataMap, JobInfo, JobsStatus, Status } from "../types";
+import type { DataMap, JobInfo, JobsStatus, ModelCheck, Status } from "../types";
 
 function Row(props: { label: string; ok: boolean | null; detail: string }) {
   const state = props.ok === null ? "" : props.ok ? "good" : "critical";
@@ -161,6 +161,7 @@ export default function System({ live }: { live: LiveState }) {
         </Card>
       )}
       <JobsCard />
+      <ModelsCard />
       <DataMapCard />
     </div>
   );
@@ -264,5 +265,113 @@ function JobRow({ job, onRun, asked }: { job: JobInfo; onRun: () => void; asked:
         )}
       </td>
     </tr>
+  );
+}
+
+const MODEL_TONE: Record<string, string> = { ok: "good", warn: "warning", error: "critical" };
+
+function num(v: unknown, digits = 3): string {
+  return typeof v === "number" && Number.isFinite(v) ? (v >= 0 ? "+" : "") + v.toFixed(digits) : "—";
+}
+
+function share(v: unknown): string {
+  return typeof v === "number" && Number.isFinite(v) ? `${Math.round(v * 100)}%` : "—";
+}
+
+/** The machine-learning strategies' models: the version in use, how it scored out of sample,
+ * whether its inputs have drifted, and how its live predictions have done. */
+export function ModelsCard() {
+  const res = useApi<{ models: ModelCheck[] }>("/api/models", 300_000);
+  const models = res.data?.models ?? [];
+  return (
+    <Card title="Models" hint="strategies 12 and 13; checked after the evening bars (tp-models monitor)">
+      <ErrorBanner error={res.error} />
+      {!res.data ? (
+        <Loading />
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>Version in use</th>
+                <th>Out of sample</th>
+                <th>Inputs</th>
+                <th>Live</th>
+              </tr>
+            </thead>
+            <tbody>
+              {models.map((m) => {
+                const v = m.version;
+                const val = v?.validation ?? {};
+                const live = m.live ?? {};
+                const top = m.drift?.[0];
+                return (
+                  <tr key={m.model}>
+                    <td>
+                      <span className={`dot ${MODEL_TONE[m.status] ?? ""}`} aria-hidden="true" /> {m.title ?? m.model}
+                      <div className="muted small">
+                        {m.status}
+                        {m.checked_at ? ` · ${timeAgo(m.checked_at)}` : ""}
+                      </div>
+                      {(m.reasons ?? []).map((r) => (
+                        <div key={r} className="small">
+                          {r}
+                        </div>
+                      ))}
+                    </td>
+                    <td className="small">
+                      {v ? (
+                        <>
+                          <span className="mono">{v.version}</span>
+                          <div className="muted">
+                            trained to {String(v.trained_to).slice(0, 10)}
+                            {m.retrained ? " · retrained today" : ""} · {m.versions} version{m.versions === 1 ? "" : "s"}
+                          </div>
+                        </>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                    <td className="small mono">
+                      {"rank_ic" in val ? `rank IC ${num(val.rank_ic)}` : "auc" in val ? `AUC ${num(val.auc, 2)}` : "—"}
+                    </td>
+                    <td className="small">
+                      {top ? (
+                        <>
+                          {top.level === "stable" ? "stable" : `${top.feature} ${top.level}`}
+                          <div className="muted mono">largest PSI {top.psi.toFixed(2)}</div>
+                        </>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                    <td className="small">
+                      {"dates" in live ? (
+                        <>
+                          rank IC <span className="mono">{num(live.mean_ic)}</span>
+                          <div className="muted">over {String(live.dates)} periods</div>
+                        </>
+                      ) : typeof live.predictions === "number" && live.predictions > 0 ? (
+                        <>
+                          taken signals won {share(live.taken_hit_rate)}
+                          <div className="muted">all signals {share(live.base_rate)}</div>
+                        </>
+                      ) : (
+                        <span className="muted">no outcomes yet</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="muted small">
+        A model is retrained when its strategy's retrain date comes round, exactly as the strategy trains it, and kept as a version. PSI compares each input's last
+        month with its training data: under 0.1 stable, above 0.25 shifted. Live accuracy uses only predictions whose outcome is known.
+      </p>
+    </Card>
   );
 }

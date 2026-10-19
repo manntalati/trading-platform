@@ -37,6 +37,7 @@ Each row uses only data up to that session's close.
 | Trend and oscillators | `dist_ma20`, `dist_ma50`, `dist_ma200`, `rsi_2`, `rsi_14` |
 | Macro | `vix`, `vix_ratio` (VIX / 3-month VIX), `curve_10y_3m`, `rate_10y_chg_63` |
 | Earnings | `days_since_results`, `last_sue` (the latest results' standardized surprise) |
+| News | `news_sentiment_5d` (the headline-weighted mean sentiment of the headlines naming it over the last 5 sessions, scored by Claude), `news_count_5d`; missing before the first stored headline ([data.md](data.md#news-and-sentiment)) |
 
 Two tests guard this:
 
@@ -101,10 +102,14 @@ change makes noise look predictable, the change leaks.
   this stays fast: with sample weights, scikit-learn otherwise re-sorts every feature once per
   bin edge.
 
-It also provides two regressors for ranking, both on features already ranked across stocks:
+It also provides three models for ranking, all on features already ranked across stocks:
 
 - **`ridge`**: the linear baseline. A missing rank is the middle, 0.
 - **`gbm`**: gradient-boosted regression trees.
+- **`lgbm-rank`**: LightGBM with a ranking objective (lambdarank), as the plan has it: it learns
+  the order of the stocks on each date rather than their returns. The stocks of one date are one
+  ranking group, and each stock's relevance is its quintile of that month's return. On macOS,
+  LightGBM needs the OpenMP runtime: `brew install libomp`.
 
 Columns with nothing in them, such as macro features before `tp-data macro` has run, are left
 out before fitting.
@@ -166,6 +171,33 @@ only, for comparing runs and charts.
 Backtests and validation keep their own records under `data/reports/` with the same commit and
 data versions ([backtesting.md](backtesting.md)).
 
+## Models in use: retraining, registry, drift, live accuracy
+
+Strategies 12 and 13 retrain their models on schedule from the bars before each retrain date.
+`tp-models monitor` (the job scheduler runs it after the evening bars) keeps a record of those
+models and watches them ([`tp_strategies/model_monitor.py`](../strategies/src/tp_strategies/model_monitor.py),
+[`tp_ml/monitor.py`](../libs/ml/src/tp_ml/monitor.py)):
+
+1. **Retrain on schedule.** When the strategy's retrain date has come round (every `retrain`
+   months) or its parameters in `config/paper.toml` changed, it trains a new version on the bars
+   before that date, exactly as the strategy does, scores it walk-forward (rank IC for the ranker,
+   AUC and precision for the filter), and registers it under `data/models/<model>/<version>/`
+   with what it was trained on and a profile of its training inputs.
+2. **Predict** with that version and keep every prediction (`clean/ml_predictions`): the ranker
+   scores each stock every day, the filter scores each RSI(2) signal of the day.
+3. **Drift.** Each input's last month against the training window's last year, as a population
+   stability index (PSI) at the training deciles: under 0.1 stable, 0.1 to 0.25 moving, above
+   0.25 shifted. A model fed inputs unlike anything it was trained on is extrapolating.
+4. **Live accuracy.** The kept predictions against what happened: the ranker's rank IC with the
+   following month's returns, on dates a month apart so no two periods overlap; the filter's
+   signals it would take against all signals, once RSI(2)'s exits have closed the trades.
+
+A check is flagged (**warn**) when inputs have shifted, when the ranker's live rank IC is at or
+below zero over six periods or more, or when the signals the filter takes win less often than
+all signals over twenty or more. **System → Models** shows the version in use, its
+out-of-sample score, the most-moved input and live accuracy; `tp-models list` lists every
+version, and each check is also an MLflow run in the `monitoring` experiment.
+
 ## Discipline
 
 - **Count the trials.** Every feature, label or model change made after seeing a score is
@@ -204,7 +236,7 @@ Sharpe of 0.6: with 38 stocks in 5 buckets, spreads are noisy. On real data, loo
 
 Options:
 
-- `--model gbm`
+- `--model gbm`, or `--model lgbm-rank` (LightGBM's ranking objective)
 - `--horizon 63` (rank the next quarter's return)
 - `--buckets 3`
 - `--features all` (adds the earnings features)
@@ -310,6 +342,11 @@ versions of the library strategies). It picks one by train, then validation, the
 test period. It only trusts the pick if four guards hold: a Deflated Sharpe over every rule set
 it has ever tried, the probability of backtest overfitting, a walk-forward of the search itself,
 and the test period. [backtesting.md](backtesting.md#strategy-search) has the protocol.
+
+`--families grammar` adds the plan's genetic search: rules bred from a small grammar of signals
+(averages, momentum, crosses, a low-volatility filter, RSI; and/or/not; at most three levels),
+scored on the training period with a penalty for size, every one of them counted as a trial. A
+pick runs on the engine as strategy 14 (`rule-timing`, [spec](strategies/14-rule-timing.md)).
 
 That completes Phase 4's list. What's left is yours to run on real data: `tp-ml meta`, `rank`,
 `vol` and `regime`, and `tp-backtest search`. Fill in the tables in specs 12 and 13, and promote

@@ -60,7 +60,7 @@ class MlRank(Strategy):
     spec: ClassVar[str] = "docs/strategies/13-ml-rank.md"
 
     universe: tuple[str, ...] = LARGE_CAPS
-    model: str = "ridge"  # or "gbm"
+    model: str = "ridge"  # or "gbm", "lgbm-rank" (LightGBM, ranking objective)
     horizon: int = 21  # the return the model ranks: the next month's
     top_n: int = 10
     max_per_sector: int = 3

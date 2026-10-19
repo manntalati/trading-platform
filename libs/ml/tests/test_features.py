@@ -122,3 +122,25 @@ def test_feature_spec_changes_with_the_parameters() -> None:
     assert feature_spec(macro=True) == feature_spec(macro=True)
     assert feature_spec(macro=True) != feature_spec(macro=False)
     assert len(feature_spec()) == 12
+
+
+def test_news_features_over_five_sessions() -> None:
+    import numpy as np
+
+    from tp_ml.features import compute_features
+    from tp_ml.testing import random_bars
+
+    bars = random_bars(["AAA", "BBB"], n=40)
+    days = bars["close"].index
+    news = pd.DataFrame(
+        {"date": [days[10], days[12], days[30]], "symbol": ["AAA", "AAA", "BBB"],
+         "score": [0.5, -0.1, 0.9], "headlines": [2, 1, 1]}
+    )  # fmt: skip
+    f = compute_features(bars, news=news)
+    aaa = f.xs("AAA", level="symbol")
+    assert np.isnan(aaa["news_count_5d"].iloc[9])  # before the first headline: unknown
+    assert aaa["news_count_5d"].iloc[11] == 2
+    assert aaa["news_sentiment_5d"].iloc[12] == pytest.approx((0.5 * 2 - 0.1) / 3)
+    assert aaa["news_count_5d"].iloc[20] == 0  # known, and no news
+    assert np.isnan(aaa["news_sentiment_5d"].iloc[20])
+    assert compute_features(bars)["news_count_5d"].isna().all()

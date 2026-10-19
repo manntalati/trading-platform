@@ -30,7 +30,7 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 MODELS = ("logistic", "gbm")
-REGRESSORS = ("ridge", "gbm")
+REGRESSORS = ("ridge", "gbm", "lgbm-rank")
 
 
 class QuantileBins(TransformerMixin, BaseEstimator):  # type: ignore[misc]
@@ -91,7 +91,48 @@ def make_regressor(kind: str) -> Callable[[], Any]:
             max_depth=3, learning_rate=0.05, max_iter=200, l2_regularization=1.0,
             min_samples_leaf=50, random_state=0,
         )  # fmt: skip
+    if kind == "lgbm-rank":
+        return lambda: LambdaRanker()
     raise ValueError(f"unknown model {kind!r}: {', '.join(REGRESSORS)}")
+
+
+def _lightgbm() -> Any:
+    try:
+        import lightgbm
+    except OSError as exc:  # macOS without the OpenMP runtime
+        raise RuntimeError(f"LightGBM can't load ({exc}). On macOS: brew install libomp") from exc
+    return lightgbm
+
+
+class LambdaRanker:
+    """LightGBM with a ranking objective (lambdarank: it learns the order of the stocks on each
+    date, not their returns), behind the regressor interface the ranking code uses. The rows of
+    one date form one ranking group; each stock's relevance is its quintile of that date's
+    target (the next month's return, ranked). ``predict`` gives a score to order by."""
+
+    def __init__(self, levels: int = 5, **params: Any) -> None:
+        self.levels = levels
+        self.params = {
+            "n_estimators": 200, "learning_rate": 0.05, "num_leaves": 15,
+            "min_child_samples": 20, "subsample": 0.8, "subsample_freq": 1,
+            "colsample_bytree": 0.8, "random_state": 0, "verbose": -1,
+        } | params  # fmt: skip
+        self.model_: Any = None
+
+    def fit(self, x: pd.DataFrame, y: pd.Series) -> LambdaRanker:
+        dates = x.index.get_level_values("date").to_numpy()
+        order = np.argsort(dates, kind="stable")
+        _, sizes = np.unique(dates[order], return_counts=True)  # dates ascending, as the rows
+        ranks = y.to_numpy(dtype=float)[order] + 0.5  # the target is a rank in -0.5..0.5
+        relevance = np.clip(np.floor(ranks * self.levels), 0, self.levels - 1).astype(int)
+        self.model_ = _lightgbm().LGBMRanker(objective="lambdarank", **self.params)
+        self.model_.fit(x.iloc[order], relevance, group=sizes)
+        return self
+
+    def predict(self, x: pd.DataFrame) -> np.ndarray:
+        if self.model_ is None:
+            raise RuntimeError("fit first")
+        return np.asarray(self.model_.predict(x), dtype=float)
 
 
 def usable_columns(data: pd.DataFrame, columns: tuple[str, ...]) -> tuple[str, ...]:

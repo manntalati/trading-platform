@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Machine learning for signals: point-in-time features, triple-barrier labels, purged cross-validation, meta-labeling, experiment tracking."
 requires-python = ">=3.12"
 dependencies = [
+    "lightgbm>=4.5",
     "mlflow>=2.17",
     "numpy>=2.0",
     "pandas>=2.2",
