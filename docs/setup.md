@@ -65,27 +65,41 @@ server); `uv run tp-ml ui` browses the runs. Nothing to schedule.
 
 ## 6. Schedules
 
-Nothing above refreshes itself. These keep it current; the machine has to be on (and awake) at
-those times, which is why the plan puts it on an always-on box:
+`tp-api` runs a job scheduler while it's up, so keeping the dashboard's server running keeps the
+data and the recommendations current. On trading days (New York time):
 
-| Job | When (New York) | Command |
+| Job | When | Command |
 |---|---|---|
-| VIX and Treasury yields | weekdays 07:30 | `tp-data macro daily` |
-| Fidelity sync | weekdays hourly, 07:30 to 21:30 | `tp-broker sync --source snaptrade` |
-| Option chains | weekdays 15:45 (must be during market hours) | `tp-data options snapshot` |
-| Daily bars | weekdays 18:30 | `tp-data bars daily` |
-| Fundamentals | weekdays 20:00 | `tp-data fundamentals` |
-| Backtest gate | Saturdays | `tp-backtest validate --all` |
-| Paper bot | always on | `tp-paper bot` (or `tp-paper bot --once` every 5 minutes from cron) |
-| Dashboard | always on | `tp-api --quotes alpaca` |
+| VIX and Treasury yields | from 07:30 | `tp-data macro daily` |
+| Fidelity sync | hourly, 07:30 to 22:30 (once linked) | `tp-broker sync --source snaptrade` |
+| Option chains, midday | from 12:30 | `tp-data options snapshot` |
+| Option chains, close | 15 minutes before the close | `tp-data options snapshot` |
+| Daily bars | from 18:30 until the next open | `tp-data bars daily` |
+| Fundamentals | from 20:00 (with `TP_SEC_USER_AGENT`) | `tp-data fundamentals` |
+| Backtest gate | Saturdays from 10:00 | `tp-backtest validate --all` |
+| **Recommendations** | whenever any job above brings new data | `tp-recs run` |
+| Paper bot | always on, separately | `tp-paper bot` (or `tp-paper bot --once` every 5 minutes from cron) |
 
-- **Linux**: systemd user timers and services do all of it, with failure alerts:
-  [infra/README.md](../infra/README.md).
-- **macOS or Linux without systemd**: `mkdir -p data/logs`, then paste
-  [infra/cron/crontab.example](../infra/cron/crontab.example) into `crontab -e` and fix the path
-  on its `REPO=` line. Its times are in UTC, chosen for both daylight and standard time; the
-  logs go to `data/logs/`. On macOS, if the repo is under Documents or Desktop, give `cron` Full
-  Disk Access (System Settings → Privacy & Security) or it can't read it.
+A job runs once in each window, as soon as it opens or the computer is next awake inside it: a
+laptop asleep at 18:30 gets its bars when it wakes at 21:00 (cron would skip the day). Option
+chains are only taken while the market is open. Failures retry 15 minutes later (two when the
+network was down). **System → Scheduled jobs** shows each job's last run and next window, with a
+button to run one now; `uv run tp-jobs status` prints the same, and the logs are in
+`data/logs/<job>.log`. `TP_JOBS_OFF=options-midday,validation` in `.env` turns jobs off.
+
+- **macOS**: `make mac-agent` starts `tp-api` at login and restarts it if it stops (a launchd
+  agent; `make mac-agent-remove` undoes it). The Mac still has to be awake for a window; the
+  scheduler catches up on wake. To be awake for the closing option snapshot, System Settings →
+  Battery → Options → "Wake for network access", or `sudo pmset repeat wakeorpoweron MTWRF
+  15:35:00`.
+- **Linux**: the `tp-api` user service runs it ([infra/README.md](../infra/README.md)); the
+  per-job systemd timers there are an alternative with failure alerts.
+- **Without the dashboard**: `uv run tp-jobs run` runs the scheduler alone, or `tp-jobs once`
+  every five minutes from cron. Cron or systemd entries can stay: a job whose data is already
+  fresh isn't run twice, and the scheduler waits a while into a window for a job cron also runs.
+  [infra/cron/crontab.example](../infra/cron/crontab.example) has fixed-time cron lines; on macOS,
+  if the repo is under Documents or Desktop, give `cron` Full Disk Access (System Settings →
+  Privacy & Security) or it can't read it.
 
 ## 7. Check
 

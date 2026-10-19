@@ -251,9 +251,16 @@ DATASETS: tuple[dict[str, str], ...] = (
     {"name": "Paper trading", "path": "state",
      "writer": "tp-paper bot (every few minutes on weekdays)",
      "used_by": "Paper trading, Trades, Home"},
+    {"name": "Recommendations", "path": "clean/recommendations_log",
+     "also": "reports/recommendations",
+     "writer": "tp-recs run (the job scheduler, whenever new data lands)",
+     "used_by": "Research (ideas, track record), Home"},
+    {"name": "Scheduled jobs", "path": "jobs",
+     "writer": "the job scheduler (tp-api, or tp-jobs): each job's last runs",
+     "used_by": "System (Scheduled jobs)"},
     {"name": "Job reports", "path": "reports",
      "writer": "every job (validation, option snapshots)", "used_by": "System"},
-    {"name": "Job logs", "path": "logs", "writer": "the scheduled jobs (cron)",
+    {"name": "Job logs", "path": "logs", "writer": "the scheduled jobs (the scheduler, or cron)",
      "used_by": "you, when something fails"},
 )  # fmt: skip
 

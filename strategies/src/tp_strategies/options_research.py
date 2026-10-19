@@ -192,6 +192,7 @@ def contract_view(
     return {
         "contract": str(row["contract"]),
         "label": option_label(str(row["contract"])) or str(row["contract"]),
+        "side": side,
         "right": "call" if call else "put",
         "strike": strike,
         "expiration": exp.isoformat() if isinstance(exp, date) else str(exp),

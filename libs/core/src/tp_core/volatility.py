@@ -18,7 +18,7 @@ import pyarrow as pa
 
 from tp_core import greeks as bs
 from tp_core.schemas import RAW_OPTION_CHAIN_SCHEMA, RAW_OPTION_CHAIN_SNAPSHOTS
-from tp_core.storage import Lake, read_parquet_dir, write_parquet
+from tp_core.storage import Lake, parquet_files, read_parquet_dir, write_parquet
 
 IV_HISTORY = "option_iv_daily"
 IV_HISTORY_SCHEMA = pa.schema(
@@ -27,6 +27,7 @@ IV_HISTORY_SCHEMA = pa.schema(
         ("underlying", pa.string()),
         ("iv30", pa.float64()),  # at-the-money implied volatility 30 calendar days out
         ("spot", pa.float64()),
+        ("runs", pa.int32()),  # snapshot files the day had when this row was worked out
     ]
 )
 MIN_RANK_DAYS = 20  # fewer days of history than this and a rank means little
@@ -166,18 +167,26 @@ def iv_history(lake: Lake) -> pd.DataFrame:
     """30-day ATM implied volatility per underlying per snapshot day.
 
     Derived from the raw snapshots and cached in the clean zone; days not in the cache yet are
-    worked out and added on the way (so the first call after many snapshots takes a while).
+    worked out and added on the way (so the first call after many snapshots takes a while). A day
+    snapshotted again later (a midday and a closing snapshot) is worked out again from its latest.
     """
     path = lake.clean_dir(IV_HISTORY) / "part.parquet"
-    cached = (
-        read_parquet_dir(path.parent, IV_HISTORY_SCHEMA)
-        if path.exists()
-        else pd.DataFrame(columns=[f.name for f in IV_HISTORY_SCHEMA])
-    )
-    have = set(zip(cached["snapshot_date"], cached["underlying"], strict=True))
+    columns = [f.name for f in IV_HISTORY_SCHEMA]
+    cached = pd.DataFrame(columns=columns)
+    if path.exists():
+        found = read_parquet_dir(path.parent)
+        if set(columns) <= set(found.columns):  # an older cache without ``runs`` is rebuilt
+            cached = found[columns]
+    have = {
+        (d, u): int(n)
+        for d, u, n in zip(
+            cached["snapshot_date"], cached["underlying"], cached["runs"], strict=True
+        )
+    }
     rows = []
     for (day, underlying), directory in sorted(snapshot_partitions(lake).items()):
-        if (day, underlying) in have:
+        runs = len(parquet_files(directory))
+        if have.get((day, underlying)) == runs:
             continue
         chain = read_parquet_dir(directory, RAW_OPTION_CHAIN_SCHEMA)
         if chain.empty:
@@ -190,11 +199,18 @@ def iv_history(lake: Lake) -> pd.DataFrame:
                 "underlying": underlying,
                 "iv30": iv_at(atm_term(chain, spot)) if spot else None,
                 "spot": spot,
+                "runs": runs,
             }
         )
     if not rows:
         return cached
-    fresh = pd.DataFrame(rows, columns=[f.name for f in IV_HISTORY_SCHEMA])
+    fresh = pd.DataFrame(rows, columns=columns)
+    redone = set(zip(fresh["snapshot_date"], fresh["underlying"], strict=True))
+    keep = [
+        (d, u) not in redone
+        for d, u in zip(cached["snapshot_date"], cached["underlying"], strict=True)
+    ]
+    cached = cached[keep]
     out = pd.concat([cached, fresh], ignore_index=True) if len(cached) else fresh
     out = out.sort_values(["underlying", "snapshot_date"]).reset_index(drop=True)
     write_parquet(out, path, IV_HISTORY_SCHEMA)

@@ -12,7 +12,7 @@ are plain CLI commands so they move into containers unchanged.
 | `tp-fundamentals` | Mon–Fri 20:00 America/New_York | `tp-data fundamentals`: company facts and earnings dates from SEC EDGAR (needs `TP_SEC_USER_AGENT`) |
 | `tp-broker-sync` | Mon–Fri hourly 07:30–21:30 America/New_York | `tp-broker sync --source snaptrade` |
 | `tp-paper-bot` | always on (service, restarts on failure) | `tp-paper bot`: the unattended paper-trading cycle |
-| `tp-api` | always on (service, restarts on failure) | `tp-api --host 127.0.0.1 --quotes alpaca` |
+| `tp-api` | always on (service, restarts on failure) | `tp-api --host 127.0.0.1 --quotes alpaca`: the dashboard, and the job scheduler that runs every job above (and the recommendations) itself, catching up on missed windows |
 | `tp-notify-failure@` | on failure of any unit above | journal + optional Discord webhook |
 
 ## Set up a box (Ubuntu Server)
@@ -66,7 +66,27 @@ one underlying failed; `2` configuration problem.
 The options timer deliberately has `Persistent=false`: a snapshot taken hours late (e.g. at boot
 the next morning) would be stamped with the wrong day's market, so a missed day stays missed.
 
+## The built-in scheduler
+
+`tp-api` (and `tp-jobs run`, without the dashboard) runs each job above in its window, catches
+up on a window missed while the machine was off or asleep, skips a job whose data is already
+fresh, and makes new recommendations (`tp-recs run`) whenever a job brought new data. With the
+`tp-api` service running, the timers are optional: kept, they run first and the scheduler only
+fills in what they missed. `uv run tp-jobs status` shows each job; logs in `data/logs/`.
+Details: [docs/setup.md](../docs/setup.md#6-schedules).
+
+## macOS
+
+```bash
+make mac-agent          # launchd agent: tp-api from login, restarted if it stops
+make mac-agent-remove   # undo
+```
+
+The agent ([`launchd/com.trading-platform.api.plist`](launchd/com.trading-platform.api.plist))
+runs `.venv/bin/tp-api --quotes alpaca` in the repo, logging to `data/logs/tp-api.log`. Stop any
+`tp-api` you started in a terminal first (they'd share port 8000).
+
 ## Without systemd
 
 [`cron/crontab.example`](cron/crontab.example) does the same with cron (UTC times; no failure
-hook).
+hook), or run `tp-jobs once` from cron every five minutes.

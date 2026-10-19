@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import logging
 import secrets
+import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -22,7 +23,7 @@ from tp_api import __version__, broker, paper, positions, queries, research, str
 from tp_api.broker import BrokerSync
 from tp_api.claude import ClaudeAdvisor
 from tp_api.dashboard import bundle_state
-from tp_api.deps import Ctx, require_token
+from tp_api.deps import Ctx, require_dashboard_client, require_token
 from tp_api.live import (
     AlpacaQuoteSource,
     FakeQuoteSource,
@@ -31,6 +32,7 @@ from tp_api.live import (
     QuoteSource,
 )
 from tp_api.positions import AlpacaMarketData, MarketData
+from tp_api.scheduler import Scheduler, start_in_background
 from tp_core.config import MissingCredentialsError, Settings
 from tp_core.portfolio import MARKET_KINDS, holdings_table, latest_snapshot
 
@@ -134,8 +136,10 @@ def create_app(
     quotes: QuoteMode = QuoteMode.fake,
     live_interval: float = 1.0,
     serve_dashboard: bool = True,
+    jobs: bool = False,
 ) -> FastAPI:
     settings = settings or Settings()
+    scheduler = Scheduler(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -147,7 +151,10 @@ def create_app(
         app.state.hub = hub
         if hub is not None:
             hub.start()
+        stop = start_in_background(scheduler)[1] if jobs else None
         yield
+        if stop is not None:
+            stop.set()
         if hub is not None:
             await hub.stop()
 
@@ -155,6 +162,7 @@ def create_app(
     hosts = [h.strip() for h in settings.dashboard_hosts.split(",") if h.strip()]
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=hosts)  # DNS-rebinding guard
     app.state.settings = settings
+    app.state.scheduler = scheduler
     app.state.token = (
         settings.dashboard_token.get_secret_value() if settings.dashboard_token else None
     )
@@ -211,6 +219,35 @@ def create_app(
     @app.get("/api/portfolio/performance", dependencies=auth)
     def performance(c: Ctx, days: Annotated[int, Query(ge=30, le=5000)] = 365) -> dict[str, Any]:
         return queries.performance(c, days)
+
+    @app.get("/api/jobs", dependencies=auth)
+    def job_status() -> dict[str, Any]:
+        return scheduler.status()
+
+    @app.post(
+        "/api/jobs/{name}/run",
+        dependencies=[*auth, Depends(require_dashboard_client)],
+        status_code=202,
+    )
+    def run_job(name: str) -> dict[str, Any]:
+        if not scheduler.acquire():
+            raise HTTPException(
+                409, f"the scheduler runs in another process: `uv run tp-jobs now {name}` there"
+            )
+        try:
+            scheduler.request(name)
+        except KeyError:
+            raise HTTPException(404, f"no job {name!r}") from None
+        if not jobs:  # no background loop here: run it now, then let go of the lock
+
+            def once() -> None:
+                try:
+                    scheduler.step()
+                finally:
+                    scheduler.release()
+
+            threading.Thread(target=once, name="job-now", daemon=True).start()
+        return scheduler.status()
 
     @app.get("/api/ideas", dependencies=auth)
     def ideas(c: Ctx) -> dict[str, Any]:

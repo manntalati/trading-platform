@@ -77,6 +77,45 @@ def test_research_ranks_ideas_with_contracts(client: tuple[TestClient, Any]) -> 
     assert c.get("/api/research").json() == body  # cached
 
 
+def test_ideas_are_stored_runs_with_a_track_record(client: tuple[TestClient, Any]) -> None:
+    c, app = client
+    body = c.get("/api/research").json()
+    run = body["run"]
+    assert run["run_id"]
+    assert run["as_of"].startswith("2024-07-15")
+    lake = Lake(app.state.settings.data_root)
+    stored = sorted(lake.reports_dir("recommendations").glob("*.json"))
+    assert run["run_id"] in {p.stem for p in stored}
+    again = c.post("/api/research/run", headers=WRITE).json()
+    assert again["run"]["run_id"] != run["run_id"]
+    assert again["run"]["previous_run"] is None  # both runs were made the same day
+    record = c.get("/api/research/track-record").json()
+    listed = {(r["list"], r["symbol"]) for r in record["recommendations"]}
+    ideas = {(k, i["symbol"]) for k in ("swing", "leaps", "bearish", "income") for i in body[k]}
+    assert listed == ideas  # the same ideas twice are one recommendation each
+    assert all(r["runs"] == 2 for r in record["recommendations"])
+    assert {s["list"] for s in record["summary"]} <= {"swing", "leaps", "bearish", "income"}
+
+
+def test_jobs_status_and_a_job_on_request(client: tuple[TestClient, Any]) -> None:
+    c, app = client
+    ran: list[str] = []
+    app.state.scheduler.runner = lambda command, log_path, timeout, env: (
+        ran.append(" ".join(command)) or (0, "ok")
+    )
+    status = c.get("/api/jobs").json()
+    names = [j["name"] for j in status["jobs"]]
+    assert names[-1] == "recommendations"
+    assert {"bars", "options-close", "options-midday", "macro", "broker"} <= set(names)
+    assert c.post("/api/jobs/nonsense/run", headers=WRITE).status_code == 404
+    assert c.post("/api/jobs/macro/run", headers=WRITE).status_code == 202
+    for _ in range(50):
+        if "tp-data macro daily" in ran:
+            break
+        time.sleep(0.05)
+    assert "tp-data macro daily" in ran
+
+
 def test_one_symbol_in_depth(client: tuple[TestClient, Any]) -> None:
     c, _ = client
     body = c.get("/api/research/symbol/aapl").json()

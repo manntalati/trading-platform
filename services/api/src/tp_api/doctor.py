@@ -18,6 +18,7 @@ from typing import Literal
 import typer
 
 from tp_api.dashboard import bundle_state
+from tp_api.scheduler import scheduler_alive
 from tp_core.bars import load_bars
 from tp_core.calendar import last_completed_session
 from tp_core.config import Settings
@@ -196,8 +197,12 @@ def _run(cmd: list[str]) -> str:
 
 
 def schedules(
-    run: Callable[[list[str]], str] = _run, crontab_path: Path | None = None
+    run: Callable[[list[str]], str] = _run,
+    crontab_path: Path | None = None,
+    builtin: bool = False,
 ) -> list[Check]:
+    """Each job scheduled by systemd, cron, or the built-in scheduler (``builtin``: it is running,
+    in ``tp-api`` or ``tp-jobs``; it doesn't run the paper bot)."""
     area = "Schedules"
     timers = run(["systemctl", "--user", "list-unit-files", "tp-*", "--no-legend"])
     crontab = crontab_path.read_text() if crontab_path else run(["crontab", "-l"])
@@ -210,9 +215,13 @@ def schedules(
             command in line and not line.lstrip().startswith("#") for line in crontab.splitlines()
         )
         how = "systemd" if enabled else "cron" if in_cron else None
+        if builtin and not command.startswith("tp-paper"):
+            how = f"{how}, and the built-in scheduler" if how else "the built-in scheduler"
         fix = (
             f"systemctl --user enable --now {unit} (infra/README.md)"
             if timers
+            else "keep `uv run tp-api` running (it runs the jobs), or `uv run tp-jobs run`"
+            if not command.startswith("tp-paper")
             else "add it to your crontab: infra/cron/crontab.example"
         )
         out.append(Check(area, name, "ok" if how else "todo",
@@ -246,7 +255,7 @@ def all_checks(settings: Settings, now: datetime, cwd: Path) -> list[Check]:
     return [
         *configuration(settings, cwd),
         *data(settings, now),
-        *schedules(),
+        *schedules(builtin=scheduler_alive(settings.data_root, now)),
         *services(settings, now),
     ]
 

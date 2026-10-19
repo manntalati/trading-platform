@@ -700,9 +700,22 @@ export interface ResearchIdea {
   why: string[];
   risks: string[];
   held: string | null;
+  new?: boolean; // not on the same list in the previous session's last run
+}
+
+export type IdeaList = "swing" | "leaps" | "bearish" | "income";
+
+// the stored run a /api/research answer comes from (tp_strategies/recommendations.py)
+export interface ResearchRun {
+  run_id: string;
+  as_of: string;
+  bars_session: string | null;
+  previous_run: string | null;
+  dropped: Partial<Record<IdeaList, string[]>>;
 }
 
 export interface Research {
+  run?: ResearchRun;
   as_of: string;
   chains_as_of: string | null;
   scanned: number;
@@ -928,4 +941,88 @@ export interface TradeStats {
   open?: { positions: number; median_age_days: Num; oldest_days: Num };
   unknown_cost?: number;
   observations?: string[];
+}
+
+// /api/research/track-record
+export interface TrackLeg {
+  contract: string;
+  label: string;
+  side: "buy" | "sell";
+  price: number | null;
+  expiration: string;
+  strike: number;
+  right: "call" | "put";
+}
+
+export interface TrackedRecommendation {
+  list: IdeaList;
+  symbol: string;
+  structure: string;
+  recommended_at: string;
+  last_seen: string;
+  runs: number;
+  rank: number;
+  spot: Num;
+  legs: TrackLeg[];
+  entry: Num; // per share: + paid, - received
+  move: Num; // the stock since, in the recommended direction
+  move_vs_spy: Num;
+  move_5d: Num;
+  move_21d: Num;
+  sessions?: number;
+  value: Num;
+  pnl: Num; // per contract set, dollars
+  result: Num; // a debit: return on it; a credit: the share of the premium kept
+  status?: "open" | "expired";
+  marked: string | null;
+}
+
+export interface TrackSummary {
+  list: IdeaList;
+  name: string;
+  recommendations: number;
+  marked: number;
+  profitable: Num;
+  median_result: Num;
+  right_way_5d: Num;
+  right_way_21d: Num;
+  median_move_5d: Num;
+  median_move_21d: Num;
+  beat_spy: Num;
+}
+
+export interface TrackRecord {
+  as_of: string;
+  recommendations: TrackedRecommendation[];
+  summary: TrackSummary[];
+}
+
+// /api/jobs (services/api/src/tp_api/scheduler.py)
+export interface JobRun {
+  status: "ok" | "fresh" | "failed" | "gave up";
+  message: string;
+  finished_at: string;
+  attempts?: number;
+  retry_after?: string;
+}
+
+export interface JobInfo {
+  name: string;
+  title: string;
+  when: string;
+  command: string;
+  off: boolean;
+  blocked: string | null;
+  elsewhere: string | null;
+  last: JobRun | null;
+  next: string | null;
+  open_now: boolean;
+}
+
+export interface JobsStatus {
+  running: boolean;
+  pid: number | null;
+  heartbeat: string | null;
+  here: boolean;
+  jobs: JobInfo[];
 }
