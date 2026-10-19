@@ -114,3 +114,29 @@ describe("Scheduled jobs", () => {
     expect(within(bars).getByRole("button", { name: "Started" })).toBeDisabled();
   });
 });
+
+describe("Models", () => {
+  it("shows each model's version, out-of-sample score, drift and live accuracy", async () => {
+    stub({
+      "/api/models": {
+        models: [
+          {
+            model: "ml-rank", title: "Cross-sectional ranking model (top names)", status: "warn", versions: 2, checked_at: "2026-01-09T00:30:00Z",
+            reasons: ["inputs unlike its training data: vol_21"],
+            version: { version: "20251001-ab12cd34", cutoff: "2025-10-01", trained_at: "2025-10-01T23:00:00Z", trained_to: "2025-09-02", examples: 60, validation: { rank_ic: 0.041 } },
+            drift: [{ feature: "vol_21", psi: 0.31, level: "shifted" }],
+            live: { dates: 7, mean_ic: 0.02 },
+          },
+          { model: "rsi2-meta", status: "never run", versions: 0 },
+        ],
+      },
+    });
+    const { ModelsCard } = await import("./System");
+    render(<ModelsCard />);
+    expect(await screen.findByText("inputs unlike its training data: vol_21")).toBeInTheDocument();
+    expect(screen.getByText("rank IC +0.041")).toBeInTheDocument();
+    expect(screen.getByText("vol_21 shifted")).toBeInTheDocument();
+    expect(screen.getByText("over 7 periods")).toBeInTheDocument();
+    expect(screen.getByText("never run")).toBeInTheDocument();
+  });
+});

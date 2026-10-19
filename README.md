@@ -75,6 +75,7 @@ uv run tp-ideas                           # rules-based research ideas, with the
 uv run tp-recs show                       # the latest stored options ideas (new ones starred)
 uv run tp-recs scorecard                  # how past recommendations have done since
 uv run tp-jobs status                     # the job scheduler: each job's last run and next window
+uv run tp-models monitor                  # the ML strategies' models: retrain if due, drift, live accuracy
 ```
 
 `tp-api` runs a job scheduler while it's up: the data jobs in their windows on the exchange

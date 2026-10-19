@@ -75,6 +75,7 @@ data and the recommendations current. On trading days (New York time):
 | Option chains, midday | from 12:30 | `tp-data options snapshot` |
 | Option chains, close | 15 minutes before the close | `tp-data options snapshot` |
 | Daily bars | from 18:30 until the next open | `tp-data bars daily` |
+| Model monitoring | from 19:30 (after the bars) | `tp-models monitor` |
 | Fundamentals | from 20:00 (with `TP_SEC_USER_AGENT`) | `tp-data fundamentals` |
 | Backtest gate | Saturdays from 10:00 | `tp-backtest validate --all` |
 | **Recommendations** | whenever any job above brings new data | `tp-recs run` |

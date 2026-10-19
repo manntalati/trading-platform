@@ -255,6 +255,9 @@ DATASETS: tuple[dict[str, str], ...] = (
      "also": "reports/recommendations",
      "writer": "tp-recs run (the job scheduler, whenever new data lands)",
      "used_by": "Research (ideas, track record), Home"},
+    {"name": "Models in use", "path": "models", "also": "clean/ml_predictions",
+     "writer": "tp-models monitor (the job scheduler, after the evening bars)",
+     "used_by": "System (Models), strategies 12 and 13"},
     {"name": "Scheduled jobs", "path": "jobs",
      "writer": "the job scheduler (tp-api, or tp-jobs): each job's last runs",
      "used_by": "System (Scheduled jobs)"},
@@ -750,6 +753,22 @@ def ma_timing_view(ctx: Context, universe: str) -> dict[str, Any]:
         "trades": records(trades),
         "signals": clean(timing.signals.iloc[-1].to_dict()),
     }
+
+
+def models(ctx: Context) -> dict[str, Any]:
+    """The machine-learning strategies' models: each one's latest check (tp-models monitor) and
+    how many versions are registered."""
+    from tp_ml import monitor
+    from tp_strategies.model_monitor import MONITORED
+
+    reports = monitor.latest_reports(ctx.lake)
+    out = []
+    for name in MONITORED:
+        r = dict(reports.get(name) or {"model": name, "status": "never run"})
+        r["versions"] = len(monitor.versions(ctx.lake, name))
+        out.append(r)
+    result: dict[str, Any] = clean({"models": out})
+    return result
 
 
 def ideas(ctx: Context) -> dict[str, Any]:

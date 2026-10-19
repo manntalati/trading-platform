@@ -17,6 +17,7 @@ dependencies = [
 tp-ideas = "tp_strategies.cli:main"
 tp-backtest = "tp_strategies.backtest_cli:main"
 tp-recs = "tp_strategies.recs_cli:main"
+tp-models = "tp_strategies.models_cli:main"
 
 [tool.uv.sources]
 tp-core = { workspace = true }

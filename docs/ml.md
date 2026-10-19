@@ -166,6 +166,33 @@ only, for comparing runs and charts.
 Backtests and validation keep their own records under `data/reports/` with the same commit and
 data versions ([backtesting.md](backtesting.md)).
 
+## Models in use: retraining, registry, drift, live accuracy
+
+Strategies 12 and 13 retrain their models on schedule from the bars before each retrain date.
+`tp-models monitor` (the job scheduler runs it after the evening bars) keeps a record of those
+models and watches them ([`tp_strategies/model_monitor.py`](../strategies/src/tp_strategies/model_monitor.py),
+[`tp_ml/monitor.py`](../libs/ml/src/tp_ml/monitor.py)):
+
+1. **Retrain on schedule.** When the strategy's retrain date has come round (every `retrain`
+   months) or its parameters in `config/paper.toml` changed, it trains a new version on the bars
+   before that date, exactly as the strategy does, scores it walk-forward (rank IC for the ranker,
+   AUC and precision for the filter), and registers it under `data/models/<model>/<version>/`
+   with what it was trained on and a profile of its training inputs.
+2. **Predict** with that version and keep every prediction (`clean/ml_predictions`): the ranker
+   scores each stock every day, the filter scores each RSI(2) signal of the day.
+3. **Drift.** Each input's last month against the training window's last year, as a population
+   stability index (PSI) at the training deciles: under 0.1 stable, 0.1 to 0.25 moving, above
+   0.25 shifted. A model fed inputs unlike anything it was trained on is extrapolating.
+4. **Live accuracy.** The kept predictions against what happened: the ranker's rank IC with the
+   following month's returns, on dates a month apart so no two periods overlap; the filter's
+   signals it would take against all signals, once RSI(2)'s exits have closed the trades.
+
+A check is flagged (**warn**) when inputs have shifted, when the ranker's live rank IC is at or
+below zero over six periods or more, or when the signals the filter takes win less often than
+all signals over twenty or more. **System → Models** shows the version in use, its
+out-of-sample score, the most-moved input and live accuracy; `tp-models list` lists every
+version, and each check is also an MLflow run in the `monitoring` experiment.
+
 ## Discipline
 
 - **Count the trials.** Every feature, label or model change made after seeing a score is

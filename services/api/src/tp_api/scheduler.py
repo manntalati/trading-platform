@@ -9,6 +9,7 @@ windows on the exchange calendar, in New York time, on trading days:
     options-midday   12:30 to 30 min before the close   option chains during the day
     options-close    15 minutes before the close  the plan's daily snapshot
     bars             18:30 to the next open      daily bars
+    models           19:30 to the next open      the ML strategies' models: retrain, drift, accuracy
     fundamentals     20:00 to 20:00 the next trading day   SEC filings (with TP_SEC_USER_AGENT)
     validation       Saturday 10:00 to Sunday 23:00   the backtest gate, weekly
     recommendations  whenever anything above brought new data
@@ -126,6 +127,11 @@ def _options_close(day: date) -> list[tuple[datetime, datetime]]:
 
 def _bars(day: date) -> list[tuple[datetime, datetime]]:
     start = max(ny(day, 18, 30), session_close(day) + timedelta(hours=2))
+    return [(start, session_open(next_session(day)) - timedelta(minutes=30))]
+
+
+def _models(day: date) -> list[tuple[datetime, datetime]]:
+    start = max(ny(day, 19, 30), session_close(day) + timedelta(hours=3))
     return [(start, session_open(next_session(day)) - timedelta(minutes=30))]
 
 
@@ -249,6 +255,15 @@ JOBS: tuple[Job, ...] = (
         written_since(REPORTS / "validation", "stock_bars_1d-*.json"),
         _bars,
         needs=_needs_alpaca,
+    ),
+    Job(
+        "models",
+        "Model monitoring",
+        "trading days from 19:30 (after the bars)",
+        ("tp-models", "monitor"),
+        written_since(REPORTS / "ml_monitor", "*.json"),
+        _models,
+        timeout=2 * 3600.0,
     ),
     Job(
         "fundamentals",
