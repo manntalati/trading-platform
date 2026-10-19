@@ -56,9 +56,13 @@ FEATURES: dict[str, str] = {
     "rate_10y_chg_63": "change in the 10-year yield over 63 sessions, percentage points",
     "days_since_results": "sessions since the latest quarterly results reached the data",
     "last_sue": "standardized unexpected earnings of the latest results",
+    "news_sentiment_5d": "mean sentiment of the headlines naming it over the last 5 sessions",
+    "news_count_5d": "headlines naming it over the last 5 sessions",
 }
 MACRO = ("vix", "vix_ratio", "curve_10y_3m", "rate_10y_chg_63")
 EARNINGS = ("days_since_results", "last_sue")
+NEWS = ("news_sentiment_5d", "news_count_5d")
+NEWS_WINDOW = 5
 
 
 def feature_spec(**params: object) -> str:
@@ -179,7 +183,7 @@ def latest_price_features(
     wide = price_features(bars, market=market, sectors=sectors)
     out = pd.DataFrame({name: frame.iloc[-1] for name, frame in wide.items()})
     out.index = out.index.map(str)
-    for name in (*MACRO, *EARNINGS):
+    for name in (*MACRO, *EARNINGS, *NEWS):
         out[name] = np.nan
     return out[list(FEATURES)]
 
@@ -191,6 +195,7 @@ def compute_features(
     sectors: Mapping[str, str] | None = None,
     macro: pd.DataFrame | None = None,
     earnings: pd.DataFrame | None = None,
+    news: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """``bars``: wide adjusted ``open``, ``high``, ``low``, ``close``, ``volume`` (sessions x
     symbols). ``macro``: ``tp_core.macro.load_macro``'s table. ``earnings``: the reference
@@ -226,7 +231,33 @@ def compute_features(
     else:
         for name in EARNINGS:
             panel[name] = np.nan
+    if news is not None and not news.empty:
+        panel = panel.join(_news_features(news, days, list(close.columns)))
+    else:
+        for name in NEWS:
+            panel[name] = np.nan
     return panel[list(FEATURES)]
+
+
+def _news_features(news: pd.DataFrame, days: pd.DatetimeIndex, symbols: list[str]) -> pd.DataFrame:
+    """Per (date, symbol), from ``tp_core.news.daily_sentiment``: the headline-weighted mean
+    sentiment and the count of headlines over the last ``NEWS_WINDOW`` sessions. Missing (not
+    zero) before the first stored headline: nothing is known about the news then."""
+    n = news[news["symbol"].isin(symbols)]
+    weighted = (n["score"] * n["headlines"]).groupby([n["date"], n["symbol"]]).sum()
+    counts = n.groupby(["date", "symbol"])["headlines"].sum()
+
+    def wide(s: pd.Series) -> pd.DataFrame:
+        frame = s.unstack("symbol").reindex(index=days, columns=symbols).fillna(0.0)
+        frame.index = days
+        return frame.rolling(NEWS_WINDOW, min_periods=1).sum()
+
+    total, count = wide(weighted), wide(counts)
+    first = pd.Timestamp(news["date"].min())
+    known = pd.Series(days >= first, index=days)
+    sentiment = (total / count.where(count > 0)).where(known, axis=0)
+    out = _stack({"news_sentiment_5d": sentiment, "news_count_5d": count.where(known, axis=0)})
+    return out
 
 
 def _earnings_features(

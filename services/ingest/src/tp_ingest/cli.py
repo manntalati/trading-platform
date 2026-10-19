@@ -14,7 +14,7 @@ import sys
 import time
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Annotated, NoReturn
+from typing import Annotated, NoReturn, cast
 
 import typer
 
@@ -283,6 +283,90 @@ def macro_backfill(source: MacroSourceOpt = MacroSourceName.auto) -> None:
 class SecSourceName(StrEnum):
     sec = "sec"
     fake = "fake"
+
+
+news_app = typer.Typer(
+    help="News headlines (Alpaca's feed) and their sentiment (scored by Claude).",
+    no_args_is_help=True,
+)
+app.add_typer(news_app, name="news")
+
+
+def _news_symbols(settings: Settings, symbols: str | None) -> list[str]:
+    wanted = _symbols(settings, symbols)
+    if symbols:
+        return wanted
+    try:
+        research = list(load_universes(settings.universes_file).research)
+    except (OSError, ValueError):
+        research = []
+    return list(dict.fromkeys([*wanted, *research]))
+
+
+@news_app.command("fetch")
+def news_fetch(
+    source: SourceOpt = SourceName.alpaca,
+    symbols: SymbolsOpt = None,
+    days: Annotated[int, typer.Option(help="How many days back to fetch.")] = 3,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Fetch the latest headlines for the bars universe, your research list and holdings."""
+    from tp_ingest.jobs.news import run_news
+    from tp_ingest.sources.base import NewsSource
+
+    _setup_logging(verbose)
+    settings = Settings()
+    feed = cast(NewsSource, make_source(source, settings))
+    result = run_news(
+        Lake(settings.data_root), feed, _news_symbols(settings, symbols), now=now_utc(), days=days
+    )
+    typer.echo(result.summary())
+
+
+@news_app.command("score")
+def news_score(
+    limit: Annotated[int, typer.Option(help="Most headlines to score in this run.")] = 400,
+    days: Annotated[int, typer.Option(help="Score unscored headlines from this many days.")] = 10,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Score unscored headlines with Claude (-1 bad news for the stock .. +1 good). Needs
+    ANTHROPIC_API_KEY; costs API tokens (about 40 headlines a request)."""
+    from tp_ingest.jobs.news import run_scoring
+    from tp_ingest.sentiment import ClaudeScorer
+
+    _setup_logging(verbose)
+    settings = Settings()
+    try:
+        key = settings.require_anthropic_key()
+    except MissingCredentialsError as exc:
+        _config_error(exc)
+    scorer = ClaudeScorer(key, settings.news_model or settings.ask_model)
+    result = run_scoring(Lake(settings.data_root), scorer, now=now_utc(), days=days, limit=limit)
+    typer.echo(result.summary())
+    if result.failed_batches and not result.scored:
+        raise typer.Exit(code=1)
+
+
+@news_app.command("show")
+def news_show(
+    symbol: Annotated[str, typer.Argument(help="Ticker.")],
+    days: Annotated[int, typer.Option(help="Days back.")] = 7,
+) -> None:
+    """A ticker's recent headlines with their scores."""
+    from tp_core.news import load_news, load_scores
+
+    lake = Lake(Settings().data_root)
+    since = (now_utc() - timedelta(days=days)).date()
+    news = load_news(lake, since=since)
+    mine = news[news["symbols"].str.upper().str.split(",").apply(lambda s: symbol.upper() in s)]
+    scores = load_scores(lake).set_index("id")["score"]
+    if mine.empty:
+        typer.echo(f"no headlines for {symbol.upper()} in the last {days} days")
+        return
+    for when, key, headline in zip(mine["created_at"], mine["id"], mine["headline"], strict=True):
+        score = scores.get(key)
+        mark = f"{score:+.1f}" if score is not None else "  ? "
+        typer.echo(f"{when:%Y-%m-%d %H:%M}  {mark}  {headline}")
 
 
 @app.command()

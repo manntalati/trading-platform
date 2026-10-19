@@ -98,6 +98,10 @@ class Settings(BaseSettings):
     ask_effort: Effort = Field(default="medium", validation_alias="TP_CLAUDE_EFFORT")
     # Let it search the web (earnings dates, news); each search adds a small charge.
     ask_web_search: bool = Field(default=True, validation_alias="TP_CLAUDE_WEB_SEARCH")
+    # News sentiment (tp-data news score): Claude scores each headline; off by default (it costs
+    # API tokens). TP_NEWS_MODEL defaults to TP_CLAUDE_MODEL.
+    news_scoring: bool = Field(default=False, validation_alias="TP_NEWS_SCORING")
+    news_model: str | None = Field(default=None, validation_alias="TP_NEWS_MODEL")
 
     def require_alpaca_keys(self) -> tuple[str, str]:
         if self.alpaca_api_key is None or self.alpaca_secret_key is None:

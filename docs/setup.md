@@ -23,7 +23,9 @@ cp .env.example .env && chmod 600 .env  # git-ignored; readable by you only
 | `ALPACA_API_KEY`, `ALPACA_SECRET_KEY` | prices, option chains, live quotes, the paper bot. **Paper** keys: https://app.alpaca.markets/paper/dashboard/overview | yes |
 | `SNAPTRADE_CLIENT_ID`, `SNAPTRADE_CONSUMER_KEY` | your Fidelity positions and trades (read-only). A personal key: https://dashboard.snaptrade.com | yes, for the portfolio |
 | `TP_SEC_USER_AGENT` | fundamentals and earnings dates from the SEC: a name and an email, e.g. `"trading-platform you@example.com"` | yes, for fundamentals |
-| `ANTHROPIC_API_KEY` | Ask Claude on positions and ideas | optional |
+| `ANTHROPIC_API_KEY` | Ask Claude on positions and ideas; scoring news headlines | optional |
+| `TP_NEWS_SCORING=on` | the scheduler has Claude score each evening's headlines for the news-sentiment feature (costs API tokens) | optional |
+| `TP_JOBS_OFF` | scheduled jobs to turn off, e.g. `options-midday,validation` | optional |
 | `FRED_API_KEY` | makes FRED the first source for VIX and yields (Cboe and the Treasury work without it); free: https://fred.stlouisfed.org/docs/api/api_key.html | optional |
 | `TP_DASHBOARD_TOKEN` | opening the dashboard from another machine | optional |
 | `TP_DISCORD_WEBHOOK_URL` | a Discord message when a scheduled job fails (systemd only) | optional |
@@ -75,6 +77,8 @@ data and the recommendations current. On trading days (New York time):
 | Option chains, midday | from 12:30 | `tp-data options snapshot` |
 | Option chains, close | 15 minutes before the close | `tp-data options snapshot` |
 | Daily bars | from 18:30 until the next open | `tp-data bars daily` |
+| News headlines | from 18:45 | `tp-data news fetch` |
+| News sentiment | from 18:45, with `TP_NEWS_SCORING=on` | `tp-data news score` |
 | Model monitoring | from 19:30 (after the bars) | `tp-models monitor` |
 | Fundamentals | from 20:00 (with `TP_SEC_USER_AGENT`) | `tp-data fundamentals` |
 | Backtest gate | Saturdays from 10:00 | `tp-backtest validate --all` |

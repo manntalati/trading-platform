@@ -23,7 +23,9 @@ plan's phase table didn't survive the import, so the phases here follow the bran
 |---|---|---|
 | ✓ | Fidelity, read-only through SnapTrade | positions, transactions, P&L, freshness, [portfolio.md](portfolio.md) |
 | ✓ | Rules-based portfolio checks | [ideas.md](ideas.md) |
-| ✓ | Dashboard with live quotes | six sections, [dashboard.md](dashboard.md) |
+| ✓ | Dashboard with live quotes | six sections in a workspace: the page in the middle, panels on the right ([dashboard.md](dashboard.md)) |
+| ✓ | How you trade | win rate, typical return, holding times by calls/puts/shares, from your round trips (Trades → How you trade) |
+| ✓ | Fidelity sync that tells you why trades are missing | `tp-broker check`, reconnecting a disabled connection, SnapTrade's real-time plan |
 
 ## Phase 2: strategies, backtesting, risk, paper trading, options (`step2/…`): done
 
@@ -44,6 +46,7 @@ plan's phase table didn't survive the import, so the phases here follow the bran
 | ✓ | Rest of the options module: American (binomial) pricing, SVI smile fits, 25-delta skew, options backtesting | `tp_core.american`, `tp_core.smile`, Newton IV, rho/vanna/charm/vomma; cash-secured puts, credit spreads, iron condors, calendars and premium-selling ideas ([research.md](research.md)); [options-backtesting.md](options-backtesting.md) |
 | ✓ | Rate regime from FRED, VIX for the volatility regime | `tp-data macro` (Cboe and the Treasury, or FRED's API), the 3-month yield as the risk-free rate, [data.md](data.md#macro-series-vix-and-treasury-yields) |
 | ✓ | Experiment tracking | every backtest and validation run is saved with its git commit, data version and config; model experiments in MLflow (Phase 4) |
+| ✓ | Recommendations kept up to date | a job scheduler in `tp-api` (or `tp-jobs`) runs every data job in its window on the exchange calendar, catching up after sleep, and remakes the options ideas whenever new data lands; each run is stored, new ideas are marked, and Research → Track record shows how past ones did ([setup.md](setup.md#6-schedules), [research.md](research.md#kept-refreshed-and-scored)); `make mac-agent` keeps it running on a Mac |
 
 ## Phase 3: the platform (`step3/…`)
 
@@ -57,7 +60,7 @@ plan's phase table didn't survive the import, so the phases here follow the bran
 | ○ | Pre-market checklist (8:30 ET) and end-of-day jobs; deploy freeze in market hours |
 | ○ | Approvals in Discord or Slack (today they're on the dashboard) |
 
-## Phase 4: machine learning (`step4/…`): done
+## Phase 4: machine learning (`step4/…`): done, two later experiments waiting
 
 Taken ahead of Phase 3 at your call; nothing in it depends on the platform. See [ml.md](ml.md).
 
@@ -70,6 +73,13 @@ Taken ahead of Phase 3 at your call; nothing in it depends on the platform. See 
 | ✓ | Cross-sectional ranking (ridge, then gradient boosting) | `tp-ml rank`: rank IC, t-stat, bucket spreads and turnover against 12-1 momentum; strategy 13 (`ml-rank`) on the engine |
 | ✓ | Regime HMM; GARCH and HAR volatility forecasts (feeding IV vs forecast) | `tp-ml regime` (filtered probabilities, out of sample), `tp-ml vol` (naive, EWMA, GARCH, HAR-RV, gradient boosting and implied, walk-forward); the options research judges implied against the HAR forecast |
 | ✓ | Strategy search, guarded by Deflated Sharpe and walk-forward | `tp-backtest search`: 41 rule sets in three families; train → validation → one look at test; Deflated Sharpe over every rule set ever tried; probability of backtest overfitting (CSCV); walk-forward of the search itself ([backtesting.md](backtesting.md#strategy-search)) |
+| ✓ | Genetic search over a grammar of signals | `--families grammar`: rules bred from averages, momentum, crosses, a low-volatility filter and RSI on the training period, penalized for size, every one counted as a trial; a pick runs as strategy 14 (`rule-timing`) |
+| ✓ | LightGBM with a ranking objective | `model=lgbm-rank` for strategy 13 and `tp-ml rank` (lambdarank, the stocks of a date as one group) |
+| ✓ | The regime model switching strategies on and off | `--regime hmm` (or `trend`, `vix`) in backtests and validation, `regime =` per strategy in `config/paper.toml`; `tp-backtest regime <name>` compares ([ml.md](ml.md#switching-strategies-off-in-a-stressed-market)) |
+| ✓ | Scheduled retraining, model registry, drift and live accuracy | `tp-models monitor` after the evening bars: retrain when due, register, predict, PSI drift per input, live rank IC / hit rate; System → Models ([ml.md](ml.md#models-in-use-retraining-registry-drift-live-accuracy)) |
+| ✓ | News sentiment as a feature (later experiment) | `tp-data news fetch` (Alpaca's feed) and `score` (Claude, opt in: `TP_NEWS_SCORING=on`); `news_sentiment_5d`, `news_count_5d` ([data.md](data.md#news-and-sentiment)) |
+| ○ | Sequence models on intraday bars (later experiment) | the plan puts them after the tree models have a solid baseline on your data; they also need PyTorch and a long intraday history |
+| ○ | Reinforcement learning for execution (later experiment) | only matters with real order flow to learn from: live trading, after the paper gate |
 
 ## The money gates
 
@@ -81,12 +91,16 @@ Taken ahead of Phase 3 at your call; nothing in it depends on the platform. See 
 
 ## Next, in order
 
-Phases 2 and 4 are done. What's left of them is waiting on time and your data, not code: the
-paper gate's 60 trading days for each sleeve, and the fill-in-the-numbers tables in the strategy
-specs.
+Phases 0, 1, 2 and 4 are done in code. What's left of them waits on time and your data: the
+paper gate's 60 trading days for each sleeve, the fill-in-the-numbers tables in the strategy
+specs, Faber's numbers for strategy 1, and your Phase 0 notes. The two ML experiments the plan
+puts last (sequence models, RL execution) wait on the tree models proving themselves on your data.
 
-1. **The platform** (`step3/…`): Docker images first, then the message bus, then k3s with
+1. **Keep it running**: `tp-api` (or `make mac-agent` on a Mac) so the scheduler keeps the data,
+   the recommendations and the model checks current.
+2. **Phase 4 on your data**: `tp-ml meta`, `rank` (try `--model lgbm-rank`), `vol` and
+   `regime`; `tp-backtest search` (and `--families grammar`); `tp-backtest regime` on the
+   strategies you paper trade. Fill in the tables in specs 12 to 14, and promote to paper only
+   what clears `tp-backtest validate`.
+3. **The platform** (`step3/…`): Docker images first, then the message bus, then k3s with
    monitoring and Discord alerts.
-2. **Phase 4 on your data**: run `tp-ml meta`, `rank`, `vol` and `regime`, and
-   `tp-backtest search`. Fill in the tables in specs 12 and 13, and promote to paper only what
-   clears `tp-backtest validate`.

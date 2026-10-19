@@ -16,6 +16,9 @@ uv run tp-data macro backfill               # one-off: VIX and Treasury yields f
 uv run tp-data macro daily                  # scheduled: the last 30 days
 uv run tp-data fundamentals                 # SEC filings: company facts and earnings dates
 uv run tp-data bars intraday --symbols SPY,QQQ --days 250  # 5-minute bars for intraday research
+uv run tp-data news fetch                   # the last 3 days of headlines (Alpaca's news feed)
+uv run tp-data news score                   # Claude scores the unscored ones (ANTHROPIC_API_KEY)
+uv run tp-data news show XYZ                # a ticker's recent headlines and scores
 ```
 
 ```python
@@ -231,6 +234,26 @@ symbols over the last `--days` sessions, regular hours only (9:30 to 16:00 New Y
 which is what intraday research needs. Run it by hand when you want more history; downloading an
 overlapping window again replaces bars rather than duplicating them. Alpaca's intraday history
 goes back to 2016.
+
+## News and sentiment
+
+`tp-data news fetch` stores the headlines tagged with the bars universe, your research list and
+your holdings from Alpaca's news feed (free with the market data keys) under
+`raw/alpaca/news/`. `tp-data news score` has Claude score each one, in batches of 40, from -1
+(clearly bad news for the stock of the companies named) to +1 (clearly good), reading only the
+headline and the start of its summary. Scores go to `clean/news_sentiment/`. The reply has to
+fit a fixed JSON shape, so it always parses, and a batch that fails is retried on the next run.
+
+A headline counts for the session whose close comes after it: published after 16:00 New York
+time, or on a weekend or holiday, it belongs to the next session. The ML features
+`news_sentiment_5d` and `news_count_5d` ([ml.md](ml.md#features)) are built from that, and
+`tp-ml rank --features all` / `tp-ml meta --features all` try them.
+
+Scoring costs API tokens (a few hundred headlines a day: cents with the default model), so the
+scheduler only scores with `TP_NEWS_SCORING=on` in `.env`; `TP_NEWS_MODEL` picks the model
+(default: `TP_CLAUDE_MODEL`). Fetching runs either way. The history starts when you start
+collecting: Alpaca's feed goes back years, so `tp-data news fetch --days 365` gets a year of
+headlines to score if you want a longer sample (and a bigger bill).
 
 ## Known limitations
 

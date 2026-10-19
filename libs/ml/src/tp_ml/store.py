@@ -20,6 +20,7 @@ import pandas as pd
 
 from tp_core.bars import load_bars
 from tp_core.macro import load_macro
+from tp_core.news import daily_sentiment
 from tp_core.portfolio import Classifier
 from tp_core.reference import LakeReference
 from tp_core.storage import Lake, read_parquet_dir, write_json, write_parquet
@@ -66,14 +67,18 @@ def build_feature_set(
         earnings = LakeReference(lake).earnings_table()
     except LookupError:
         earnings = None
+    news = daily_sentiment(lake)
     panel = compute_features(
         wide_bars(bars),
         sectors=classifier.sectors if classifier else None,
         macro=macro,
         earnings=earnings,
+        news=news if len(news) else None,
     )
     data = data_version(bars)
-    spec = feature_spec(macro=not macro.empty, earnings=earnings is not None)
+    spec = feature_spec(
+        macro=not macro.empty, earnings=earnings is not None, news=int(news["headlines"].sum())
+    )
     version = hashlib.sha256(f"{spec}|{data['rows']}|{data['last_session']}".encode()).hexdigest()
     version = version[:12]
     path = features_dir(lake) / name / version / "part.parquet"

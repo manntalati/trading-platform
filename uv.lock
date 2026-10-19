@@ -4787,6 +4787,7 @@ version = "0.1.0"
 source = { editable = "services/ingest" }
 dependencies = [
     { name = "alpaca-py" },
+    { name = "anthropic" },
     { name = "requests" },
     { name = "tp-core" },
     { name = "typer" },
@@ -4795,6 +4796,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "alpaca-py", specifier = ">=0.40" },
+    { name = "anthropic", specifier = ">=1.0" },
     { name = "requests", specifier = ">=2.31" },
     { name = "tp-core", editable = "libs/core" },
     { name = "typer", specifier = ">=0.12" },

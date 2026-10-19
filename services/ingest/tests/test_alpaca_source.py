@@ -294,3 +294,24 @@ def test_underlying_snapshots(source: AlpacaSource) -> None:
     df = source.underlying_snapshots(["SPY"])
     assert df.iloc[0][["symbol", "price", "bid", "ask"]].tolist() == ["SPY", 559.9, 559.88, 559.91]
     assert parse_qs(urlparse(responses.calls[0].request.url).query)["feed"] == ["iex"]
+
+
+NEWS_URL = "https://data.alpaca.markets/v1beta1/news"
+
+
+@responses.activate
+def test_news_maps_headlines_and_pages(source: AlpacaSource) -> None:
+    item = {"id": 101, "headline": "XYZ beats estimates", "summary": "Quarterly results...",
+            "source": "benzinga", "url": "https://example.com/1", "author": "a",
+            "created_at": "2024-07-10T14:30:00Z", "updated_at": "2024-07-10T14:31:00Z",
+            "symbols": ["XYZ", "ABC"], "images": [], "content": ""}  # fmt: skip
+    second = item | {"id": 102, "headline": "ABC misses", "symbols": ["ABC"]}
+    responses.get(NEWS_URL, json={"news": [item], "next_page_token": "p2"})
+    responses.get(NEWS_URL, json={"news": [second], "next_page_token": None})
+    df = source.news(
+        ["XYZ", "ABC"], datetime(2024, 7, 9, tzinfo=UTC), datetime(2024, 7, 12, tzinfo=UTC)
+    )
+    assert list(df["id"]) == ["101", "102"]
+    assert df.loc[0, "symbols"] == "XYZ,ABC"
+    assert str(df.loc[0, "created_at"].tz) == "UTC"
+    assert "symbols=XYZ%2CABC" in responses.calls[0].request.url

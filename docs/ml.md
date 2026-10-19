@@ -37,6 +37,7 @@ Each row uses only data up to that session's close.
 | Trend and oscillators | `dist_ma20`, `dist_ma50`, `dist_ma200`, `rsi_2`, `rsi_14` |
 | Macro | `vix`, `vix_ratio` (VIX / 3-month VIX), `curve_10y_3m`, `rate_10y_chg_63` |
 | Earnings | `days_since_results`, `last_sue` (the latest results' standardized surprise) |
+| News | `news_sentiment_5d` (the headline-weighted mean sentiment of the headlines naming it over the last 5 sessions, scored by Claude), `news_count_5d`; missing before the first stored headline ([data.md](data.md#news-and-sentiment)) |
 
 Two tests guard this:
 
