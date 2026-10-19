@@ -27,6 +27,7 @@ from tp_trading.data import Field, MarketData
 from tp_trading.events import Fill, Order, OrderStatus
 from tp_trading.execution import ExecutionConfig, SimulatedExecution
 from tp_trading.portfolio import Portfolio, Position
+from tp_trading.regime import RegimeGate
 from tp_trading.risk import AllowAll, Book, RiskGate
 from tp_trading.sizing import Sizing
 from tp_trading.strategy import Context, Reference, Strategy
@@ -48,6 +49,7 @@ class EngineConfig:
     end: date | None = None
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
     sizing: Sizing | None = None  # how much of each target weight to take (tp_trading.sizing)
+    regime: RegimeGate | None = None  # when to stay out of the market (tp_trading.regime)
 
 
 class BacktestContext(Context):
@@ -60,6 +62,7 @@ class BacktestContext(Context):
         sectors: Mapping[str, str] | None = None,
         sizing: Sizing | None = None,
         reference: Reference | None = None,
+        regime: RegimeGate | None = None,
     ):
         super().__init__(
             strategy.name,
@@ -67,6 +70,7 @@ class BacktestContext(Context):
             sectors=sectors,
             sizing=sizing,
             reference=reference,
+            regime=regime,
         )
         self._data = data
         self._portfolio = portfolio
@@ -190,6 +194,7 @@ class BacktestEngine:
             self.sectors,
             cfg.sizing,
             self.reference,
+            cfg.regime,
         )
         execution = SimulatedExecution(data, cfg.execution)
         pending: list[Order] = []
@@ -211,7 +216,7 @@ class BacktestEngine:
             marks = data.marks(t)
             equity = portfolio.equity(marks)
 
-            strategy.on_bar(ctx)
+            ctx.run(strategy)
             intents = ctx.drain()
             if intents:
                 book = Book(

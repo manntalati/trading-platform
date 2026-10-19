@@ -116,6 +116,7 @@ uv run tp-backtest list
 uv run tp-backtest run ma-timing --start 2018-01-01      # tear sheet vs SPY; saved under data/reports/backtests
 uv run tp-backtest validate --all                       # the plan's backtest gate before paper trading
 uv run tp-backtest research vrp                         # vectorized research backtests: pairs, vrp, orb
+uv run tp-backtest regime ts-momentum                   # switched off in stressed markets, or not
 uv run tp-backtest search                               # 41 rule sets, guarded against overfitting
 ```
 

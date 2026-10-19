@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from tp_strategies.library import build
+from tp_strategies.regime_gate import METHODS as REGIME_METHODS
 from tp_trading.sizing import make as make_sizing
 from tp_trading.strategy import Strategy
 
@@ -24,6 +25,7 @@ class Sleeve:
     approval: Approval = "manual"
     params: Mapping[str, Any] = field(default_factory=dict)
     sizing: str | None = None  # tp_trading.sizing method; None: the strategy's own weights
+    regime: str | None = None  # tp_strategies.regime_gate method; None: always in the market
 
     @property
     def name(self) -> str:
@@ -53,7 +55,7 @@ class PaperBook:
             raise ValueError(f"{path}: unknown section(s) {sorted(unknown)}")
         sleeves = []
         for name, entry in raw.get("strategies", {}).items():
-            extra = set(entry) - {"capital", "approval", "params", "sizing"}
+            extra = set(entry) - {"capital", "approval", "params", "sizing", "regime"}
             if extra:
                 raise ValueError(f"{path}: [strategies.{name}] has unknown key(s) {sorted(extra)}")
             capital = float(entry.get("capital", 0))
@@ -68,5 +70,10 @@ class PaperBook:
                 make_sizing(sizing)
             except ValueError as exc:
                 raise ValueError(f"{path}: [strategies.{name}] {exc}") from None
-            sleeves.append(Sleeve(build(name, params), capital, approval, params, sizing))
+            regime = entry.get("regime")
+            if regime not in (None, *REGIME_METHODS):
+                raise ValueError(
+                    f"{path}: [strategies.{name}] regime must be one of {', '.join(REGIME_METHODS)}"
+                )
+            sleeves.append(Sleeve(build(name, params), capital, approval, params, sizing, regime))
         return cls(tuple(sleeves))

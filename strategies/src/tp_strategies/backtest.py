@@ -9,7 +9,7 @@ produced it.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -74,7 +74,10 @@ def run_backtest(
         "title": strategy.title,
         "spec": strategy.spec,
         "params": _jsonable(strategy.params()),
-        "config": _jsonable(asdict(config)),
+        "config": _jsonable(
+            asdict(replace(config, regime=None))
+            | {"regime": config.regime.name if config.regime else None}
+        ),
         "risk": _risk_summary(risk),
         "data": data_version(bars),
         "code": git_version(),

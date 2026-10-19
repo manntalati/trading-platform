@@ -26,6 +26,7 @@ from tp_core.calendar import is_last_session_of_month
 from tp_trading.data import Field
 from tp_trading.events import Fill, OrderIntent, OrderType, Side
 from tp_trading.portfolio import EPSILON, Position
+from tp_trading.regime import RegimeGate
 from tp_trading.sizing import Sizing
 
 
@@ -75,9 +76,12 @@ class Context(ABC):
         catch_up: bool = False,
         sizing: Sizing | None = None,
         reference: Reference | None = None,
+        regime: RegimeGate | None = None,
     ) -> None:
         self.strategy = strategy
         self._reference = reference
+        # When to be out of the market whatever the strategy says (tp_trading.regime); None: never.
+        self.regime = regime
         self.fractional = fractional
         # How much of each target weight to actually take (tp_trading.sizing); None: all of it.
         self.sizing = sizing
@@ -135,6 +139,31 @@ class Context(ABC):
         up (a sleeve that has never traded shouldn't sit in cash until month end)."""
         return self.catch_up or self.is_last_session_of_month()
 
+    @property
+    def risk_off(self) -> bool:
+        """The regime gate says stay out today: buys are dropped and holdings sold."""
+        return self.regime is not None and self.regime.off(self.now)
+
+    def run(self, strategy: Strategy) -> None:
+        """Run ``strategy.on_bar`` under the regime gate. The runtimes call this, not ``on_bar``:
+        on the session risk comes back on, the strategy catches up (takes its positions now);
+        while it's off, whatever it still holds is sold."""
+        regime = self.regime
+        saved = self.catch_up
+        if regime is not None and regime.turned_on(self.now):
+            self.catch_up = True
+        try:
+            strategy.on_bar(self)
+        finally:
+            self.catch_up = saved
+        if regime is None or not self.risk_off:
+            return
+        selling = {i.symbol for i in self._intents if i.side is Side.SELL}
+        for symbol, position in self.positions.items():
+            price = self.price(symbol)
+            if position.quantity > EPSILON and symbol not in selling and math.isfinite(price):
+                self.order(symbol, -position.quantity, reason=f"regime ({regime.name}): risk off")
+
     def reference(self, name: str) -> pd.DataFrame:
         """A reference dataset as known at today's close (``Reference``): "fundamentals",
         "valuation", "earnings" or "macro". Raises when the runtime has none."""
@@ -160,8 +189,9 @@ class Context(ABC):
         reason: str = "",
         target_weight: float | None = None,
     ) -> None:
-        """Ask to buy (``quantity > 0``) or sell (``< 0``) shares at the next fill opportunity."""
-        if abs(quantity) < EPSILON:
+        """Ask to buy (``quantity > 0``) or sell (``< 0``) shares at the next fill opportunity.
+        Buys are dropped while the regime gate has risk off."""
+        if abs(quantity) < EPSILON or (quantity > 0 and self.risk_off):
             return
         price = self.price(symbol)
         if not math.isfinite(price) or price <= 0:
@@ -199,6 +229,9 @@ class Context(ABC):
         """
         if any(w < 0 for w in targets.values()):
             raise ValueError("target weights must be >= 0 (no shorting)")
+        if self.risk_off:
+            assert self.regime is not None
+            targets, reason = {}, f"regime ({self.regime.name}): risk off"
         if self.sizing is not None:
             targets = self.sizing.resize(targets, self)
         if sum(targets.values()) > 1 + 1e-9:
