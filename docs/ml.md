@@ -276,6 +276,33 @@ VIX level, breadth, rates) are still in `tp_core.regime`; this is the learned co
 
 Runs go to the MLflow experiments `volatility` and `regimes`.
 
+### Switching strategies off in a stressed market
+
+The plan's use for the regime model is to switch strategies on and off, and any engine strategy
+can be: a **regime gate** keeps it in cash while the gate says risk is off, and puts it straight
+back in when it clears (it takes the positions its rules call for that day, instead of waiting
+for its next month end). Three gates, each with a band so a reading at the line doesn't flip it
+in and out every few days ([`tp_strategies/regime_gate.py`](../strategies/src/tp_strategies/regime_gate.py)):
+
+| Gate | Off when | On again when |
+|---|---|---|
+| `hmm` | the out-of-sample filtered probability of the stressed state reaches 0.7 | it falls to 0.3 |
+| `trend` | SPY closes 1% below its 200-day average | 1% above it |
+| `vix` | the VIX closes above 30 | below 25 |
+
+```bash
+uv run tp-backtest regime ts-momentum            # always in vs each gate: CAGR, vol, Sharpe, drawdown, time off
+uv run tp-backtest run rsi2 --regime hmm         # one gated backtest
+uv run tp-backtest validate ts-momentum --regime trend
+```
+
+Every value uses data up to that day's close; the `hmm` gate's model is refitted each January on
+the years before. A gate earns its place by cutting the drawdown by more than it costs in
+return; momentum strategies already step aside in downtrends, so the gain there is often small.
+Validate the gated version before trading it: the gate is recorded with the trial (another trial
+for the Deflated Sharpe), and `regime = "hmm"` (or `"trend"`, `"vix"`) in a strategy's block in
+`config/paper.toml` then gates it in paper trading, where `tp-backtest validate` picks it up too.
+
 ## Strategy search
 
 `tp-backtest search` tries 41 simple rule sets (trend, momentum and RSI(2) reversion, vectorized

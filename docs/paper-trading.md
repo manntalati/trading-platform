@@ -125,6 +125,10 @@ equity.
 - **Sizing**: `sizing = "vol-target"` (or `"fixed-fractional"`, `"kelly"`) in a strategy's
   block sizes its positions with that method instead of the strategy's own weights
   ([risk.md](risk.md#position-sizing)); `tp-backtest sizing <name>` compares them first.
+- **Regime gate**: `regime = "hmm"` (or `"trend"`, `"vix"`) keeps the strategy in cash while
+  that gate says risk is off, and back in the evening it clears; the activity log says when it's
+  off ([ml.md](ml.md#switching-strategies-off-in-a-stressed-market)). `tp-backtest regime <name>`
+  compares the gates first, and `tp-backtest validate` validates the gated version.
 
 Each strategy's positions and cash are rebuilt from its own fills, so two strategies can hold
 the same ETF and each knows its share. After every sync the sum of all sleeves is compared with

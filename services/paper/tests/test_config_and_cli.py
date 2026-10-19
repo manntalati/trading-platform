@@ -36,6 +36,7 @@ def test_repo_book_runs_library_strategies_inside_a_default_paper_account() -> N
         ("[strategies.rsi2]\ncapital = 1\ncapitol = 2\n", "unknown key"),
         ('[strategies.rsi2]\ncapital = 1\nparams = { slots = "x" }\n', "expected int"),
         ("[account]\n", "unknown section"),
+        ('[strategies.rsi2]\ncapital = 1\nregime = "moon"\n', "regime must be one of"),
     ],
 )
 def test_book_errors(tmp_path: Path, toml: str, message: str) -> None:

@@ -25,7 +25,7 @@ import json
 import math
 import tomllib
 from collections.abc import Callable, Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -339,8 +339,12 @@ def validate(
         [(p, r.result.returns) for p, r in runs], start, config.wf_train, config.wf_test
     )
     stab = stability(base, runs, config.gate.min_neighbor_sharpe_ratio)
+    # a regime gate makes these different trials from the same parameters ungated
+    gated = {"regime_gate": engine.regime.name} if engine.regime is not None else {}
     trial_sharpes = (
-        record_trials(lake, name, stab["variants"], now)
+        record_trials(
+            lake, name, [v | {"params": {**v["params"], **gated}} for v in stab["variants"]], now
+        )
         if save
         else [v["sharpe"] for v in stab["variants"] if v["sharpe"] is not None]
     )
@@ -357,7 +361,7 @@ def validate(
         + sum(
             1
             for f in folder.glob("*.json")
-            if json.loads(f.read_text()).get("params_signature") == signature(base)
+            if json.loads(f.read_text()).get("params_signature") == signature({**base, **gated})
         )
         if folder.exists()
         else 1
@@ -370,9 +374,10 @@ def validate(
         "title": base_strategy.title,
         "spec": base_strategy.spec,
         "params": base,
-        "params_signature": signature(base),
+        "params_signature": signature({**base, **gated}),
+        "regime_gate": gated.get("regime_gate"),
         "code": git_version(),
-        "engine": _jsonable(asdict(engine)),
+        "engine": _jsonable(asdict(replace(engine, regime=None)) | gated),
         "full": period_stats(returns, bench),
         "periods": periods,
         "walk_forward": wf,
@@ -476,6 +481,17 @@ def paper_params(path: Path) -> dict[str, dict[str, Any]]:
     with path.open("rb") as f:
         raw = tomllib.load(f)
     return {name: dict(e.get("params", {})) for name, e in raw.get("strategies", {}).items()}
+
+
+def paper_regimes(path: Path) -> dict[str, str]:
+    """Each paper-traded strategy's regime gate, where it has one."""
+    if not path.exists():
+        return {}
+    with path.open("rb") as f:
+        raw = tomllib.load(f)
+    return {
+        name: str(e["regime"]) for name, e in raw.get("strategies", {}).items() if e.get("regime")
+    }
 
 
 def latest_reports(lake: Lake) -> dict[str, dict[str, Any]]:

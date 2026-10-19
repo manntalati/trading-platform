@@ -48,8 +48,10 @@ from tp_paper.store import (
     now_iso,
 )
 from tp_risk.manager import RiskManager
+from tp_strategies.regime_gate import make_gate
 from tp_trading.costs import CostModel
 from tp_trading.events import OrderIntent, RiskDecision
+from tp_trading.regime import SeriesGate
 from tp_trading.risk import Book
 from tp_trading.sizing import make as make_sizing
 
@@ -307,6 +309,7 @@ def propose(paper: Paper, now: datetime, *, force: bool = False) -> ProposeRepor
         positions[p.symbol] = positions.get(p.symbol, 0.0) + signed
         cash -= signed * p.reference_price
 
+    gates: dict[str, SeriesGate | None] = {}
     for sleeve in paper.book.sleeves:
         name = sleeve.name
         earlier = store.proposals(strategy=name, session=iso(session))
@@ -341,6 +344,13 @@ def propose(paper: Paper, now: datetime, *, force: bool = False) -> ProposeRepor
         catch_up = not mine or _capital_changed_since(
             store.sleeve_days(name), max(f.session for f in mine)
         )
+        if sleeve.regime and sleeve.regime not in gates:
+            try:
+                gates[sleeve.regime] = make_gate(paper.lake, sleeve.regime, end=session)
+            except ValueError as exc:  # not enough data for it yet: run ungated, and say so
+                store.log("propose", f"regime gate {sleeve.regime} unavailable: {exc}")
+                gates[sleeve.regime] = None
+        gate = gates.get(sleeve.regime) if sleeve.regime else None
         ctx = PaperContext(
             sleeve.strategy,
             data,
@@ -350,9 +360,12 @@ def propose(paper: Paper, now: datetime, *, force: bool = False) -> ProposeRepor
             catch_up=catch_up,
             sizing=make_sizing(sleeve.sizing),
             reference=LakeReference(paper.lake),
+            regime=gate,
         )
+        if gate is not None and ctx.risk_off:
+            store.log("propose", f"{name}: regime gate {gate.name} has risk off ({gate.detail})")
         try:
-            sleeve.strategy.on_bar(ctx)
+            ctx.run(sleeve.strategy)
         except Exception as exc:  # one broken strategy must not stop the others
             log.exception("%s failed", name)
             store.log("propose", f"{name} raised {type(exc).__name__}: {exc}")

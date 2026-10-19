@@ -6,6 +6,8 @@ tp-backtest run ma-timing -p assets=SPY --fill next_close --slippage-bps 10
 tp-backtest validate ma-timing          # the plan's stage-1 gate (see docs/backtesting.md)
 tp-backtest validate --all
 tp-backtest sizing ts-momentum           # the plan's three sizing methods side by side
+tp-backtest regime ts-momentum           # switched off in bad regimes (hmm, trend, vix) or not
+tp-backtest run rsi2 --regime hmm        # one backtest with a regime gate
 tp-backtest research pairs|vrp|orb       # vectorized research backtests
 """
 
@@ -13,7 +15,8 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, date, datetime
 from typing import Annotated, Any
 
 import typer
@@ -25,14 +28,17 @@ from tp_core.storage import Lake
 from tp_risk.manager import RiskManager
 from tp_strategies.backtest import risk_gate, run_backtest
 from tp_strategies.library import REGISTRY, build, parameters
+from tp_strategies.regime_gate import METHODS as REGIME_METHODS
+from tp_strategies.regime_gate import make_gate
 from tp_strategies.research_cli import app as research_app
 from tp_strategies.search import FAMILIES, SearchConfig, rule_sets, run_search, universe
 from tp_strategies.search import report_text as search_report_text
-from tp_strategies.validation import ValidationConfig, paper_params
+from tp_strategies.validation import ValidationConfig, paper_params, paper_regimes
 from tp_strategies.validation import validate as run_validation
 from tp_trading.costs import CostModel
 from tp_trading.engine import EngineConfig
 from tp_trading.execution import ExecutionConfig, FillAt
+from tp_trading.regime import SeriesGate
 from tp_trading.sizing import METHODS as SIZING_METHODS
 from tp_trading.sizing import make as make_sizing
 
@@ -92,6 +98,9 @@ def run(
     sizing: Annotated[
         str, typer.Option(help="strategy (its own weights), fixed-fractional, vol-target or kelly.")
     ] = "strategy",
+    regime: Annotated[
+        str, typer.Option(help="Sit in cash in bad regimes: off, hmm, trend or vix.")
+    ] = "off",
 ) -> None:
     """Backtest one strategy and print its tear sheet next to buy-and-hold."""
     logging.basicConfig(
@@ -109,6 +118,7 @@ def run(
         sizer = make_sizing(sizing)
     except ValueError as exc:
         raise typer.BadParameter(str(exc), param_hint="--sizing") from exc
+    settings = Settings()
     config = EngineConfig(
         initial_cash=capital,
         start=start.date() if start else None,
@@ -119,8 +129,8 @@ def run(
             costs=CostModel(slippage_bps=slippage_bps),
         ),
         sizing=sizer,
+        regime=_gate(Lake(settings.data_root), regime, end.date() if end else None),
     )
-    settings = Settings()
     classifier = Classifier.load(settings.classifications_file)
     gate = _risk_gate(settings, classifier, enforce_drawdown) if risk else None
     try:
@@ -138,7 +148,7 @@ def run(
     typer.echo(f"params: {built.params()}")
     typer.echo(
         f"fills at {fill}, {slippage_bps:g} bps slippage, start {capital:,.0f}, "
-        f"risk limits {'on' if risk else 'OFF'}, sizing {sizing}\n"
+        f"risk limits {'on' if risk else 'OFF'}, sizing {sizing}, regime gate {regime}\n"
     )
     typer.echo(f"{'':30}{'strategy':>12}{benchmark + ' hold':>12}")
     for key, label, kind in ROWS:
@@ -164,6 +174,13 @@ def run(
         )
     if outcome.path:
         typer.echo(f"\nsaved to {outcome.path}")
+
+
+def _gate(lake: Lake, method: str, end: date | None = None) -> SeriesGate | None:
+    try:
+        return make_gate(lake, method, end)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--regime") from exc
 
 
 def _risk_gate(settings: Settings, classifier: Classifier, enforce_drawdown: bool) -> RiskManager:
@@ -216,6 +233,65 @@ def compare_sizing(
         )
 
 
+@app.command("regime")
+def compare_regimes(
+    strategy: Annotated[str, typer.Argument(help="Strategy name (see `tp-backtest list`).")],
+    param: Annotated[
+        list[str] | None,
+        typer.Option("--param", "-p", help="Strategy parameter as key=value; repeatable."),
+    ] = None,
+    start: Annotated[
+        datetime | None, typer.Option(formats=["%Y-%m-%d"], help="First session to trade.")
+    ] = None,
+    capital: Annotated[float, typer.Option(help="Starting cash.")] = 100_000.0,
+) -> None:
+    """Backtest one strategy always in the market, then switched off by each regime gate
+    (hmm, trend, vix), and compare. The gates use only data up to each day's close."""
+    logging.basicConfig(level=logging.WARNING)
+    settings = Settings()
+    lake = Lake(settings.data_root)
+    classifier = Classifier.load(settings.classifications_file)
+    rows = []
+    for method in REGIME_METHODS:
+        try:
+            gate = make_gate(lake, method)
+        except ValueError as exc:
+            typer.echo(f"{method}: skipped ({exc})", err=True)
+            continue
+        built = build(strategy, _params(param or []))
+        config = EngineConfig(
+            initial_cash=capital, start=start.date() if start else None, regime=gate
+        )
+        risk = _risk_gate(settings, classifier, False) if settings.risk_file.exists() else None
+        try:
+            out = run_backtest(
+                lake, built, config, risk=risk, sectors=classifier.sectors,
+                now=datetime.now(UTC), save=False,
+            )  # fmt: skip
+        except KeyError as exc:  # bars missing for one of its symbols
+            typer.echo(str(exc.args[0]), err=True)
+            raise typer.Exit(1) from exc
+        st = out.summary["stats"]
+        first, last = out.result.equity.index[0], out.result.equity.index[-1]
+        share = gate.share_off(first.date(), last.date()) if gate else 0.0
+        rows.append((method, st, share))
+    typer.echo(f"\n{strategy}: always in the market vs switched off by a regime gate\n")
+    head = f"{'':10}{'CAGR':>8}{'vol':>8}{'Sharpe':>8}{'max DD':>9}{'exposure':>10}{'gate off':>10}"
+    typer.echo(head)
+    for method, st, share in rows:
+        typer.echo(
+            f"{method:10}{_fmt(st.get('cagr'), 'pct'):>8}{_fmt(st.get('ann_volatility'), 'pct'):>8}"
+            f"{_fmt(st.get('sharpe'), 'num'):>8}{_fmt(st.get('max_drawdown'), 'pct'):>9}"
+            f"{_fmt(st.get('avg_exposure'), 'pct'):>10}{_fmt(share, 'pct'):>10}"
+        )
+    typer.echo(
+        "\nA gate earns its place by cutting the drawdown by more than it costs in return. "
+        "Validate the one you'd use (`tp-backtest validate <strategy> --regime <gate>`) before "
+        'adding regime = "<gate>" to the strategy in config/paper.toml; every gate tried is '
+        "another trial."
+    )
+
+
 MARK = {True: "PASS", False: "FAIL", None: " n/a"}
 
 
@@ -235,6 +311,10 @@ def validate(
         bool, typer.Option(help="Apply the pre-trade limits in config/risk.toml.")
     ] = True,
     save: Annotated[bool, typer.Option(help="Write the report under reports/validation/.")] = True,
+    regime: Annotated[
+        str | None,
+        typer.Option(help="Regime gate (off, hmm, trend, vix); default: the paper sleeve's."),
+    ] = None,
 ) -> None:
     """Run the plan's backtest validation: locked test set, walk-forward, Deflated Sharpe,
     stress periods and parameter stability (config/validation.toml). Pass all five and the
@@ -255,11 +335,14 @@ def validate(
         initial_cash=capital,
         execution=ExecutionConfig(costs=CostModel(slippage_bps=slippage_bps)),
     )
+    lake = Lake(settings.data_root)
+    gated = paper_regimes(settings.paper_file)
     failed = False
     for name in names:
+        method = regime if regime is not None else gated.get(name, "off")
         try:
             report = run_validation(
-                Lake(settings.data_root), name, engine=engine,
+                lake, name, engine=replace(engine, regime=_gate(lake, method)),
                 params=_params(param or []) if param else on_paper.get(name, {}),
                 config=config, sectors=classifier.sectors, now=datetime.now(UTC), save=save,
                 risk=(lambda: _risk_gate(settings, classifier, False)) if risk else (lambda: None),

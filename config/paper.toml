@@ -12,6 +12,8 @@
 # params    strategy parameters, as for `tp-backtest run NAME -p key=value`.
 # sizing    optional: "fixed-fractional", "vol-target" or "kelly" to size positions with one of
 #           the plan's methods (docs/risk.md); omitted, the strategy's own weights.
+# regime    optional: "hmm", "trend" or "vix" to keep the strategy in cash while that regime
+#           gate says the market is stressed (docs/ml.md); compare with `tp-backtest regime NAME`.
 #
 # Start with fewer strategies if you prefer: delete a block to stop it (its positions stay in
 # the account until you sell them). Changing a sleeve's capital moves money in or out of it: it

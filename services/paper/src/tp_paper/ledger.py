@@ -18,6 +18,7 @@ from tp_paper.store import FillRecord, SleeveDay
 from tp_trading.data import Field, MarketData
 from tp_trading.events import Fill, Side
 from tp_trading.portfolio import Portfolio, Position
+from tp_trading.regime import RegimeGate
 from tp_trading.sizing import Sizing
 from tp_trading.strategy import Context, Reference, Strategy
 
@@ -145,6 +146,7 @@ class PaperContext(Context):
         catch_up: bool = False,
         sizing: Sizing | None = None,
         reference: Reference | None = None,
+        regime: RegimeGate | None = None,
     ) -> None:
         super().__init__(
             strategy.name,
@@ -153,6 +155,7 @@ class PaperContext(Context):
             catch_up=catch_up,
             sizing=sizing,
             reference=reference,
+            regime=regime,
         )
         self._data = data
         self._t = t

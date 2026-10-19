@@ -307,3 +307,23 @@ def test_the_simulator_waits_for_the_days_bars_before_expiring_an_order(env: Any
     assert env.broker.order_by_client_id("x-1").status == "submitted"
     env.at(datetime(2024, 8, 6, 14, tzinfo=UTC))  # Tuesday: still no bar, so it never traded
     assert env.broker.order_by_client_id("x-1").status != "submitted"
+
+
+def test_a_regime_gate_keeps_a_sleeve_out_and_says_why(env: Any, monkeypatch: Any) -> None:
+    from dataclasses import replace
+
+    import pandas as pd
+
+    from tp_paper.config import PaperBook
+    from tp_trading.regime import SeriesGate
+
+    days = pd.date_range("2024-01-01", "2024-12-31")
+    monkeypatch.setattr(
+        jobs, "make_gate", lambda lake, method, end=None: SeriesGate(method, pd.Series(True, days))
+    )
+    sleeves = [replace(s, regime="trend") for s in env.paper.book.sleeves]
+    env.paper.book = PaperBook(tuple(sleeves))
+    report = jobs.propose(env.paper, env.at(env.month_end_evening))
+    assert report.proposed["ma-timing"] == 0  # month end, but risk is off: no buys
+    events = [e["message"] for e in env.paper.store.events()]
+    assert any("regime gate trend has risk off" in m for m in events)

@@ -22,7 +22,13 @@ uv run tp-backtest run ma-timing --slippage-bps 15        # stress the cost assu
 uv run tp-backtest run ma-timing --fill next_close        # research timing
 uv run tp-backtest run ma-timing --sizing vol-target      # size positions (risk.md)
 uv run tp-backtest sizing ma-timing                       # every sizing method side by side
+uv run tp-backtest run ma-timing --regime hmm             # in cash while the regime is stressed
+uv run tp-backtest regime ma-timing                       # each regime gate side by side
 ```
+
+`--regime` (`hmm`, `trend` or `vix`) switches the strategy off while a regime gate says risk is
+off: it sells what it holds and buys nothing, then takes its positions again the session the
+gate clears ([ml.md](ml.md#switching-strategies-off-in-a-stressed-market)).
 
 The command prints the plan's tear sheet next to buy-and-hold of the benchmark (`--benchmark`,
 SPY by default), plus trade count, turnover, exposure and costs. The pre-trade risk limits apply

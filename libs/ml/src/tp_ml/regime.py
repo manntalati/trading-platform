@@ -211,20 +211,16 @@ def describe(model: RegimeModel, obs: pd.DataFrame) -> dict[str, Any]:
     }
 
 
-def evaluate_regimes(
-    bars: pd.DataFrame, n_states: int = 2, min_years: int = 4, horizon: int = 21
-) -> dict[str, Any]:
-    """Out of sample: refit each January on the years before, filter through that year, and
-    score what the most likely state on each day said about the next ``horizon`` sessions'
-    volatility and return. Also: SPY held only while the model says calm (a day late)."""
+def out_of_sample_probabilities(
+    bars: pd.DataFrame, n_states: int = 2, min_years: int = 4
+) -> pd.DataFrame:
+    """Each day's filtered state probabilities from a model fitted only on the years before
+    (refit each January): what the model could have said that day. Empty until ``min_years``
+    of history."""
     obs = observations(bars)
     when = pd.DatetimeIndex(obs.index)
-    ret = np.log(bars["close"]).diff().reindex(obs.index)
-    future_vol = (ret**2).rolling(horizon).mean().shift(-horizon) ** 0.5 * math.sqrt(TRADING_DAYS)
-    future_ret = ret.rolling(horizon).sum().shift(-horizon)
-    years = sorted(set(when.year))
     pieces = []
-    for year in years[min_years:]:
+    for year in sorted(set(when.year))[min_years:]:
         past = obs[when.year < year]
         now = obs[when.year == year]
         if len(past) < 250 * min_years or now.empty:
@@ -234,8 +230,23 @@ def evaluate_regimes(
         probs = model.probabilities(pd.concat([past.iloc[-250:], now])).loc[now.index]
         pieces.append(probs)
     if not pieces:
+        return pd.DataFrame(columns=list(NAMES[n_states]))
+    return pd.concat(pieces)
+
+
+def evaluate_regimes(
+    bars: pd.DataFrame, n_states: int = 2, min_years: int = 4, horizon: int = 21
+) -> dict[str, Any]:
+    """Out of sample: refit each January on the years before, filter through that year, and
+    score what the most likely state on each day said about the next ``horizon`` sessions'
+    volatility and return. Also: SPY held only while the model says calm (a day late)."""
+    obs = observations(bars)
+    ret = np.log(bars["close"]).diff().reindex(obs.index)
+    future_vol = (ret**2).rolling(horizon).mean().shift(-horizon) ** 0.5 * math.sqrt(TRADING_DAYS)
+    future_ret = ret.rolling(horizon).sum().shift(-horizon)
+    probs = out_of_sample_probabilities(bars, n_states, min_years)
+    if probs.empty:
         return {"days": 0}
-    probs = pd.concat(pieces)
     names = list(probs.columns)
     state = pd.Series(np.array(names)[probs.to_numpy().argmax(axis=1)], index=probs.index)
     by_state = []
