@@ -338,6 +338,11 @@ test period. It only trusts the pick if four guards hold: a Deflated Sharpe over
 it has ever tried, the probability of backtest overfitting, a walk-forward of the search itself,
 and the test period. [backtesting.md](backtesting.md#strategy-search) has the protocol.
 
+`--families grammar` adds the plan's genetic search: rules bred from a small grammar of signals
+(averages, momentum, crosses, a low-volatility filter, RSI; and/or/not; at most three levels),
+scored on the training period with a penalty for size, every one of them counted as a trial. A
+pick runs on the engine as strategy 14 (`rule-timing`, [spec](strategies/14-rule-timing.md)).
+
 That completes Phase 4's list. What's left is yours to run on real data: `tp-ml meta`, `rank`,
 `vol` and `regime`, and `tp-backtest search`. Fill in the tables in specs 12 and 13, and promote
 only what clears the engine's validation.

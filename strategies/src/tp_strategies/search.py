@@ -44,6 +44,7 @@ from tp_core import metrics
 from tp_core.indicators import wilder_rsi
 from tp_core.significance import deflated_sharpe
 from tp_core.storage import Lake, new_run_id, write_json
+from tp_strategies import grammar
 from tp_strategies.backtest import _jsonable
 from tp_strategies.library.ma_timing import GTAA
 from tp_strategies.library.rsi2 import INDEX_ETFS
@@ -51,7 +52,8 @@ from tp_strategies.library.ts_momentum import DIVERSIFIED
 from tp_strategies.library.xs_momentum import LARGE_CAPS
 from tp_strategies.validation import ValidationConfig, record_trials, walk_forward
 
-FAMILIES = ("trend", "momentum", "reversion")
+FAMILIES = ("trend", "momentum", "reversion", "grammar")
+DEFAULT_FAMILIES = ("trend", "momentum", "reversion")  # grammar: opt in (it adds many trials)
 TRADING_DAYS = 252
 
 
@@ -159,6 +161,8 @@ def rule_sets(families: tuple[str, ...] = FAMILIES) -> list[RuleSet]:
 
 
 def universe(rule: RuleSet) -> tuple[str, ...]:
+    if rule.engine == "rule-timing":
+        return DIVERSIFIED
     if rule.engine == "ma-timing":
         return GTAA
     if rule.engine == "ts-momentum":
@@ -170,6 +174,8 @@ def universe(rule: RuleSet) -> tuple[str, ...]:
 
 def weights_for(rule: RuleSet, closes: pd.DataFrame) -> pd.DataFrame:
     p = rule.params
+    if rule.engine == "rule-timing":
+        return grammar.rule_weights(grammar.parse(p["rule"]), closes, p["rebalance"])
     if rule.engine == "ma-timing":
         return ma_timing_weights(closes, p["months"])
     if rule.engine == "ts-momentum":
@@ -241,7 +247,12 @@ class SearchConfig:
     top: int = 5  # rule sets that go from train to validation
     cost_bps: float = 5.0
     blocks: int = 16  # PBO
-    families: tuple[str, ...] = FAMILIES
+    families: tuple[str, ...] = DEFAULT_FAMILIES
+    # the grammar family's genetic search (tp_strategies.grammar)
+    population: int = 60
+    generations: int = 15
+    keep: int = 20  # of its last generation, the best that join the fixed rule sets
+    seed: int = 0
 
 
 def search(
@@ -255,6 +266,9 @@ def search(
     performance survives. ``trial_sharpes``: records this run's rule sets and returns the
     Sharpe of every one ever tried (the trials ledger); None counts only this run's."""
     rules = [r for r in rule_sets(cfg.families) if set(universe(r)) & set(closes.columns)]
+    evolution = _evolve(closes, cfg, periods) if "grammar" in cfg.families else None
+    if evolution is not None:
+        rules += [_grammar_rule(c) for c, _ in evolution.population[: cfg.keep]]
     if not rules:
         raise ValueError("no bars for any family's universe: tp-data bars backfill")
     returns = {}
@@ -292,10 +306,18 @@ def search(
     rows: list[dict[str, Any]] = [
         {"params": r.key(), "sharpe": _sharpe(seen[r.label])} for r in rules
     ]
+    if evolution is not None:  # every rule the genetic search scored is a trial too
+        kept = {r.label for r in rules}
+        for key, r in evolution.evaluated.items():
+            rule = _grammar_rule(evolution.candidates[key])
+            if rule.label not in kept:
+                rows.append({"params": rule.key(), "sharpe": _sharpe(r.reindex(seen.index))})
     all_trials = trial_sharpes(rows) if trial_sharpes else [float(row["sharpe"]) for row in rows]
     deflated = deflated_sharpe(seen[chosen_label], all_trials)
     variants = [(r.key(), frame[r.label]) for r in rules]
-    wf = walk_forward(variants, periods.wf_train, periods.wf_train, periods.wf_test)
+    # the grammar's rules were bred on the training period: walk forward only after it
+    start = int(train.sum()) if evolution is not None else periods.wf_train
+    wf = walk_forward(variants, start, periods.wf_train, periods.wf_test)
     out_of_sample = frame.loc[test, chosen_label]
     return {
         "config": {"top": cfg.top, "cost_bps": cfg.cost_bps, "families": list(cfg.families)},
@@ -306,6 +328,16 @@ def search(
             "validation_end": str(periods.validation_end),
         },
         "rule_sets": len(rules),
+        "grammar": (
+            {
+                "scored": len(evolution.evaluated),
+                "generations": evolution.generations,
+                "population": cfg.population,
+                "kept": min(cfg.keep, len(evolution.population)),
+            }
+            if evolution is not None
+            else None
+        ),
         "table": table,
         "finalists": list(finalists.index),
         "chosen": chosen,
@@ -317,6 +349,27 @@ def search(
         "wf_test": periods.wf_test,
         "_returns": frame,
     }
+
+
+def _grammar_rule(c: grammar.Candidate) -> RuleSet:
+    params = {"rule": c.text, "rebalance": c.rebalance}
+    return RuleSet("grammar", params, "rule-timing", dict(params))
+
+
+def _evolve(
+    closes: pd.DataFrame, cfg: SearchConfig, periods: ValidationConfig
+) -> grammar.Evolution | None:
+    """Breed grammar rules on the training period (DIVERSIFIED's assets)."""
+    cols = [s for s in DIVERSIFIED if s in closes.columns]
+    if not cols:
+        return None
+    px = closes[cols]
+    index = pd.DatetimeIndex(px.index)
+    train = pd.Series(index <= pd.Timestamp(periods.train_end), index=index)
+    return grammar.evolve(
+        px, train, lambda w: daily_returns(w, px, cfg.cost_bps),
+        population=cfg.population, generations=cfg.generations, seed=cfg.seed,
+    )  # fmt: skip
 
 
 def _first_active(r: pd.Series) -> int:
@@ -353,7 +406,10 @@ def _fmt(value: Any) -> str:
 
 
 def engine_command(rule: RuleSet) -> str:
-    params = " ".join(f"-p {k}={v}" for k, v in rule.engine_params.items())
+    params = " ".join(
+        f"-p '{k}={v}'" if any(ch in str(v) for ch in "(),") else f"-p {k}={v}"
+        for k, v in rule.engine_params.items()
+    )
     return f"tp-backtest validate {rule.engine} {params}".strip()
 
 
@@ -369,6 +425,13 @@ def report_text(report: Mapping[str, Any], looks: int | None = None) -> str:
         "",
         f"Best {len(report['finalists'])} on train, then validation (Sharpe):",
     ]
+    g = report.get("grammar")
+    if g:
+        lines[1:1] = [
+            f"The grammar's genetic search scored {g['scored']} rules over {g['generations']} "
+            f"generations on the training period alone; its best {g['kept']} joined the fixed rule "
+            f"sets above, and all {g['scored']} count as trials for the Deflated Sharpe.",
+        ]
     for label in report["finalists"]:
         row = table.loc[label]
         mark = "→" if label == chosen.label else " "

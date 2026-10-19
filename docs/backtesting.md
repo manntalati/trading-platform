@@ -93,6 +93,7 @@ backtest gate**, which can also run them. A weekly cron entry keeps them current
 ```bash
 uv run tp-backtest search                              # all three families, 41 rule sets
 uv run tp-backtest search --families momentum,reversion
+uv run tp-backtest search --families trend,grammar     # plus rules bred by a genetic search
 ```
 
 Searching is how backtests lie. Try enough variations and one of them looks great by luck. So
@@ -104,6 +105,17 @@ Searching is how backtests lie. Try enough variations and one of them looks grea
   skipped, holding 5 or 10.
 - **Reversion**: strategy 5's RSI(2) dips at entry levels 5 to 20, trend filters of 100 and 200
   days, and exits above the 5- and 10-day average.
+- **Grammar** (opt in): rules bred by a genetic search over a small grammar of signals: price
+  above an average, momentum, average crosses, a low-volatility filter and RSI, combined with
+  and/or/not, at most three levels deep, held at equal weight across strategy 2's nine ETFs and
+  checked daily, weekly or monthly ([`grammar.py`](../strategies/src/tp_strategies/grammar.py)).
+  The search breeds them on the training period alone (60 rules a generation for 15
+  generations by default, `--population`, `--generations`, `--seed`), scoring each by its
+  training Sharpe less a penalty per node so a simpler rule wins a tie. The best 20 of the last
+  generation join the fixed rule sets in the protocol below, and **every rule it scored**, often
+  hundreds, goes into the trials ledger: the Deflated Sharpe bar rises accordingly, which is the
+  price of searching that widely. The walk-forward of the search starts after the training
+  period, since the rules were bred on it. A pick maps to strategy 14 (`rule-timing`).
 
 The rule sets are vectorized versions of the library strategies: decided at a close, earning from
 the next session, with costs on turnover. That's fast (a few seconds), but it's a screen, not the

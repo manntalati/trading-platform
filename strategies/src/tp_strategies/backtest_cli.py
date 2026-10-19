@@ -28,10 +28,18 @@ from tp_core.storage import Lake
 from tp_risk.manager import RiskManager
 from tp_strategies.backtest import risk_gate, run_backtest
 from tp_strategies.library import REGISTRY, build, parameters
+from tp_strategies.library.ts_momentum import DIVERSIFIED
 from tp_strategies.regime_gate import METHODS as REGIME_METHODS
 from tp_strategies.regime_gate import make_gate
 from tp_strategies.research_cli import app as research_app
-from tp_strategies.search import FAMILIES, SearchConfig, rule_sets, run_search, universe
+from tp_strategies.search import (
+    DEFAULT_FAMILIES,
+    FAMILIES,
+    SearchConfig,
+    rule_sets,
+    run_search,
+    universe,
+)
 from tp_strategies.search import report_text as search_report_text
 from tp_strategies.validation import ValidationConfig, paper_params, paper_regimes
 from tp_strategies.validation import validate as run_validation
@@ -361,8 +369,12 @@ def validate(
 @app.command("search")
 def search_cmd(
     families: Annotated[
-        str, typer.Option(help=f"Comma-separated, from {', '.join(FAMILIES)}.")
-    ] = ",".join(FAMILIES),
+        str,
+        typer.Option(
+            help=f"Comma-separated, from {', '.join(FAMILIES)} (grammar: a genetic search over "
+            "a grammar of signals; opt in, it adds many trials)."
+        ),
+    ] = ",".join(DEFAULT_FAMILIES),
     top: Annotated[int, typer.Option(help="Rule sets taken from train to validation.")] = 5,
     cost_bps: Annotated[float, typer.Option(help="Cost per unit traded, basis points.")] = 5.0,
     record: Annotated[
@@ -370,6 +382,9 @@ def search_cmd(
         typer.Option(help="Count this search in the trials ledger and the test looks (keep on)."),
     ] = True,
     log: Annotated[bool, typer.Option(help="Record the run in MLflow.")] = True,
+    generations: Annotated[int, typer.Option(help="grammar: generations to breed.")] = 15,
+    population: Annotated[int, typer.Option(help="grammar: rules per generation.")] = 60,
+    seed: Annotated[int, typer.Option(help="grammar: random seed.")] = 0,
 ) -> None:
     """Search many simple rule sets at once, guarded by train/validation/test, the Deflated
     Sharpe over every rule set ever tried, the probability of backtest overfitting and a
@@ -384,14 +399,18 @@ def search_cmd(
         if settings.validation_file.exists()
         else ValidationConfig()
     )
-    wanted = sorted({s for rule in rule_sets(chosen) for s in universe(rule)})
+    wanted = sorted({s for rule in rule_sets(chosen) for s in universe(rule)}
+                    | (set(DIVERSIFIED) if "grammar" in chosen else set()))  # fmt: skip
     have = [s for s in wanted if s not in missing_symbols(lake, [s])]
     if not have:
         typer.echo("needs daily bars: tp-data bars backfill --years 10")
         raise typer.Exit(code=2)
     closes = close_matrix(load_bars(lake, have))
     now = datetime.now(UTC)
-    cfg = SearchConfig(top=top, cost_bps=cost_bps, families=chosen)
+    cfg = SearchConfig(
+        top=top, cost_bps=cost_bps, families=chosen,
+        generations=generations, population=population, seed=seed,
+    )  # fmt: skip
     try:
         report, looks = run_search(lake, closes, cfg, periods, now=now, record=record)
     except ValueError as exc:
