@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from tp_core.storage import Lake
@@ -102,7 +103,8 @@ def test_run_with_a_regime_gate_and_the_comparison(lake: Lake) -> None:
     assert json.loads((run_dir / "summary.json").read_text())["config"]["regime"] == "trend"
     bad = CliRunner().invoke(backtest_cli.app, ["run", "ma-timing", "--regime", "vix"])
     assert bad.exit_code == 2  # no VIX in this lake: a usage error on --regime
-    assert "--regime" in bad.output
+    with pytest.raises(typer.BadParameter, match="tp-data macro backfill"):
+        backtest_cli._gate(lake, "vix")
     compared = CliRunner().invoke(
         backtest_cli.app, ["regime", "ma-timing", "--start", "2021-06-01"]
     )
