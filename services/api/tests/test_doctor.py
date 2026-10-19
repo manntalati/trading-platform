@@ -73,7 +73,14 @@ def test_schedules_from_systemd_or_cron(tmp_path: Path) -> None:
         checks["Schedules/VIX and Treasury yields"].fix
     )
     no_systemd = by_name(doctor.schedules(run=lambda cmd: "", crontab_path=cron))
-    assert "crontab" in no_systemd["Schedules/Daily bars"].fix
+    assert "tp-api" in no_systemd["Schedules/Daily bars"].fix
+    assert "crontab" in no_systemd["Schedules/Paper bot (service or cron)"].fix
+    builtin = by_name(doctor.schedules(run=lambda cmd: "", crontab_path=cron, builtin=True))
+    assert builtin["Schedules/Daily bars"].detail == "scheduled (the built-in scheduler)"
+    assert (
+        builtin["Schedules/Fidelity sync"].detail == "scheduled (cron, and the built-in scheduler)"
+    )
+    assert builtin["Schedules/Paper bot (service or cron)"].status == "todo"
 
 
 def test_render_and_the_paper_bot(tmp_path: Path) -> None:

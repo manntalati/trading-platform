@@ -1,9 +1,12 @@
 """Options research: swing, LEAPS and bearish ideas; one symbol in depth; fetching a new ticker;
 and Claude to pressure-test an idea.
 
-``GET /api/research`` ranks every eligible name with daily bars (your research list, the options
-universe, your holdings and the bars universe) and picks contracts from the latest chains (see
-``tp_strategies.options_research``). It's cached for a few minutes: the inputs change daily.
+``GET /api/research`` serves the latest stored run of the recommendations (see
+``tp_strategies.recommendations``): every eligible name with daily bars (your research list, the
+options universe, your holdings and the bars universe) ranked, with contracts picked from the
+latest chains (``tp_strategies.options_research``). The job scheduler makes a new run whenever new
+data lands; if the stored run is older than the data (the scheduler is off), the request makes
+one. ``GET /api/research/track-record`` shows how past recommendations have done.
 """
 
 from __future__ import annotations
@@ -13,7 +16,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -26,22 +29,15 @@ from tp_core.calendar import NEW_YORK
 from tp_core.config import MissingCredentialsError, Settings, load_universes
 from tp_core.fundamentals import load_events, load_facts
 from tp_core.fundamentals import summary as fundamentals_summary
-from tp_core.pnl import option_label
-from tp_core.portfolio import CASH_KIND, held_symbols, holdings_table, latest_snapshot
+from tp_core.portfolio import holdings_table, latest_snapshot
 from tp_core.storage import Lake
 from tp_core.volatility import iv_history, latest_chains
-from tp_strategies.options_research import (
-    CHAIN_MAX_AGE_DAYS,
-    DISCLAIMER,
-    analyze,
-    bars_from_lake,
-    rv_forecast,
-    scan,
-)
+from tp_strategies import recommendations as recs
+from tp_strategies.options_research import DISCLAIMER, analyze, bars_from_lake, rv_forecast
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/research", dependencies=[Depends(require_token)])
-CACHE_SECONDS = 300.0
+CACHE_SECONDS = 30.0  # the stored run is re-read at most this often
 FETCH_YEARS = 2
 
 
@@ -49,44 +45,31 @@ def now_utc() -> datetime:
     return datetime.now(UTC)
 
 
-def research_symbols(ctx: queries.Context) -> list[str]:
-    u = ctx.universes
-    return list(
-        dict.fromkeys([*u.research, *u.options_underlyings, *held_symbols(ctx.lake), *u.bars])
-    )
-
-
 def held_summary(ctx: queries.Context) -> dict[str, str]:
     """What you hold per underlying, in words ("40 shares, 2 calls")."""
-    snap = latest_snapshot(ctx.lake)
-    if snap.empty:
-        return {}
-    table = holdings_table(snap, ctx.classifier)
-    out: dict[str, list[str]] = {}
-    for _, r in table[table["kind"] != CASH_KIND].iterrows():
-        underlying = str(r["underlying"])
-        qty = float(r["quantity"])
-        if r["kind"] == "option":
-            label = option_label(str(r["symbol"])) or str(r["symbol"])
-            out.setdefault(underlying, []).append(f"{qty:g} x {label}")
-        else:
-            out.setdefault(underlying, []).append(f"{qty:g} shares")
-    return {k: ", ".join(v) for k, v in out.items()}
+    return recs.held_summary(ctx.lake, ctx.classifier)
 
 
-def research_view(ctx: queries.Context, now: datetime) -> dict[str, Any]:
-    today = now.astimezone(NEW_YORK).date()
-    chains = latest_chains(ctx.lake, since=today - timedelta(days=CHAIN_MAX_AGE_DAYS))
-    report = scan(
+def new_run(ctx: queries.Context, now: datetime) -> dict[str, Any]:
+    """Make and store a run now."""
+    result = recs.run_recommendations(
         ctx.lake,
-        research_symbols(ctx),
+        universes=ctx.universes,
         classifier=ctx.classifier,
-        chains=chains,
         now=now,
-        rate=ctx.risk_free_rate(),
-        held=held_summary(ctx),
+        default_rate=ctx.settings.risk_free_rate,
     )
-    out: dict[str, Any] = queries.clean(report)
+    return recs.load_run(result.path)
+
+
+def research_view(ctx: queries.Context, now: datetime, *, fresh: bool = False) -> dict[str, Any]:
+    """The latest stored run's ideas, with when it was made and what changed; a new run first when
+    asked, when there is none, or when the data has moved on since."""
+    run = None if fresh else recs.latest_run(ctx.lake)
+    if run is None or run.get("inputs") != recs.input_stamp(ctx.lake):
+        run = new_run(ctx, now)
+    meta = {k: run.get(k) for k in ("run_id", "as_of", "bars_session", "previous_run", "dropped")}
+    out: dict[str, Any] = queries.clean({**run["research"], "run": meta})
     return out
 
 
@@ -223,10 +206,28 @@ def research(c: Ctx, request: Request, refresh: bool = False) -> dict[str, Any]:
     with cache.lock:
         if not refresh and cache.value is not None and time.monotonic() - cache.at < CACHE_SECONDS:
             return cache.value
-    value = research_view(c, now_utc())
+    value = research_view(c, now_utc(), fresh=refresh)
     with cache.lock:
         cache.value, cache.at = value, time.monotonic()
     return value
+
+
+@router.post("/run", dependencies=[Depends(require_dashboard_client)])
+def run_now(c: Ctx, request: Request) -> dict[str, Any]:
+    """Scan and store a new run now (a minute or less), and return it."""
+    value = research_view(c, now_utc(), fresh=True)
+    cache = _cache(request)
+    with cache.lock:
+        cache.value, cache.at = value, time.monotonic()
+    return value
+
+
+@router.get("/track-record")
+def track_record(c: Ctx) -> dict[str, Any]:
+    out: dict[str, Any] = queries.clean(
+        recs.track_record(c.lake, now_utc().astimezone(NEW_YORK).date())
+    )
+    return out
 
 
 @router.get("/symbol/{symbol}")

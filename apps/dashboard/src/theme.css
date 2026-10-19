@@ -1362,3 +1362,29 @@ a.quote:hover .sym {
 .dataset code {
   overflow-wrap: anywhere;
 }
+
+/* -- stored recommendations: when they were made, what's new ------------------------------- */
+
+.run-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.run-line .spacer {
+  flex: 1;
+}
+
+.pill.new {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--good) 20%, transparent);
+  color: var(--good);
+  font-weight: 600;
+  padding: 1px 8px;
+}
+
+.leg {
+  font-size: 12px;
+  white-space: nowrap;
+}

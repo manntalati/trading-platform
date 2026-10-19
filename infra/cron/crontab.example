@@ -1,5 +1,9 @@
 # Alternative to the systemd timers (prefer those: DST-aware, logs in the journal, failure hook).
 #
+# Simplest of all: keep `tp-api` running (it runs every job below on its own schedule, catching up
+# after sleep, and remakes the recommendations whenever new data lands), or replace this whole file
+# with one line:  */5 * * * *  cd $REPO && .venv/bin/tp-jobs once >> $REPO/data/logs/jobs.log 2>&1
+#
 # Debian/Ubuntu cron has no per-job time zone, so times here are UTC and chosen to land after
 # the US close in both EST and EDT: 23:30 UTC = 18:30 EST / 19:30 EDT.
 #
@@ -30,6 +34,11 @@ REPO=/home/YOU/trading-platform
 # Paper trading without the always-on service: `--once` runs whatever is due and exits, so every
 # five minutes is enough. The bot follows the exchange calendar itself (no UTC arithmetic).
 */5 * *   *   *      cd $REPO && .venv/bin/tp-paper bot --once >> $REPO/data/logs/paper.log 2>&1
+
+# New recommendations after the option snapshot and after the evening bars (the scheduler in
+# tp-api does this by itself whenever data changes).
+55 19 *   *   1-5    cd $REPO && .venv/bin/tp-recs run >> $REPO/data/logs/recommendations.log 2>&1
+45 23 *   *   1-5    cd $REPO && .venv/bin/tp-recs run >> $REPO/data/logs/recommendations.log 2>&1
 
 # Backtest validation (the plan's stage-1 gate) for every strategy, on Saturdays: a few minutes.
 # Exits 1 while any strategy hasn't passed, which is expected; the dashboard shows the reports.

@@ -2,10 +2,12 @@ import { useState, type ReactNode } from "react";
 import { useApi } from "../api";
 import { money, nyTime, pct, signedMoney, timeAgo } from "../format";
 import type {
+  JobsStatus,
   MarketRegime,
   PaperStatus,
   Portfolio,
   Positions,
+  Research,
   Status,
   TradeStats,
 } from "../types";
@@ -252,6 +254,47 @@ export function TradingPanel(p: PanelProps) {
   );
 }
 
+const IDEA_LISTS = [
+  { key: "swing", label: "Swing" },
+  { key: "leaps", label: "LEAPS" },
+  { key: "bearish", label: "Bearish" },
+  { key: "income", label: "Premium" },
+] as const;
+
+/** The latest recommendations: the top idea of each list, what's new since the previous session. */
+export function IdeasPanel(p: PanelProps) {
+  const research = useApi<Research>("/api/research", 120_000);
+  const r = research.data;
+  const fresh = r ? IDEA_LISTS.reduce((n, l) => n + r[l.key].filter((i) => i.new).length, 0) : 0;
+  return (
+    <RailPanel
+      id="ideas"
+      title="Ideas"
+      href="#/research"
+      {...p}
+      source={research}
+      summary={r ? <span className={fresh ? "" : "muted"}>{fresh ? `${fresh} new` : r.run ? nyTime(r.run.as_of) : ""}</span> : null}
+    >
+      {r &&
+        IDEA_LISTS.map(({ key, label }) => {
+          const top = r[key][0];
+          if (!top) return <RailRow key={key} label={`${label}: nothing right now`} />;
+          return (
+            <RailRow
+              key={key}
+              icon={top.new ? <Dot tone="good" /> : "▸"}
+              label={`${label} · ${top.symbol}`}
+              value={`${r[key].length} listed`}
+              href={`#/research/lookup/${encodeURIComponent(top.symbol)}`}
+            />
+          );
+        })}
+      {r?.run && <RailRow label="Updated" value={nyTime(r.run.as_of)} mono={false} />}
+      <RailRow label="How past ideas did" value="›" href="#/research/track-record" />
+    </RailPanel>
+  );
+}
+
 export function PaperPanel(p: PanelProps) {
   const paper = useApi<PaperStatus>("/api/paper", 60_000);
   const d = paper.data;
@@ -322,6 +365,7 @@ function verdict(report: { ok?: boolean; errors?: unknown } | null | undefined, 
 
 export function SystemPanel(p: PanelProps) {
   const status = useApi<Status>("/api/status", 60_000);
+  const jobs = useApi<JobsStatus>(p.open ? "/api/jobs" : null, 60_000);
   const d = status.data;
   const checks: { label: string; ok: boolean | null; detail: string }[] = d
     ? [
@@ -356,6 +400,15 @@ export function SystemPanel(p: PanelProps) {
       {checks.map((c) => (
         <RailRow key={c.label} icon={<Dot tone={c.ok ? "good" : c.ok === false ? "critical" : "muted"} />} label={c.label} value={c.detail} href="#/system" />
       ))}
+      {jobs.data && (
+        <RailRow
+          icon={<Dot tone={jobs.data.running ? "good" : "warning"} />}
+          label="Job scheduler"
+          value={jobs.data.running ? "running" : "not running"}
+          href="#/system"
+          mono={false}
+        />
+      )}
     </RailPanel>
   );
 }
@@ -363,6 +416,7 @@ export function SystemPanel(p: PanelProps) {
 const PANELS = [
   { id: "account", Panel: AccountPanel, open: true },
   { id: "trading", Panel: TradingPanel, open: true },
+  { id: "ideas", Panel: IdeasPanel, open: true },
   { id: "market", Panel: MarketPanel, open: false },
   { id: "positions", Panel: PositionsPanel, open: false },
   { id: "paper", Panel: PaperPanel, open: false },

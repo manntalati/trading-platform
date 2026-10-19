@@ -127,6 +127,29 @@ On each position under **Portfolio → Positions**, priced from the latest chain
 
 Home lists the urgent ones (exercise at expiry, low odds, decisions before decay speeds up).
 
+## Kept, refreshed and scored
+
+The ideas are made on a schedule and kept. The job scheduler in `tp-api` makes a new run whenever
+new data lands (the midday and closing option chains, the evening bars, a Fidelity sync, macro
+data), and **Update now** makes one on the spot; opening the page reads the latest run at once.
+Each run is stored (`reports/recommendations/<run>.json` for 30 days, and one line per idea in
+`clean/recommendations_log` for good), so:
+
+- **New** marks an idea that wasn't on the same list at the previous session's last run, and each
+  list says which names dropped off since.
+- **Research → Track record** shows how every idea has done since it was first listed: the
+  stock's move in the recommended direction (a fall counts for a bearish idea) after 5 and 21
+  sessions and to date, against the S&P 500 over the same time, and the position itself marked at
+  the middle of the latest bid and ask, or at its value at expiry. Entries are the prices the
+  pick was made at (the ask to buy, the bid to sell), so the record is no kinder than a real fill.
+  For premium selling it's the share of the premium kept. Per list: how many ideas, how many are
+  profitable, the median result, how often the stock went the right way, how often it beat the
+  S&P 500.
+
+From the terminal: `uv run tp-recs run` (make one now), `tp-recs show` (the latest, ★ for new)
+and `tp-recs scorecard` (the track record). A track record of rules applied to past data is
+evidence about the rules, not a promise; a few weeks of it is mostly noise.
+
 ## Asking Claude
 
 Each symbol in **Look up** has a chat with Claude, which gets the setup, option pricing, every

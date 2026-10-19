@@ -27,6 +27,13 @@ def serve(
     build: Annotated[
         bool, typer.Option(help="Rebuild the dashboard first if its source changed (needs Node).")
     ] = True,
+    jobs: Annotated[
+        bool,
+        typer.Option(
+            help="Run the data jobs and recommendations on their schedule while the server is up "
+            "(see tp-jobs)."
+        ),
+    ] = True,
 ) -> None:
     """Serve the API on http://HOST:PORT (the dashboard too, once built)."""
     settings = Settings()
@@ -41,7 +48,9 @@ def serve(
     )
     if build:
         ensure_built()
-    uvicorn.run(create_app(settings, quotes=quotes), host=host, port=port, log_level="info")
+    uvicorn.run(
+        create_app(settings, quotes=quotes, jobs=jobs), host=host, port=port, log_level="info"
+    )
 
 
 def main() -> None:

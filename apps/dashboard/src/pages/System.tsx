@@ -1,8 +1,9 @@
-import { useApi } from "../api";
+import { useState } from "react";
+import { ApiError, postJson, useApi } from "../api";
 import { Card, ErrorBanner, Loading } from "../components/ui";
-import { issueSummary, timeAgo } from "../format";
+import { issueSummary, nyTime, timeAgo } from "../format";
 import type { LiveState } from "../live";
-import type { DataMap, Status } from "../types";
+import type { DataMap, JobInfo, JobsStatus, Status } from "../types";
 
 function Row(props: { label: string; ok: boolean | null; detail: string }) {
   const state = props.ok === null ? "" : props.ok ? "good" : "critical";
@@ -159,7 +160,109 @@ export default function System({ live }: { live: LiveState }) {
           </div>
         </Card>
       )}
+      <JobsCard />
       <DataMapCard />
     </div>
+  );
+}
+
+const JOB_STATE: Record<string, { tone: string; text: string }> = {
+  ok: { tone: "good", text: "ran" },
+  fresh: { tone: "good", text: "up to date" },
+  failed: { tone: "warning", text: "failed, retrying" },
+  "gave up": { tone: "critical", text: "failed" },
+};
+
+/** The job scheduler: what runs when, how each job's last run went, and a button to run one now. */
+export function JobsCard() {
+  const res = useApi<JobsStatus>("/api/jobs", 30_000);
+  const [error, setError] = useState<string | null>(null);
+  const [asked, setAsked] = useState<string | null>(null);
+  const s = res.data;
+  async function runNow(name: string) {
+    setError(null);
+    setAsked(name);
+    try {
+      await postJson<JobsStatus>(`/api/jobs/${encodeURIComponent(name)}/run`, {});
+      window.setTimeout(res.reload, 3000);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+    }
+  }
+  return (
+    <Card
+      title="Scheduled jobs"
+      hint={
+        s ? (
+          s.running ? (
+            <span>
+              <span className="dot good" aria-hidden="true" /> scheduler running{s.here ? " in this server" : ` (pid ${s.pid})`}
+            </span>
+          ) : (
+            <span>
+              <span className="dot warning" aria-hidden="true" /> scheduler not running: <code>uv run tp-api</code> runs it, or <code>uv run tp-jobs run</code>
+            </span>
+          )
+        ) : null
+      }
+    >
+      <ErrorBanner error={res.error ?? error} />
+      {!s ? (
+        <Loading />
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Job</th>
+                <th>When (New York)</th>
+                <th>Last run</th>
+                <th>Next</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {s.jobs.map((j) => (
+                <JobRow key={j.name} job={j} onRun={() => runNow(j.name)} asked={asked === j.name} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="muted small">
+        A job runs once in each window, as soon as the window opens or the computer is next awake inside it, so a laptop that slept through the evening still
+        gets its bars. Output goes to <code>data/logs/&lt;job&gt;.log</code>. <code>TP_JOBS_OFF=options-midday,validation</code> in <code>.env</code> turns jobs off.
+      </p>
+    </Card>
+  );
+}
+
+function JobRow({ job, onRun, asked }: { job: JobInfo; onRun: () => void; asked: boolean }) {
+  const last = job.last;
+  const state = job.off ? { tone: "", text: "off" } : job.blocked ? { tone: "", text: job.blocked } : last ? JOB_STATE[last.status] : { tone: "", text: "not run yet" };
+  return (
+    <tr>
+      <td>
+        {job.title}
+        <div className="muted small mono">{job.command}</div>
+      </td>
+      <td className="small">
+        {job.when}
+        {job.elsewhere && <div className="muted">also in {job.elsewhere}</div>}
+      </td>
+      <td className="small">
+        <span className={`dot ${state?.tone ?? ""}`} aria-hidden="true" /> {state?.text}
+        {last && <span className="muted"> · {timeAgo(last.finished_at)}</span>}
+        {last && last.status !== "ok" && last.status !== "fresh" && <div className="muted">{last.message}</div>}
+      </td>
+      <td className="small">{job.off || job.blocked ? "—" : job.open_now ? "due now" : job.next ? nyTime(job.next) : "—"}</td>
+      <td>
+        {!job.off && !job.blocked && (
+          <button onClick={onRun} disabled={asked}>
+            {asked ? "Started" : "Run now"}
+          </button>
+        )}
+      </td>
+    </tr>
   );
 }

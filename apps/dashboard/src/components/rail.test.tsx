@@ -22,6 +22,13 @@ const responses: Record<string, unknown> = {
     },
   },
   "/api/market/regime": { current: null, history: [] },
+  "/api/research": {
+    run: { run_id: "r1", as_of: "2026-01-09T20:52:00Z", bars_session: "2026-01-08", previous_run: "r0", dropped: {} },
+    swing: [{ symbol: "XYZ", kind: "swing", new: true }, { symbol: "ABC", kind: "swing", new: false }],
+    leaps: [{ symbol: "ABC", kind: "leaps", new: false }],
+    bearish: [],
+    income: [],
+  },
 };
 
 beforeEach(() => {
@@ -63,9 +70,17 @@ describe("Rail", () => {
     const account = screen.getByRole("region", { name: "Account" });
     expect(account).toHaveTextContent("Loading…");
     expect(account).not.toHaveTextContent("not synced");
-    expect(await screen.findByText(/Couldn't load/)).toBeInTheDocument(); // the trades stats request failed
+    expect((await screen.findAllByText(/Couldn't load/)).length).toBeGreaterThan(0); // the other requests failed
     answer(new Response(JSON.stringify(responses["/api/portfolio"])));
     expect((await screen.findAllByText("$25,000")).length).toBeGreaterThan(0);
+  });
+
+  it("lists the newest ideas, the top one of each list", async () => {
+    render(<Rail />);
+    expect(await screen.findByText("1 new")).toBeInTheDocument();
+    expect(screen.getByText("Swing · XYZ")).toBeInTheDocument();
+    expect(screen.getByText("Bearish: nothing right now")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /How past ideas did/ })).toHaveAttribute("href", "#/research/track-record");
   });
 
   it("collapses and expands a panel, and remembers it", async () => {

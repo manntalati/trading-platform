@@ -72,7 +72,14 @@ uv run tp-broker show                     # print the latest portfolio
 uv run tp-broker check                    # trades missing? compares SnapTrade with the lake
 uv run tp-broker sync --source fake       # demo portfolio, no keys needed
 uv run tp-ideas                           # rules-based research ideas, with the numbers behind each
+uv run tp-recs show                       # the latest stored options ideas (new ones starred)
+uv run tp-recs scorecard                  # how past recommendations have done since
+uv run tp-jobs status                     # the job scheduler: each job's last run and next window
 ```
+
+`tp-api` runs a job scheduler while it's up: the data jobs in their windows on the exchange
+calendar (catching up after the computer slept) and new recommendations whenever new data lands.
+On a Mac, `make mac-agent` keeps it running from login ([docs/setup.md](docs/setup.md#6-schedules)).
 
 How the ideas are generated: [docs/ideas.md](docs/ideas.md). Options research (swing, LEAPS
 and premium-selling ideas with the contract each would use, the smile and skew, and what to do
@@ -86,7 +93,8 @@ A FastAPI service with live prices over WebSocket, serving a React dashboard: po
 you're up or down (options included), every position's statistics (options with live quotes,
 greeks, odds and scenarios) and a Claude chat about each ([docs/positions.md](docs/positions.md)),
 every trade (yours and the paper bot's) with its P&L, how you trade (win rate, typical return,
-how long you hold calls and shares), paper trading, benchmarks, ideas, strategies, options and system health. `tp-api` rebuilds the
+how long you hold calls and shares), options ideas refreshed as data lands with a track record of
+how past ones did, paper trading, benchmarks, ideas, strategies, options and system health. `tp-api` rebuilds the
 UI when its source changed. Details: [docs/dashboard.md](docs/dashboard.md).
 
 ```bash

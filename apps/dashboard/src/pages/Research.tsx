@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ApiError, getJson, postJson, useApi } from "../api";
 import { Card, Delta, Empty, ErrorBanner, go, Loading, Stat, SubNav } from "../components/ui";
-import { money, num, pct, qty, signedMoney } from "../format";
+import { money, num, nyTime, pct, qty, signedMoney } from "../format";
 import type { LiveState } from "../live";
 import {
   isCalendar,
@@ -14,12 +14,14 @@ import {
   type CreditSpreadPick,
   type FetchState,
   type Fundamentals,
+  type IdeaList,
   type IronCondorPick,
   type Pick,
   type Research as ResearchData,
   type ResearchIdea,
   type SpreadPick,
   type SymbolResearch,
+  type TrackRecord,
   type VolContext,
 } from "../types";
 import Ideas from "./Ideas";
@@ -29,6 +31,7 @@ import { AskPanel, Scenarios } from "./Positions";
 
 const VIEWS = [
   { key: "ideas", label: "Options ideas" },
+  { key: "track-record", label: "Track record" },
   { key: "lookup", label: "Look up a symbol" },
   { key: "checks", label: "Portfolio checks" },
 ];
@@ -41,6 +44,7 @@ export default function Research({ live, sub, detail }: { live: LiveState; sub: 
     <div className="grid">
       <SubNav base="research" current={current} items={VIEWS} />
       {current === "ideas" && <OptionsIdeas />}
+      {current === "track-record" && <TrackRecordView />}
       {current === "lookup" && <Lookup symbol={detail?.toUpperCase() ?? null} live={live} />}
       {current === "checks" && <Ideas />}
     </div>
@@ -74,16 +78,43 @@ const KINDS = [
 type Kind = (typeof KINDS)[number]["key"];
 
 function OptionsIdeas() {
-  const data = useApi<ResearchData>("/api/research", 300_000);
+  const data = useApi<ResearchData>("/api/research", 120_000);
   const [kind, setKind] = useState<Kind>("swing");
+  const [updating, setUpdating] = useState(false);
+  const [updateError, setUpdateError] = useState<string | null>(null);
   const r = data.data;
   if (data.loading && !r) return <Loading />;
   if (!r) return <ErrorBanner error={data.error} />;
   const info = KINDS.find((k) => k.key === kind)!;
   const ideas = r[kind];
+  const dropped = r.run?.dropped?.[kind] ?? [];
+  async function update() {
+    setUpdating(true);
+    setUpdateError(null);
+    try {
+      await postJson<ResearchData>("/api/research/run", {});
+      data.reload();
+    } catch (e) {
+      setUpdateError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setUpdating(false);
+    }
+  }
   return (
     <div className="grid">
-      <ErrorBanner error={data.error} />
+      <ErrorBanner error={data.error ?? updateError} />
+      <div className="run-line">
+        <span>
+          Updated <strong>{r.run ? nyTime(r.run.as_of) : "just now"}</strong>
+          {r.run?.bars_session ? <> · daily bars through {r.run.bars_session}</> : null}
+          {newCount(r) > 0 ? <> · <span className="pill new">{newCount(r)} new since the previous session</span></> : null}
+        </span>
+        <span className="spacer" />
+        <span className="muted small">The job scheduler refreshes these whenever new data lands.</span>
+        <button onClick={update} disabled={updating}>
+          {updating ? "Updating…" : "Update now"}
+        </button>
+      </div>
       <div className="banner">
         {r.scanned} names scanned, {r.with_chains} with option chains
         {r.chains_as_of ? ` (as of ${new Date(r.chains_as_of).toLocaleString()})` : ""}. IV rank needs 20 days of daily snapshots
@@ -93,7 +124,8 @@ function OptionsIdeas() {
       <div className="toolbar">
         {KINDS.map((k) => (
           <button key={k.key} aria-pressed={kind === k.key} onClick={() => setKind(k.key)}>
-            {k.label} ({r[k.key].length})
+            {k.label} ({r[k.key].length}
+            {r[k.key].some((i) => i.new) ? `, ${r[k.key].filter((i) => i.new).length} new` : ""})
           </button>
         ))}
       </div>
@@ -111,6 +143,7 @@ function OptionsIdeas() {
           <Empty>No {info.label.toLowerCase()} setups right now.</Empty>
         </Card>
       )}
+      {dropped.length > 0 && <p className="muted small">No longer listed since the previous session: {dropped.join(", ")}.</p>}
       {Object.keys(r.errors ?? {}).length > 0 && (
         <p className="muted small">
           Skipped because of an error (details in the tp-api log): {Object.keys(r.errors ?? {}).join(", ")}.
@@ -126,6 +159,135 @@ function OptionsIdeas() {
   );
 }
 
+export function newCount(r: ResearchData): number {
+  return KINDS.reduce((n, k) => n + r[k.key].filter((i) => i.new).length, 0);
+}
+
+// -- how past recommendations did -----------------------------------------------------------------
+
+const LIST_LABEL: Record<IdeaList, string> = { swing: "Swing", leaps: "LEAPS", bearish: "Bearish", income: "Premium" };
+
+function TrackRecordView() {
+  const res = useApi<TrackRecord>("/api/research/track-record", 600_000);
+  const [list, setList] = useState<IdeaList | "all">("all");
+  const t = res.data;
+  if (res.loading && !t) return <Loading />;
+  if (!t) return <ErrorBanner error={res.error} />;
+  if (!t.recommendations.length) {
+    return (
+      <Card>
+        <Empty>No recommendations stored yet. The job scheduler stores every run from now on; their track record builds up here.</Empty>
+      </Card>
+    );
+  }
+  const rows = t.recommendations.filter((r) => list === "all" || r.list === list);
+  return (
+    <div className="grid">
+      <ErrorBanner error={res.error} />
+      <p className="muted small" style={{ margin: 0 }}>
+        Every idea the platform listed, from the first run it appeared in. <strong>Stock</strong> is the move since then in the direction recommended (a fall
+        counts as a gain for a bearish idea); <strong>Position</strong> marks the contracts at the middle of the latest bid and ask (entered at the ask for a
+        purchase and the bid for a sale), or at their value at expiry. For premium selling it is the share of the premium kept. Rules applied to data, not trades
+        anyone made.
+      </p>
+      <Card title="By list">
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th />
+                <th className="num">Ideas</th>
+                <th className="num" title="positions worth more than they cost (premium: some of it kept)">Profitable</th>
+                <th className="num">Median position</th>
+                <th className="num" title="the stock moved the recommended way after 5 sessions">Right way, 5d</th>
+                <th className="num" title="after 21 sessions">21d</th>
+                <th className="num">Median stock, 21d</th>
+                <th className="num">Beat S&amp;P 500</th>
+              </tr>
+            </thead>
+            <tbody>
+              {t.summary.map((s) => (
+                <tr key={s.list}>
+                  <td>{s.name}</td>
+                  <td className="num mono">{s.recommendations}</td>
+                  <td className="num mono">
+                    {pct(s.profitable, 0)} <span className="muted">of {s.marked}</span>
+                  </td>
+                  <td className="num mono">{pct(s.median_result, 0, true)}</td>
+                  <td className="num mono">{pct(s.right_way_5d, 0)}</td>
+                  <td className="num mono">{pct(s.right_way_21d, 0)}</td>
+                  <td className="num mono">{pct(s.median_move_21d, 1, true)}</td>
+                  <td className="num mono">{pct(s.beat_spy, 0)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+      <Card
+        title="Each recommendation"
+        hint={
+          <select aria-label="List" value={list} onChange={(e) => setList(e.target.value as IdeaList | "all")}>
+            <option value="all">All lists</option>
+            {t.summary.map((s) => (
+              <option key={s.list} value={s.list}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        }
+      >
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>First listed</th>
+                <th>Idea</th>
+                <th>Position</th>
+                <th className="num">Stock since</th>
+                <th className="num">vs S&amp;P 500</th>
+                <th className="num">Position</th>
+                <th className="num">P&amp;L (1 lot)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={`${r.list}${r.symbol}${r.recommended_at}${r.legs.map((l) => l.contract).join()}`}>
+                  <td className="mono small">{r.recommended_at.slice(0, 10)}</td>
+                  <td>
+                    <a href={`#/research/lookup/${encodeURIComponent(r.symbol)}`}>{r.symbol}</a> <span className="muted small">{LIST_LABEL[r.list]}</span>
+                    {r.runs > 1 && <span className="muted small"> · listed {r.runs} times</span>}
+                  </td>
+                  <td className="small">
+                    {r.structure}
+                    {r.legs.map((l) => (
+                      <div key={l.contract} className="muted leg">
+                        {l.side === "sell" ? "sold " : "bought "}
+                        {l.label}
+                      </div>
+                    ))}
+                  </td>
+                  <td className="num mono">
+                    <Delta value={r.move} digits={1} />
+                  </td>
+                  <td className="num mono">
+                    <Delta value={r.move_vs_spy} digits={1} />
+                  </td>
+                  <td className="num mono">
+                    {r.result != null ? <Delta value={r.result} digits={0} /> : <span className="muted">—</span>}
+                    {r.status === "expired" && <div className="muted small">expired</div>}
+                  </td>
+                  <td className="num mono">{r.pnl != null ? <span className={r.pnl >= 0 ? "up" : "down"}>{signedMoney(r.pnl)}</span> : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 export function IdeaCard({ idea }: { idea: ResearchIdea }) {
   return (
     <article className={`card idea ${idea.kind === "bearish" ? "attention" : idea.kind === "income" ? "consider" : "info"}`}>
@@ -133,6 +295,7 @@ export function IdeaCard({ idea }: { idea: ResearchIdea }) {
         <a href={`#/research/lookup/${encodeURIComponent(idea.symbol)}`} className="idea-symbol">
           {idea.symbol}
         </a>
+        {idea.new && <span className="pill new">new</span>}
         <span className="muted">{money(idea.spot, true)}</span>
         <span className="spacer" />
         <span className="small muted" title="rank among the names scanned (1 = best)">

@@ -5,8 +5,9 @@ A web dashboard over everything the platform collects, live while the market is 
 The layout is a workspace: the page you are on fills the middle, and a column of panels on the
 right keeps the rest in view. The top bar names the section you are in and what it is for; click
 it (or press **1**–**6**) to switch. Each panel on the right (**Account**, **Your trading**,
-**Market**, **Positions**, **Paper bot**, **System**) shows a one-line summary in its header,
-expands for the detail, and has a **›** that opens its full page in the middle. Which panels are
+**Ideas**, **Market**, **Positions**, **Paper bot**, **System**) shows a one-line summary in its header,
+expands for the detail, and has a **›** that opens its full page in the middle. **Ideas** shows the
+top idea of each list and how many are new since the previous session. Which panels are
 open is remembered on this browser; **◫** hides the column, **◐** cycles dark (the default),
 light and the system theme. Below 1100 px wide the panels move under the page.
 
@@ -16,10 +17,10 @@ Six sections, each answering one question:
 |---|---|---|
 | **Home** | What's going on today, and what needs me? | Account value and today's P&L (live), total P&L, options time decay, the paper bot, the market (trend, VIX, breadth) and rates (10-year and 3-month yields, the curve); **Needs your attention** (options about to be exercised or expire, actions the rules flag on positions, paper orders waiting, stale data), each linking to where you act; the top research ideas; live prices; recent trades |
 | **Portfolio** | What do I own, and what should I do about it? | The account's numbers on top, then three views. **Positions**: every holding with its statistics, options first by expiry; open one for live bid/ask, greeks, odds, scenarios, plain-language notes, **What you could do** (rolls, taking profits, covered calls, LEAPS in place of shares, protective puts, priced from the latest chain) and a Claude chat ([positions.md](positions.md)). **Allocation**: by sector and asset class, concentration, exposure per underlying (shares plus option delta). **Performance**: your account's time-weighted return and today's mix against the S&P 500, Nasdaq 100 and 60/40. **Risk**: the whole book's beta, volatility, Value at Risk and expected shortfall, option Greeks in dollars, a scenario grid (S&P 500 ±10% with implied volatility ±5 points, options repriced) and how correlated the largest positions are ([risk.md](risk.md#portfolio-risk)) |
-| **Research** | What should I look at next? | **Options ideas**: ranked swing calls, LEAPS, bearish puts and premium selling with the contract each would use ([research.md](research.md)). **Look up a symbol**: any ticker in depth (trend, option pricing and skew, every structure's contract including cash-secured puts, credit spreads, iron condors and calendars, scenarios, price chart, term structure and the smile with its SVI fit, Claude); a ticker the platform doesn't have yet can be fetched from there. **Portfolio checks**: the rules-based checks on your portfolio ([ideas.md](ideas.md)) |
+| **Research** | What should I look at next? | **Options ideas**: ranked swing calls, LEAPS, bearish puts and premium selling with the contract each would use, from the latest stored run (made whenever new data lands; **Update now** for a fresh one), new ones marked ([research.md](research.md#kept-refreshed-and-scored)). **Track record**: how every past idea has done since it was listed. **Look up a symbol**: any ticker in depth (trend, option pricing and skew, every structure's contract including cash-secured puts, credit spreads, iron condors and calendars, scenarios, price chart, term structure and the smile with its SVI fit, Claude); a ticker the platform doesn't have yet can be fetched from there. **Portfolio checks**: the rules-based checks on your portfolio ([ideas.md](ideas.md)) |
 | **Trades** | What did I (and the bot) trade, and how did it go? | **How you trade**: your own closed trades as statistics (below). **All trades**: every trade, yours and the paper bot's, newest first, with the P&L each realized; today's trades as pending until the transaction posts |
 | **Paper trading** | How are the automated strategies doing? | **Bot and orders**: the bot's state, queued orders with their reasons and a veto, approvals, every sleeve's equity and progress, the kill switch ([paper-trading.md](paper-trading.md)). **Strategy backtests** |
-| **System** | Is the data fresh, and where does it live? | Each job's last run; **Where your data lives**: every dataset's folder, size, last update, what writes it and what reads it, and how data flows from Fidelity, Alpaca and the paper bot to each section |
+| **System** | Is the data fresh, and where does it live? | Each job's last run; **Scheduled jobs**: the scheduler's jobs, when each runs, how its last run went, and a button to run one now ([setup.md](setup.md#6-schedules)); **Where your data lives**: every dataset's folder, size, last update, what writes it and what reads it, and how data flows from Fidelity, Alpaca and the paper bot to each section |
 
 Addresses are `#/section/view/detail` (for example `#/portfolio/positions/<symbol>` or
 `#/research/lookup/<symbol>`), so any view can be bookmarked. Old addresses (`#/overview`,
@@ -103,7 +104,9 @@ All JSON. Reads (`GET`):
 | `/api/portfolio` | accounts (masked), holdings with weights, classification and P&L, option terms (premium per share, breakeven, moneyness, days to expiry), exposures, and `pnl`: unrealized, realized, income, total |
 | `/api/positions` | every position with statistics, notes and actions; options with live quotes, greeks, odds and scenarios ([positions.md](positions.md)) |
 | `/api/positions/risk` | the whole book: exposure per underlying, beta, volatility, VaR and expected shortfall, correlation, option Greeks, scenario grid ([risk.md](risk.md#portfolio-risk)) |
-| `/api/research?refresh=false` | ranked swing, LEAPS and bearish ideas with contract picks ([research.md](research.md)); cached 5 minutes |
+| `/api/research?refresh=false` | ranked swing, LEAPS, bearish and premium-selling ideas with contract picks, from the latest stored run, with `run` (when it was made, what dropped off) and `new` on each idea ([research.md](research.md#kept-refreshed-and-scored)); `refresh=true` makes a run first |
+| `/api/research/track-record` | how every past recommendation has done: the stock's move since (5 and 21 sessions, to date, against the S&P 500) and the position marked now or at expiry; a summary per list |
+| `/api/jobs` | the job scheduler: whether it runs, and each job's schedule, last run and next window |
 | `/api/research/symbol/{symbol}` | one symbol in depth: trend, option pricing (IV, rank, skew, events), each structure's contract, earnings dates and valuation from SEC filings |
 | `/api/research/fetch` | the last ticker fetch: running, result |
 | `/api/system/data` | every dataset: folder, files, size, last update, what writes and reads it |
@@ -129,6 +132,8 @@ account):
 | `/api/paper/approve-all` | `{"strategy": "..."?}`: every pending proposal (of one strategy) |
 | `/api/paper/kill` | `{"reason": "..."}`: engage the kill switch and cancel open paper orders |
 | `/api/research/fetch` | `{"symbol": "..."}`: pull two years of bars and today's option chain for a ticker (background) |
+| `/api/research/run` | make and store a run of the recommendations now, and return it |
+| `/api/jobs/{name}/run` | run one scheduled job now (`bars`, `options-close`, `recommendations`, ...) |
 | `/api/research/ask` | `{"question": "...", "symbol": "...", "history": [...]}`: ask Claude about a research idea (needs `ANTHROPIC_API_KEY`) |
 | `/api/positions/ask` | `{"question": "...", "symbol": "..."?, "history": [...]}`: ask Claude about a position (needs `ANTHROPIC_API_KEY`; sends the figures to Anthropic's API) |
 | `/api/broker/sync` | `{"refresh": true?}`: sync the brokerage now (read-only), optionally having SnapTrade re-pull from Fidelity first; runs in the background |

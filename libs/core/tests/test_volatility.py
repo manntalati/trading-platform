@@ -93,6 +93,18 @@ def test_history_is_derived_once_and_extended(tmp_path: Path) -> None:
     latest = latest_chains(lake)
     assert set(latest) == {"XYZ", "ABC"}
     assert latest["XYZ"]["implied_volatility"].iloc[0] == pytest.approx(0.4)
+
+    # a second snapshot later the same day (midday, then the close) replaces that day's value
+    later = AT + timedelta(days=2, hours=3)
+    write_raw(lake, RAW_OPTION_CHAIN_SNAPSHOTS,
+              synthetic_chain("XYZ", 100.0, later, expirations=expiries(30, 60), iv=0.45),
+              run_id="r-close", partition={"snapshot_date": (DAY + timedelta(days=2)).isoformat(),
+                                           "underlying": "XYZ"},
+              schema=RAW_OPTION_CHAIN_SCHEMA)  # fmt: skip
+    third = iv_history(lake)
+    assert len(third) == 4
+    xyz = third[third["underlying"] == "XYZ"]["iv30"].tolist()
+    assert xyz == pytest.approx([0.2, 0.3, 0.45], abs=1e-6)
     assert latest_chains(lake, since=DAY + timedelta(days=1)).keys() == {"XYZ"}
 
 

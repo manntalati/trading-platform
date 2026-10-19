@@ -178,7 +178,15 @@ export default function Home({ live, pendingApprovals }: { live: LiveState; pend
             <Empty>{positions.loading ? "Checking…" : "Nothing urgent."}</Empty>
           )}
         </Card>
-        <Card title="Ideas to look at" hint={<a href="#/research">all ideas</a>}>
+        <Card
+          title="Ideas to look at"
+          hint={
+            <>
+              {research.data?.run && <span className="muted">updated {nyTime(research.data.run.as_of)} · </span>}
+              <a href="#/research">all ideas</a>
+            </>
+          }
+        >
           {ideas.length ? (
             <div className="notes">
               {ideas.map((i) => (
@@ -186,6 +194,7 @@ export default function Home({ live, pendingApprovals }: { live: LiveState; pend
                   <strong>
                     {i.symbol} · {i.kind === "swing" ? "swing" : i.kind === "leaps" ? "LEAPS" : i.kind === "income" ? "sell premium" : "bearish"}
                   </strong>
+                  {i.new && <span className="pill new">new</span>}
                   <div>{i.pick ? <PickLine pick={i.pick} /> : i.why[0]}</div>
                 </a>
               ))}
