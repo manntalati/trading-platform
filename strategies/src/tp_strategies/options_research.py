@@ -51,7 +51,7 @@ from tp_core.portfolio import Classifier
 from tp_core.positions import OptionPosition, scenarios, stock_stats, years_until
 from tp_core.smile import ExpiryFit, fit_expiry, term_shape
 from tp_core.storage import Lake
-from tp_core.volatility import atm_term, chain_spot, event_expiry, iv_at, iv_history, iv_rank
+from tp_core.volatility import atm_term, chain_spot, event_expiry, iv_at, iv_rank
 from tp_ml.vol import har_forecast
 
 Right = Literal["C", "P"]
@@ -112,7 +112,8 @@ class Rules:
 
 
 PRICED_COLUMNS = ("mid", "spread_pct", "years", "iv", "delta", "gamma", "theta", "vega")
-VENDOR_GREEKS = ["delta", "gamma", "theta", "vega", "rho"]
+QUOTE_COLUMNS = ("contract", "expiration", "right", "strike", "dte", "bid", "ask",
+                 "open_interest", "implied_volatility", "underlying_price")  # fmt: skip
 PRICED_STRIKES = (0.3, 2.0)  # as a share of spot: every window the picks and rolls look in
 
 
@@ -128,14 +129,17 @@ def price_chain(
     the whole chain. The picks filter this; pricing it once per symbol is what keeps a scan of
     many chains fast. Implied volatility is Black-Scholes, with the American model for a deep
     in-the-money put Black-Scholes can't fit and the vendor's figure as the last resort."""
-    c = chain[
+    keep = [k for k in QUOTE_COLUMNS if k in chain.columns]
+    c = chain.loc[
         chain["strike"].between(spot * strikes[0], spot * strikes[1])
         & (chain["bid"] > 0)
-        & (chain["ask"] >= chain["bid"])
-    ].drop(columns=VENDOR_GREEKS, errors="ignore")
+        & (chain["ask"] >= chain["bid"]),
+        keep,
+    ]
     if c.empty:
         return c.assign(**{k: pd.Series(dtype=float) for k in PRICED_COLUMNS})
-    c = c.copy()
+    # plain object strings: the picks filter this frame hundreds of times
+    c = c.astype({k: object for k in ("contract", "right") if k in c.columns})
     c["mid"] = (c["bid"] + c["ask"]) / 2
     c["spread_pct"] = (c["ask"] - c["bid"]) / c["mid"]
     expirations = [e if isinstance(e, date) else pd.Timestamp(e).date() for e in c["expiration"]]
@@ -719,9 +723,11 @@ def analyze(
     rate: float,
     rules: Rules | None = None,
     forecast: float | None = None,
+    priced: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     """Everything the research knows about one symbol: the stock, its options' pricing, and the
-    contract each approach would use. ``forecast``: the next month's volatility forecast."""
+    contract each approach would use. ``forecast``: the next month's volatility forecast;
+    ``priced``: the chain already priced (``price_chain``), to save pricing it twice."""
     rules = rules or Rules()
     stats = stock_stats(closes, None, benchmark)
     spot_now = chain_spot(chain) if chain is not None and not chain.empty else None
@@ -759,7 +765,7 @@ def analyze(
     }
     if chain is None or chain.empty or not spot:
         return out
-    chain = price_chain(chain, spot, now, rate)
+    chain = priced if priced is not None else price_chain(chain, spot, now, rate)
     picks: dict[str, Any] = {}
     for right, name in (("C", "call"), ("P", "put")):
         row = swing_pick(chain, spot, now, rate, right, rules)  # type: ignore[arg-type]
@@ -817,252 +823,6 @@ def _scenarios(row: pd.Series, spot: float, now: datetime, rate: float) -> dict[
     return scenarios(pos, spot=spot, iv=float(row["iv"]), now=now, rate=rate)
 
 
-# -- ranking ideas --------------------------------------------------------------------------------
-
-
-def rank_ideas(
-    analyses: list[dict[str, Any]],
-    held: Mapping[str, str],
-    rules: Rules | None = None,
-    groups: Mapping[str, str] | None = None,
-) -> dict[str, list[dict[str, Any]]]:
-    """Swing calls, LEAPS, bearish puts and premium selling, best first, each with why and
-    what to watch. Only names with a contract that fits make a list, and at most
-    ``rules.per_group`` from one sector or fund class (``groups``: symbol -> group) so one hot
-    industry can't fill it.
-
-    Scores are percentile ranks within the scanned names (so they compare names with each
-    other, not with an absolute bar): swing favours 6-month momentum, strength against the
-    S&P 500 and a pullback entry; LEAPS favours a long, steady uptrend with shallow drawdowns;
-    bearish mirrors swing for downtrends. Income takes names whose options are expensive (IV
-    rank or IV against realized volatility) and that aren't in a downtrend, richest first: a
-    cash-secured put on an uptrend, an iron condor on a stock going nowhere.
-    """
-    rules = rules or Rules()
-    df = pd.DataFrame(
-        [
-            {
-                "i": i,
-                "r6": _num((a["stock"].get("returns") or {}).get("6M")),
-                "r12": _num((a["stock"].get("returns") or {}).get("1Y")),
-                "rs": _num(a["setup"].get("rs_3m")),
-                "v200": _num(a["stock"].get("vs_ma200")),
-                "dd": _num(a["stock"].get("max_drawdown_1y")),
-            }
-            for i, a in enumerate(analyses)
-        ]
-    )
-    if df.empty:
-        return {"swing": [], "leaps": [], "bearish": [], "income": []}
-    ranks = df.drop(columns="i").rank(pct=True).to_dict("index")
-    out: dict[str, list[dict[str, Any]]] = {"swing": [], "leaps": [], "bearish": [], "income": []}
-    for idx, a in enumerate(analyses):
-        tags = a["setup"]["tags"]
-        p = {str(k): float(v) for k, v in ranks[idx].items()}
-        if a["setup"]["direction"] == "bullish":
-            swing = _mean(p["r6"], p["rs"], p["v200"]) + 0.1 * ("pullback" in tags)
-            swing -= 0.15 * ("extended" in tags)
-            out["swing"].append(_idea(a, "swing", swing, held))
-            leaps = _mean(p["r12"], p["v200"], p["dd"])  # dd: less negative ranks higher
-            out["leaps"].append(_idea(a, "leaps", leaps, held))
-        elif a["setup"]["direction"] == "bearish":
-            bear = _mean(1 - p["r6"], 1 - p["rs"], 1 - p["v200"])
-            out["bearish"].append(_idea(a, "bearish", bear, held))
-        vol = a["vol"]
-        if vol.get("rich") and a["setup"]["direction"] != "bearish":
-            richness = _mean(
-                vol.get("rank") if vol.get("rank") is not None else math.nan,
-                min((vol.get("iv_hv") or 0.0) / 2, 1.0),
-            )
-            out["income"].append(_idea(a, "income", richness, held))
-    for k in out:
-        ranked = sorted((i for i in out[k] if i["pick"] is not None), key=lambda x: -x["score"])
-        out[k] = _diversified(ranked, groups or {}, rules.per_group, rules.ideas_per_list)
-    return out
-
-
-def _diversified(
-    ranked: list[dict[str, Any]], groups: Mapping[str, str], per_group: int, size: int
-) -> list[dict[str, Any]]:
-    """The best ``size`` ideas, skipping any beyond ``per_group`` from one group."""
-    out: list[dict[str, Any]] = []
-    taken: dict[str, int] = {}
-    for idea in ranked:
-        group = groups.get(idea["symbol"], idea["symbol"])
-        if taken.get(group, 0) >= per_group:
-            continue
-        taken[group] = taken.get(group, 0) + 1
-        idea["group"] = group
-        out.append(idea)
-        if len(out) == size:
-            break
-    return out
-
-
-def _mean(*values: float) -> float:
-    vals = [float(v) for v in values if v == v]
-    return sum(vals) / len(vals) if vals else 0.0
-
-
-def _idea(a: dict[str, Any], kind: str, score: float, held: Mapping[str, str]) -> dict[str, Any]:
-    picks, vol, stock, setup = a["picks"], a["vol"], a["stock"], a["setup"]
-    why: list[str] = []
-    risks: list[str] = []
-    r = stock.get("returns") or {}
-    if kind in ("swing", "leaps"):
-        why.append(_trend_line(stock, up=True))
-    elif kind == "income":
-        why.append(
-            _trend_line(stock, up=True)
-            if setup["direction"] == "bullish"
-            else "No clear trend: a range is what a premium seller wants."
-        )
-    else:
-        why.append(_trend_line(stock, up=False))
-    rs = _num(setup.get("rs_3m"))
-    if rs is not None and a["symbol"] != "SPY":
-        side = "ahead of" if rs >= 0 else "behind"
-        why.append(
-            f"3-month return {_pct(r.get('3M'), signed=True)}, {abs(rs) * 100:.1f} points {side} "
-            "the S&P 500."
-        )
-    if "pullback" in setup["tags"]:
-        why.append(
-            "Pulled back to its 20-day average "
-            f"({_pct(stock.get('vs_ma20'), signed=True)}): a calmer entry."
-        )
-    if "extended" in setup["tags"]:
-        risks.append(
-            f"Extended: {_pct(stock.get('vs_ma20'), signed=True)} above its 20-day average; "
-            "chasing here risks a pullback."
-        )
-    if kind == "leaps":
-        dd = stock.get("max_drawdown_1y")
-        why.append(f"1-year return {_pct(r.get('1Y'))}; worst drop over the year {_pct(dd)}.")
-    pick: dict[str, Any] | None
-    alternative: dict[str, Any] | None = None
-    if kind == "swing":
-        pick, alternative = picks.get("swing_call"), picks.get("call_spread")
-        if vol.get("rich") and alternative is not None:
-            pick, alternative = alternative, pick
-    elif kind == "leaps":
-        pick = picks.get("leaps_call")
-    elif kind == "income":
-        if setup["direction"] == "bullish":
-            pick, alternative = picks.get("cash_secured_put"), picks.get("put_credit_spread")
-        else:
-            pick, alternative = picks.get("iron_condor"), picks.get("put_credit_spread")
-    else:
-        pick, alternative = picks.get("swing_put"), picks.get("put_spread")
-        if vol.get("rich") and alternative is not None:
-            pick, alternative = alternative, pick
-    why += _vol_lines(vol, kind)
-    if kind == "income":
-        risks.append(
-            "Selling options caps the gain at the premium; a sharp drop (or for a call spread, "
-            "a rally) costs far more than the premium earned. Size it for the maximum loss."
-        )
-    event = vol.get("event")
-    if event and kind == "income":
-        risks.append(
-            f"An event (often earnings) is priced before {event['by']}: that is why the premium "
-            "is rich. Selling through it is a bet the move will be smaller than priced."
-        )
-    elif event and kind != "leaps":
-        risks.append(
-            f"The option market is pricing an event (often earnings) before {event['by']}: implied "
-            "volatility usually drops right after, which costs option buyers even when the stock "
-            "moves their way."
-        )
-    if pick is None:
-        risks.append("No option chain for it yet (or no liquid contract fits the rules).")
-    if held.get(a["symbol"]):
-        risks.append(f"Already held: {held[a['symbol']]}.")
-    return {
-        "symbol": a["symbol"],
-        "kind": kind,
-        "score": score,
-        "spot": a["spot"],
-        "setup": setup,
-        "stock": stock,
-        "vol": vol,
-        "pick": pick,
-        "alternative": alternative,
-        "why": why,
-        "risks": risks,
-        "held": held.get(a["symbol"]),
-    }
-
-
-def _trend_line(stock: Mapping[str, Any], *, up: bool) -> str:
-    where = "above" if up else "below"
-    return (
-        f"{'Uptrend' if up else 'Downtrend'}: {_pct(stock.get('vs_ma50'), signed=True)} vs "
-        f"its 50-day and {_pct(stock.get('vs_ma200'), signed=True)} vs its 200-day average "
-        f"(price {where} both)."
-    )
-
-
-def _vol_lines(vol: Mapping[str, Any], kind: str) -> list[str]:
-    iv, hv = vol.get("iv30"), vol.get("hv20")
-    if iv is None:
-        return []
-    lines = []
-    rank = vol.get("rank")
-    rank_text = (
-        f"IV rank {_pct(rank, 0)} of its last {vol['history_days']} days"
-        if rank is not None
-        else f"IV rank from 20 days of history ({vol.get('history_days', 0)} so far)"
-    )
-    ratio = (
-        f", {vol['iv_hv']:.1f}x the stock's 20-day realized {_pct(hv, 0)}"
-        if vol.get("iv_hv")
-        else ""
-    )
-    if vol.get("iv_rv"):
-        ratio += (
-            f" and {vol['iv_rv']:.1f}x the {_pct(vol.get('rv_forecast'), 0)} forecast for the "
-            "next month"
-        )
-    lines.append(f"Options: 30-day implied volatility {_pct(iv, 0)}{ratio}; {rank_text}.")
-    if kind == "income":
-        lines.append(
-            "Options are expensive by those measures: the side to be on is the seller's, "
-            "collecting the premium that implied volatility above realized pays."
-        )
-    skew = vol.get("skew_25d")
-    if skew is not None and skew < -0.08 and kind in ("income", "bearish"):
-        lines.append(
-            f"Steep put skew: 25-delta puts trade {abs(skew) * 100:.0f} volatility points over "
-            "calls, so selling puts is paid well and buying them costs extra."
-        )
-    if vol.get("term_shape") == "backwardation" and kind != "leaps":
-        lines.append(
-            "Near-term options are dearer than longer ones (backwardation): the market expects "
-            "the next weeks to be rough."
-        )
-    if kind == "income":
-        return lines
-    if vol.get("rich") and kind != "leaps":
-        lines.append(
-            "Options are expensive by those measures, so the debit spread leads: it pays less "
-            "for volatility."
-        )
-    elif vol.get("rich"):
-        lines.append(
-            "Options are expensive by those measures; a LEAPS pays for it over its whole life, "
-            "so consider waiting for calmer pricing."
-        )
-    return lines
-
-
-def _pct(value: Any, digits: int = 1, *, signed: bool = False) -> str:
-    v = _num(value)
-    if v is None:
-        return "—"
-    return f"{v * 100:+.{digits}f}%" if signed else f"{v * 100:.{digits}f}%"
-
-
 # -- the whole scan -------------------------------------------------------------------------------
 
 
@@ -1071,7 +831,7 @@ def eligible(symbol: str, classifier: Classifier) -> bool:
 
 
 def bars_from_lake(
-    lake: Lake, symbols: list[str], today: date, days: int = 420
+    lake: Lake, symbols: list[str], today: date, days: int = 560
 ) -> dict[str, pd.DataFrame]:
     """Adjusted daily ``open``, ``high``, ``low``, ``close`` per symbol (DatetimeIndex)."""
     present = [s for s in dict.fromkeys(symbols) if s not in missing_symbols(lake, [s])]
@@ -1093,67 +853,6 @@ def rv_forecast(bars: pd.DataFrame | None) -> float | None:
     if bars is None:
         return None
     return har_forecast(bars, horizon=FORECAST_DAYS, min_sessions=200)
-
-
-def scan(
-    lake: Lake,
-    symbols: list[str],
-    *,
-    classifier: Classifier,
-    chains: Mapping[str, pd.DataFrame],
-    now: datetime,
-    rate: float,
-    held: Mapping[str, str] | None = None,
-    rules: Rules | None = None,
-) -> dict[str, Any]:
-    """Analyze ``symbols`` (those with daily bars) and rank the ideas."""
-    rules = rules or Rules()
-    today = now.astimezone(NEW_YORK).date()
-    wanted = [s for s in dict.fromkeys(symbols) if eligible(s, classifier)]
-    bars = bars_from_lake(lake, [*wanted, "SPY"], today)
-    closes = {symbol: b["close"] for symbol, b in bars.items()}
-    bench = closes.get("SPY")
-    history = iv_history(lake)
-    by_symbol = {
-        str(u): g.set_index("snapshot_date")["iv30"] for u, g in history.groupby("underlying")
-    }
-    analyses = []
-    errors: dict[str, str] = {}
-    for symbol in wanted:
-        series = closes.get(symbol)
-        if series is None or len(series) < 60:
-            continue
-        try:
-            analyses.append(
-                analyze(
-                    symbol,
-                    series,
-                    chain=chains.get(symbol),
-                    benchmark=bench,
-                    iv_hist=by_symbol.get(symbol),
-                    now=now,
-                    rate=rate,
-                    rules=rules,
-                    forecast=rv_forecast(bars.get(symbol)),
-                )
-            )
-        except Exception as exc:  # one odd chain must not take the whole scan down
-            log.exception("options research: %s failed", symbol)
-            errors[symbol] = f"{type(exc).__name__}: {exc}"
-    groups = {s: classifier.sectors.get(s) or classifier.funds.get(s) or s for s in wanted}
-    ideas = rank_ideas(analyses, held or {}, rules, groups)
-    without = sorted({a["symbol"] for a in analyses if not a["picks"]})
-    return {
-        "as_of": now.isoformat(),
-        "chains_as_of": max((c["snapshot_at"].max() for c in chains.values()), default=None),
-        "scanned": len(analyses),
-        "with_chains": sum(1 for a in analyses if a["picks"]),
-        "without_chains": without,
-        "errors": errors,
-        "iv_history_days": int(history["snapshot_date"].nunique()) if len(history) else 0,
-        **ideas,
-        "disclaimer": DISCLAIMER,
-    }
 
 
 # -- what to do with what you hold ----------------------------------------------------------------

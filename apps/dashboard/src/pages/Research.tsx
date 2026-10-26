@@ -7,6 +7,7 @@ import {
   isCalendar,
   isCondor,
   isCreditSpread,
+  isPlay,
   isSpread,
   type CalendarPick,
   type ChatTurn,
@@ -17,17 +18,20 @@ import {
   type IdeaList,
   type IronCondorPick,
   type Pick,
+  type PlayPick,
   type Research as ResearchData,
-  type ResearchIdea,
   type SpreadPick,
   type SymbolResearch,
   type TrackRecord,
-  type VolContext,
+  type TrackedRecommendation,
 } from "../types";
 import Ideas from "./Ideas";
+import { IdeaCard, PlayLine, WatchList } from "./Playbook";
 import { PriceHistory } from "./Market";
 import { OptionPricing } from "./Options";
 import { AskPanel, Scenarios } from "./Positions";
+
+export { IdeaCard } from "./Playbook";
 
 const VIEWS = [
   { key: "ideas", label: "Options ideas" },
@@ -57,22 +61,27 @@ const KINDS = [
   {
     key: "swing",
     label: "Swing calls",
-    rule: "Uptrends, ranked by 6-month momentum, strength against the S&P 500 and a calmer entry (a pullback). Contract: 30 to 100 days out, delta about 0.55; a debit spread instead when options are expensive.",
+    rule: "Calls or call spreads on setups that just fired: a pullback in an uptrend (RSI(2) under 10), a breakout from a squeeze, a strong earnings surprise. Each contract (expiry, delta, a single call or a spread) is chosen by its modeled return over the setup's horizon under the stock's volatility forecast, so cheap options favour calls and expensive ones spreads.",
   },
   {
     key: "leaps",
     label: "LEAPS",
-    rule: "Long, steady uptrends with shallow drawdowns. Contract: 9+ months out, delta about 0.80, the one paying the least time value per year: a stand-in for 100 shares.",
+    rule: "Trend leaders (12-1 month momentum, near their highs) pulling back to the 50-day average: a LEAPS call 9+ months out at delta 0.70-0.85, held for months. Leaders still extended are listed to wait for, with the entry level.",
   },
   {
     key: "bearish",
     label: "Bearish puts",
-    rule: "Downtrends lagging the S&P 500. Contract: 30 to 100 days out, delta about −0.55; a debit spread when options are expensive.",
+    rule: "Puts or put spreads on a bounce failing in a downtrend (RSI(2) over 90), a breakdown to a new 50-day low, or an earnings miss. Puts start with the market's upward drift against them; the model shows it.",
   },
   {
     key: "income",
     label: "Selling premium",
-    rule: "Expensive options (high IV rank, or implied well above realized volatility) on stocks not in a downtrend, richest first. Uptrends: a cash-secured put about 0.25 delta, 25 to 50 days out (a put credit spread caps the risk). No trend: an iron condor. The gain is capped at the premium; size for the maximum loss.",
+    rule: "Options at least 1.25x the volatility forecast (IV rank 50%+ when known) with no event priced in and no downtrend: put credit spreads, cash-secured puts, or an iron condor without a trend, valued at 21 days to expiry. The gain is capped at the premium; size for the maximum loss.",
+  },
+  {
+    key: "volatility",
+    label: "Cheap volatility",
+    rule: "Options at most 0.9x the volatility forecast, the term structure not inverted and no event priced in: a straddle that profits from movement either way.",
   },
 ] as const;
 type Kind = (typeof KINDS)[number]["key"];
@@ -86,7 +95,7 @@ function OptionsIdeas() {
   if (data.loading && !r) return <Loading />;
   if (!r) return <ErrorBanner error={data.error} />;
   const info = KINDS.find((k) => k.key === kind)!;
-  const ideas = r[kind];
+  const ideas = r[kind] ?? []; // runs stored before a list existed lack it
   const dropped = r.run?.dropped?.[kind] ?? [];
   async function update() {
     setUpdating(true);
@@ -116,6 +125,17 @@ function OptionsIdeas() {
         </button>
       </div>
       <div className="banner">
+        {r.calibration ? (
+          <>
+            Setups calibrated on {r.calibration.start ?? "the bars"} to {r.calibration.end ?? "now"} ({r.calibration.generated_at.slice(0, 10)}):
+            drifts and exits from the backtest.{" "}
+          </>
+        ) : (
+          <>
+            The setups aren't calibrated yet, so the model assumes an ordinary market drift and the default exits: run <code>tp-recs calibrate</code> (the
+            scheduler does weekly).{" "}
+          </>
+        )}
         {r.scanned} names scanned, {r.with_chains} with option chains
         {r.chains_as_of ? ` (as of ${new Date(r.chains_as_of).toLocaleString()})` : ""}. IV rank needs 20 days of daily snapshots
         {r.iv_history_days < 20 ? `: ${r.iv_history_days} so far, so implied vs realized volatility stands in.` : "."}{" "}
@@ -124,8 +144,8 @@ function OptionsIdeas() {
       <div className="toolbar">
         {KINDS.map((k) => (
           <button key={k.key} aria-pressed={kind === k.key} onClick={() => setKind(k.key)}>
-            {k.label} ({r[k.key].length}
-            {r[k.key].some((i) => i.new) ? `, ${r[k.key].filter((i) => i.new).length} new` : ""})
+            {k.label} ({(r[k.key] ?? []).length}
+            {(r[k.key] ?? []).some((i) => i.new) ? `, ${(r[k.key] ?? []).filter((i) => i.new).length} new` : ""})
           </button>
         ))}
       </div>
@@ -140,9 +160,10 @@ function OptionsIdeas() {
         </div>
       ) : (
         <Card>
-          <Empty>No {info.label.toLowerCase()} setups right now.</Empty>
+          <Empty>No {info.label.toLowerCase()} setups right now: none of the rules has fired on a name with a liquid contract.</Empty>
         </Card>
       )}
+      {kind === "leaps" && <WatchList items={r.watch ?? []} />}
       {dropped.length > 0 && <p className="muted small">No longer listed since the previous session: {dropped.join(", ")}.</p>}
       {Object.keys(r.errors ?? {}).length > 0 && (
         <p className="muted small">
@@ -151,7 +172,7 @@ function OptionsIdeas() {
       )}
       {r.without_chains.length > 0 && (
         <p className="muted small">
-          Ranked without option chains (no contract picked): {r.without_chains.join(", ")}. They get chains once they're in your research list.
+          Scanned without option chains (no contract to pick): {r.without_chains.join(", ")}. They get chains once they're in your research list.
         </p>
       )}
       <p className="muted small">{r.disclaimer}</p>
@@ -160,12 +181,23 @@ function OptionsIdeas() {
 }
 
 export function newCount(r: ResearchData): number {
-  return KINDS.reduce((n, k) => n + r[k.key].filter((i) => i.new).length, 0);
+  return KINDS.reduce((n, k) => n + (r[k.key] ?? []).filter((i) => i.new).length, 0);
 }
 
 // -- how past recommendations did -----------------------------------------------------------------
 
-const LIST_LABEL: Record<IdeaList, string> = { swing: "Swing", leaps: "LEAPS", bearish: "Bearish", income: "Premium" };
+const LIST_LABEL: Record<IdeaList, string> = { swing: "Swing", leaps: "LEAPS", bearish: "Bearish", income: "Premium", volatility: "Volatility" };
+
+function Followed({ r }: { r: TrackedRecommendation }) {
+  const f = r.followed;
+  if (!f) return <span className="muted">—</span>;
+  return (
+    <>
+      {f.result != null ? <Delta value={f.result} digits={0} /> : "—"}
+      <div className="muted small">{f.status === "closed" ? `${f.reason} · ${f.exit}` : `open · ${f.sessions} sessions`}</div>
+    </>
+  );
+}
 
 function TrackRecordView() {
   const res = useApi<TrackRecord>("/api/research/track-record", 600_000);
@@ -187,8 +219,9 @@ function TrackRecordView() {
       <p className="muted small" style={{ margin: 0 }}>
         Every idea the platform listed, from the first run it appeared in. <strong>Stock</strong> is the move since then in the direction recommended (a fall
         counts as a gain for a bearish idea); <strong>Position</strong> marks the contracts at the middle of the latest bid and ask (entered at the ask for a
-        purchase and the bid for a sale), or at their value at expiry. For premium selling it is the share of the premium kept. Rules applied to data, not trades
-        anyone made.
+        purchase and the bid for a sale), or at their value at expiry. For premium selling it is the share of the premium kept. <strong>Following the plan</strong>{" "}
+        closes each idea at the first session its exit plan said to (target, stop, the stock-side rule, the time stop or days to expiry), from the daily chain
+        snapshots. Rules applied to data, not trades anyone made.
       </p>
       <Card title="By list">
         <div className="table-wrap">
@@ -203,6 +236,8 @@ function TrackRecordView() {
                 <th className="num" title="after 21 sessions">21d</th>
                 <th className="num">Median stock, 21d</th>
                 <th className="num">Beat S&amp;P 500</th>
+                <th className="num" title="following each idea's exit plan: closed ones that made money">Plan: won</th>
+                <th className="num">Plan: median</th>
               </tr>
             </thead>
             <tbody>
@@ -218,12 +253,44 @@ function TrackRecordView() {
                   <td className="num mono">{pct(s.right_way_21d, 0)}</td>
                   <td className="num mono">{pct(s.median_move_21d, 1, true)}</td>
                   <td className="num mono">{pct(s.beat_spy, 0)}</td>
+                  <td className="num mono">
+                    {pct(s.plan_win_rate ?? null, 0)} <span className="muted">of {s.plan_closed ?? 0}</span>
+                  </td>
+                  <td className="num mono">{pct(s.plan_median ?? null, 0, true)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       </Card>
+      {t.by_setup && t.by_setup.length > 0 && (
+        <Card title="By setup, following the exit plans">
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Setup</th>
+                  <th className="num">Ideas</th>
+                  <th className="num">Closed by the plan</th>
+                  <th className="num">Won</th>
+                  <th className="num">Median</th>
+                </tr>
+              </thead>
+              <tbody>
+                {t.by_setup.map((s) => (
+                  <tr key={s.setup}>
+                    <td>{s.setup.replace("_", " ")}</td>
+                    <td className="num mono">{s.recommendations}</td>
+                    <td className="num mono">{s.plan_closed}</td>
+                    <td className="num mono">{pct(s.plan_win_rate, 0)}</td>
+                    <td className="num mono">{pct(s.plan_median, 0, true)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
       <Card
         title="Each recommendation"
         hint={
@@ -248,6 +315,7 @@ function TrackRecordView() {
                 <th className="num">vs S&amp;P 500</th>
                 <th className="num">Position</th>
                 <th className="num">P&amp;L (1 lot)</th>
+                <th className="num" title="what following the exit plan made, and why it closed">Following the plan</th>
               </tr>
             </thead>
             <tbody>
@@ -256,6 +324,7 @@ function TrackRecordView() {
                   <td className="mono small">{r.recommended_at.slice(0, 10)}</td>
                   <td>
                     <a href={`#/research/lookup/${encodeURIComponent(r.symbol)}`}>{r.symbol}</a> <span className="muted small">{LIST_LABEL[r.list]}</span>
+                    {r.setup && <div className="muted small">{r.setup.replace("_", " ")}</div>}
                     {r.runs > 1 && <span className="muted small"> · listed {r.runs} times</span>}
                   </td>
                   <td className="small">
@@ -278,6 +347,9 @@ function TrackRecordView() {
                     {r.status === "expired" && <div className="muted small">expired</div>}
                   </td>
                   <td className="num mono">{r.pnl != null ? <span className={r.pnl >= 0 ? "up" : "down"}>{signedMoney(r.pnl)}</span> : "—"}</td>
+                  <td className="num mono">
+                    <Followed r={r} />
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -288,77 +360,13 @@ function TrackRecordView() {
   );
 }
 
-export function IdeaCard({ idea }: { idea: ResearchIdea }) {
-  return (
-    <article className={`card idea ${idea.kind === "bearish" ? "attention" : idea.kind === "income" ? "consider" : "info"}`}>
-      <div className="idea-head">
-        <a href={`#/research/lookup/${encodeURIComponent(idea.symbol)}`} className="idea-symbol">
-          {idea.symbol}
-        </a>
-        {idea.new && <span className="pill new">new</span>}
-        <span className="muted">{money(idea.spot, true)}</span>
-        <span className="spacer" />
-        <span className="small muted" title="rank among the names scanned (1 = best)">
-          score {pct(idea.score, 0)}
-        </span>
-      </div>
-      <div className="tags">
-        {idea.setup.tags.map((t) => (
-          <span key={t} className="pill">
-            {t}
-          </span>
-        ))}
-        <VolTag vol={idea.vol} />
-      </div>
-      {idea.pick ? <PickSummary pick={idea.pick} /> : <p className="muted small">No contract picked.</p>}
-      <ul className="why">
-        {idea.why.map((w) => (
-          <li key={w}>{w}</li>
-        ))}
-      </ul>
-      {idea.risks.length > 0 && (
-        <ul className="risks">
-          {idea.risks.map((w) => (
-            <li key={w}>{w}</li>
-          ))}
-        </ul>
-      )}
-      {idea.alternative && (
-        <p className="small muted">
-          Alternative: <PickLine pick={idea.alternative} />
-        </p>
-      )}
-      <a className="small" href={`#/research/lookup/${encodeURIComponent(idea.symbol)}`}>
-        {idea.symbol} in depth, scenarios and Ask Claude →
-      </a>
-    </article>
-  );
-}
-
-function VolTag({ vol }: { vol: VolContext }) {
-  if (vol.iv30 == null) return null;
-  const label =
-    vol.rank != null
-      ? `IV rank ${pct(vol.rank, 0)}`
-      : vol.iv_rv != null
-        ? `IV ${num(vol.iv_rv, 1)}x forecast`
-        : vol.iv_hv != null
-          ? `IV ${num(vol.iv_hv, 1)}x realized`
-          : `IV ${pct(vol.iv30, 0)}`;
-  return (
-    <>
-      <span className={`pill ${vol.rich ? "rich" : ""}`}>{vol.rich ? `options expensive · ${label}` : label}</span>
-      {vol.term_shape === "backwardation" && <span className="pill">near-term IV dearer</span>}
-    </>
-  );
-}
-
 function strike(k: number): string {
   return k.toLocaleString("en-US", { maximumFractionDigits: 2 });
 }
 
 /** One line: what you'd buy (or the spread) and what it costs. */
-export function PickLine({ pick }: { pick: Pick }) {
+export function PickLine({ pick }: { pick: Pick | PlayPick }) {
+  if (isPlay(pick)) return <PlayLine pick={pick} />;
   if (isCreditSpread(pick)) {
     return (
       <>
@@ -612,6 +620,7 @@ function SymbolDepth({ symbol, live }: { symbol: string; live: LiveState }) {
           }
         />
       </div>
+      {data.playbook && <PlaybookCard symbol={symbol} view={data.playbook} />}
       {data.fundamentals && <EarningsCard f={data.fundamentals} />}
       {v.event && (
         <div className="banner">
@@ -667,6 +676,30 @@ function SymbolDepth({ symbol, live }: { symbol: string; live: LiveState }) {
       <OptionPricing underlying={symbol} />
       <p className="muted small">{data.disclaimer}</p>
     </div>
+  );
+}
+
+function PlaybookCard({ symbol, view }: { symbol: string; view: NonNullable<SymbolResearch["playbook"]> }) {
+  return (
+    <Card title="The playbook" hint={view.calibrated ? "calibrated by the backtest" : "not calibrated yet: tp-recs calibrate"}>
+      {view.ideas.length ? (
+        <div className="grid cols-2 top">
+          {view.ideas.map((i) => (
+            <IdeaCard key={`${i.kind}-${i.play?.name ?? ""}`} idea={i} />
+          ))}
+        </div>
+      ) : (
+        <p className="muted" style={{ marginTop: 0 }}>
+          No entry setup is live on {symbol} today.
+          {view.watch ? " It's a trend leader: a LEAPS entry comes on a pullback to its 50-day average." : ""}
+        </p>
+      )}
+      <ul className="why">
+        {view.levels.map((l) => (
+          <li key={l}>{l}</li>
+        ))}
+      </ul>
+    </Card>
   );
 }
 

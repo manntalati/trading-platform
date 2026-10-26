@@ -63,7 +63,7 @@ def test_research_ranks_ideas_with_contracts(client: tuple[TestClient, Any]) -> 
     assert body["scanned"] >= 10
     assert body["with_chains"] >= 5
     assert "TLT" not in {
-        i["symbol"] for k in ("swing", "leaps", "bearish", "income") for i in body[k]
+        i["symbol"] for k in ("swing", "leaps", "bearish", "income", "volatility") for i in body[k]
     }
     ideas = [*body["swing"], *body["leaps"], *body["bearish"]]
     assert ideas, "the fake market should produce some ideas"
@@ -91,10 +91,20 @@ def test_ideas_are_stored_runs_with_a_track_record(client: tuple[TestClient, Any
     assert again["run"]["previous_run"] is None  # both runs were made the same day
     record = c.get("/api/research/track-record").json()
     listed = {(r["list"], r["symbol"]) for r in record["recommendations"]}
-    ideas = {(k, i["symbol"]) for k in ("swing", "leaps", "bearish", "income") for i in body[k]}
+    ideas = {
+        (k, i["symbol"])
+        for k in ("swing", "leaps", "bearish", "income", "volatility")
+        for i in body[k]
+    }
     assert listed == ideas  # the same ideas twice are one recommendation each
     assert all(r["runs"] == 2 for r in record["recommendations"])
-    assert {s["list"] for s in record["summary"]} <= {"swing", "leaps", "bearish", "income"}
+    assert {s["list"] for s in record["summary"]} <= {
+        "swing",
+        "leaps",
+        "bearish",
+        "income",
+        "volatility",
+    }
 
 
 def test_jobs_status_and_a_job_on_request(client: tuple[TestClient, Any]) -> None:
@@ -125,6 +135,10 @@ def test_one_symbol_in_depth(client: tuple[TestClient, Any]) -> None:
     assert {"swing_call", "leaps_call"} <= set(body["picks"])
     assert body["picks"]["leaps_call"]["dte"] >= 270
     assert body["vol"]["iv30"] > 0
+    view = body["playbook"]  # the setups live on it and how close the others are
+    assert isinstance(view["ideas"], list)
+    assert any("RSI(2)" in line for line in view["levels"])
+    assert view["calibrated"] is False
     f = body["fundamentals"]  # from the (synthetic) SEC filings
     assert f["period_end"] == "2023-12-31"
     assert f["last_release"] == "2024-01-31"
@@ -193,16 +207,16 @@ def test_data_map(client: tuple[TestClient, Any]) -> None:
 def test_one_failing_symbol_does_not_break_the_scan(
     client: tuple[TestClient, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from tp_strategies import options_research
+    from tp_strategies import playbook
 
-    real = options_research.analyze
+    real = playbook.analyze
 
     def flaky(symbol: str, *args: Any, **kwargs: Any) -> dict[str, Any]:
         if symbol == "MSFT":
             raise KeyError("spread_pct")
         return real(symbol, *args, **kwargs)
 
-    monkeypatch.setattr(options_research, "analyze", flaky)
+    monkeypatch.setattr(playbook, "analyze", flaky)
     c, _ = client
     body = c.get("/api/research?refresh=true").json()
     assert body["errors"] == {"MSFT": "KeyError: 'spread_pct'"}

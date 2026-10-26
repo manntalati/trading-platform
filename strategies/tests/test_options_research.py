@@ -1,5 +1,6 @@
-"""Options research on synthetic prices and chains (XYZ, ABC): setups, contract picks, ranking,
-and what to do with positions already held."""
+"""Options research on synthetic prices and chains (XYZ, ABC): setups, contract picks, pricing
+whole chains, and what to do with positions already held. The ideas lists are the playbook's
+(test_playbook.py)."""
 
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -20,8 +21,8 @@ from tp_strategies.options_research import (
     iron_condor_pick,
     leaps_pick,
     leaps_view,
+    price_chain,
     priced,
-    rank_ideas,
     spread_pick,
     stock_setup,
     swing_pick,
@@ -111,60 +112,42 @@ def test_stock_setup_tags() -> None:
     assert "extended" in stock_setup(hot, None)["tags"]
 
 
-def test_analyze_and_rank_ideas() -> None:
+def test_analyze_one_name() -> None:
     spy = closes(0.0003, seed=9)
-    rising, falling = closes(0.003, seed=2), closes(-0.003, seed=3)
+    rising = closes(0.003, seed=2)
     ups = analyze("XYZ", rising, chain=chain(rising.iloc[-1]), benchmark=spy, iv_hist=None,
                   now=NOW, rate=0.04)  # fmt: skip
-    downs = analyze("ABC", falling, chain=chain(falling.iloc[-1], symbol="ABC"), benchmark=spy,
-                    iv_hist=None, now=NOW, rate=0.04)  # fmt: skip
     assert ups["setup"]["direction"] == "bullish"
     assert set(ups["picks"]) >= {"swing_call", "call_spread", "leaps_call", "swing_put"}
     assert ups["vol"]["iv30"] == pytest.approx(0.3, abs=0.01)
     assert ups["vol"]["rich"] is True  # 30% implied vs ~10% realized
-
-    ideas = rank_ideas([ups, downs], held={"XYZ": "2 calls"})
-    swing = ideas["swing"][0]
-    assert swing["symbol"] == "XYZ"
-    assert (
-        "long" in swing["pick"]
-    )  # options are rich: the spread leads, the call is the alternative
-    assert swing["alternative"]["right"] == "call"
-    assert any("Uptrend" in w for w in swing["why"])
-    assert any("Already held: 2 calls" in r for r in swing["risks"])
-    assert ideas["leaps"][0]["pick"]["dte"] >= 270
-    assert [i["symbol"] for i in ideas["bearish"]] == ["ABC"]
-    assert ideas["bearish"][0]["pick"]["long"]["right"] == "put"
-
     # options are expensive on XYZ and it's rising: sell a put, or a put spread to cap the risk
     assert {"cash_secured_put", "put_credit_spread", "iron_condor", "calendar"} <= set(ups["picks"])
     assert ups["vol"]["skew_25d"] == pytest.approx(0.0, abs=0.01)  # the synthetic smile is flat
-    assert [i["symbol"] for i in ideas["income"]] == ["XYZ"]  # never the downtrend
-    income = ideas["income"][0]
-    assert income["pick"]["cash_required"] == income["pick"]["strike"] * 100
-    assert income["alternative"]["kind"] == "put credit spread"
-    assert any("the seller's" in w for w in income["why"])
-    assert any("caps the gain" in r for r in income["risks"])
+    again = analyze(
+        "XYZ",
+        rising,
+        chain=chain(rising.iloc[-1]),
+        benchmark=spy,
+        iv_hist=None,
+        now=NOW,
+        rate=0.04,
+        priced=price_chain(chain(rising.iloc[-1]), float(rising.iloc[-1]), NOW, 0.04),
+    )
+    assert again["picks"]["swing_call"] == ups["picks"]["swing_call"]  # priced once, same picks
 
 
-def test_lists_skip_names_without_a_contract_and_cap_each_sector() -> None:
-    spy = closes(0.0003, seed=9)
-    names = ["AAA", "BBB", "CCC", "DDD"]
-    analyses = []
-    for i, name in enumerate(names):
-        series = closes(0.003 + 0.0005 * i, seed=20 + i)
-        with_chain = chain(series.iloc[-1], symbol=name) if name != "DDD" else None
-        analyses.append(analyze(name, series, chain=with_chain, benchmark=spy, iv_hist=None,
-                                now=NOW, rate=0.04))  # fmt: skip
-    assert analyses[3]["picks"] == {}  # DDD: no chain, so nothing to trade
-    groups = {"AAA": "Tech", "BBB": "Tech", "CCC": "Tech", "DDD": "Energy"}
-    ideas = rank_ideas(analyses, held={}, groups=groups)
-    for k in ("swing", "leaps"):
-        assert "DDD" not in {i["symbol"] for i in ideas[k]}
-        assert len(ideas[k]) == RULES.per_group  # the third tech name waits its turn
-        assert {i["group"] for i in ideas[k]} == {"Tech"}
-    one_each = rank_ideas(analyses, held={}, rules=Rules(per_group=1), groups=groups)
-    assert len(one_each["swing"]) == 1
+def test_pricing_a_whole_chain_matches_pricing_one_window() -> None:
+    c = chain()
+    whole = price_chain(c, 100.0, NOW, 0.04)
+    window = priced(c, 100.0, NOW, 0.04, right="C", dte=(30, 100), strikes=(0.7, 1.3))
+    same = priced(whole, 100.0, NOW, 0.04, right="C", dte=(30, 100), strikes=(0.7, 1.3))
+    assert len(window) == len(same) > 0
+    for k in ("iv", "delta", "gamma", "theta", "vega"):
+        assert np.allclose(window[k].to_numpy(), same[k].to_numpy())
+    flat = price_chain(c, 100.0, NOW, 0.0)  # the synthetic chain is priced at a zero rate
+    liquid = flat[flat["delta"].abs().between(0.1, 0.9)]
+    assert liquid["iv"].between(0.29, 0.31).all()  # its flat 30%, off the rounded quotes
 
 
 def test_premium_selling_structures() -> None:
@@ -208,14 +191,12 @@ def test_premium_selling_structures() -> None:
     assert cal["max_profit_est"] > 0
 
 
-def test_event_in_the_term_structure_is_a_risk() -> None:
+def test_event_in_the_term_structure() -> None:
     rising, spy = closes(0.003, seed=2), closes(0.0003, seed=9)
     spot = float(rising.iloc[-1])
     bumpy = chain(spot, iv=[0.25, 0.45, 0.30, 0.29, 0.28, 0.28])
     a = analyze("XYZ", rising, chain=bumpy, benchmark=spy, iv_hist=None, now=NOW, rate=0.04)
     assert a["vol"]["event"]["by"] == expiries(46)[0].isoformat()
-    idea = rank_ideas([a], held={})["swing"][0]
-    assert any("pricing an event" in r for r in idea["risks"])
 
 
 def option_row(**stats: Any) -> dict[str, Any]:

@@ -12,8 +12,11 @@ sync, new macro data): ``tp-recs run``, which the job scheduler starts on its ow
 
 The track record marks each recommended position at the latest quotes (the middle of the bid and
 ask; entries were at the ask for a purchase and the bid for a sale, as the picks were priced), or
-at its value at expiry once it has expired. It is the record of rules applied to past data, not
-of trades anyone made.
+at its value at expiry once it has expired. It also follows each idea's exit plan through the
+daily chain snapshots: the first session its profit target, stop, stock-side exit, time stop or
+days-to-expiry limit was reached, and what the position was worth then, which is what following
+the plan would have made. It is the record of rules applied to past data, not of trades anyone
+made.
 """
 
 from __future__ import annotations
@@ -36,22 +39,26 @@ from tp_core.config import Universes
 from tp_core.macro import risk_free_rate
 from tp_core.pnl import option_label
 from tp_core.portfolio import CASH_KIND, Classifier, held_symbols, holdings_table, latest_snapshot
+from tp_core.schemas import RAW_OPTION_CHAIN_SCHEMA
 from tp_core.storage import Lake, new_run_id, read_parquet_dir, write_json, write_parquet
-from tp_core.volatility import latest_chains
+from tp_core.volatility import latest_chains, snapshot_partitions
 from tp_strategies.ideas import ideas_from_lake
-from tp_strategies.options_research import CHAIN_MAX_AGE_DAYS, DISCLAIMER, scan
+from tp_strategies.options_research import CHAIN_MAX_AGE_DAYS, DISCLAIMER
+from tp_strategies.playbook import load_calibration, scan
+from tp_strategies.setups import exit_signal, indicators
 
 log = logging.getLogger(__name__)
 
 RUNS = "recommendations"
 LOG = "recommendations_log"
 KEEP_DAYS = 30
-LISTS = ("swing", "leaps", "bearish", "income")
+LISTS = ("swing", "leaps", "bearish", "income", "volatility")
 LIST_NAMES = {
     "swing": "Swing calls",
     "leaps": "LEAPS",
     "bearish": "Bearish",
     "income": "Premium selling",
+    "volatility": "Volatility",
 }
 HORIZONS = (5, 21)  # sessions after the recommendation, for the underlying's move
 LOG_SCHEMA = pa.schema(
@@ -67,6 +74,8 @@ LOG_SCHEMA = pa.schema(
         ("structure", pa.string()),
         ("legs", pa.string()),  # JSON: [{contract, side, price, expiration, strike, right}]
         ("entry", pa.float64()),  # per share: + paid (a debit), - received (a credit)
+        ("setup", pa.string()),  # the playbook setup (tp_strategies.setups)
+        ("plan", pa.string()),  # JSON: the exit plan (targets per share, dates, stock rule)
     ]
 )
 
@@ -172,6 +181,7 @@ def make_run(
         now=now,
         rate=risk_free_rate(lake, default_rate),
         held=held_summary(lake, classifier),
+        calibration=load_calibration(lake),
     )
     portfolio = ideas_from_lake(lake, classifier).to_dict()
     bars = load_bars(lake, ["SPY"])
@@ -297,7 +307,10 @@ def legs(pick: Mapping[str, Any] | None) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
 
     def walk(node: Any) -> None:
-        if isinstance(node, Mapping):
+        if isinstance(node, list):
+            for value in node:
+                walk(value)
+        elif isinstance(node, Mapping):
             if "contract" in node and "side" in node:
                 out.append(
                     {
@@ -306,8 +319,9 @@ def legs(pick: Mapping[str, Any] | None) -> list[dict[str, Any]]:
                     }
                 )
                 return
-            for value in node.values():
-                walk(value)
+            for key, value in node.items():
+                if key not in ("entry", "exit", "model"):  # plans and numbers, not legs
+                    walk(value)
 
     walk(pick)
     return out
@@ -355,9 +369,19 @@ def log_rows(run: Mapping[str, Any]) -> pd.DataFrame:
                     "structure": _structure(idea.get("pick"), k),
                     "legs": json.dumps(found),
                     "entry": _entry(found),
+                    "setup": (idea.get("play") or {}).get("name"),
+                    "plan": _plan(idea.get("pick")),
                 }
             )
     return pd.DataFrame(rows, columns=[f.name for f in LOG_SCHEMA])
+
+
+def _plan(pick: Mapping[str, Any] | None) -> str | None:
+    if not pick or not pick.get("exit"):
+        return None
+    keep = ("take_profit", "stop", "sell_by", "out_by", "stock")
+    plan = {k: pick["exit"].get(k) for k in keep}
+    return json.dumps(plan | {"credit": pick.get("credit") is not None})
 
 
 def load_log(lake: Lake) -> pd.DataFrame:
@@ -440,12 +464,21 @@ def track_record(lake: Lake, today: date, *, limit: int = 200) -> dict[str, Any]
     sessions = list(closes.index)
     all_legs = [(r["symbol"], json.loads(r["legs"])) for _, r in recs.iterrows()]
     marks = _contract_marks(lake, [(s, leg["contract"]) for s, found in all_legs for leg in found])
+    plans = [json.loads(p) if isinstance(p, str) else None for p in recs["plan"]]
+    followed = [
+        (str(r["symbol"]), found, r["bars_session"])
+        for (_, r), (_, found), plan in zip(recs.iterrows(), all_legs, plans, strict=True)
+        if plan is not None and pd.notna(r["bars_session"])
+    ]
+    history = _daily_marks(lake, followed)
+    stock = _stock_indicators(bars)
     rows = []
-    for (_, r), (_, found) in zip(recs.iterrows(), all_legs, strict=True):
+    for (_, r), (_, found), plan in zip(recs.iterrows(), all_legs, plans, strict=True):
         start = pd.Timestamp(r["bars_session"]) if pd.notna(r["bars_session"]) else None
         row: dict[str, Any] = {
             "list": r["list"],
             "symbol": r["symbol"],
+            "setup": r["setup"] if isinstance(r["setup"], str) else None,
             "structure": r["structure"],
             "recommended_at": pd.Timestamp(r["run_at"]).isoformat(),
             "last_seen": pd.Timestamp(r["last_seen"]).isoformat(),
@@ -460,11 +493,155 @@ def track_record(lake: Lake, today: date, *, limit: int = 200) -> dict[str, Any]
         sign = -1.0 if r["list"] == "bearish" else 1.0
         row |= _moves(closes, sessions, str(r["symbol"]), start, sign)
         row |= _mark(found, marks, raw, str(r["symbol"]), _float(r["entry"]), today)
+        row["plan"] = plan
+        row["followed"] = (
+            follow_plan(
+                found,
+                plan,
+                _float(r["entry"]),
+                history,
+                stock.get(str(r["symbol"])),
+                start.date(),
+                raw,
+                str(r["symbol"]),
+                today,
+            )
+            if plan is not None and start is not None
+            else None
+        )
         rows.append(row)
     return {
         "as_of": today.isoformat(),
         "recommendations": rows[:limit],
         "summary": _summary(rows),
+        "by_setup": _by_setup(rows),
+    }
+
+
+# -- following the exit plans ---------------------------------------------------------------------
+
+
+def _daily_marks(
+    lake: Lake, followed: list[tuple[str, list[dict[str, Any]], Any]]
+) -> dict[str, pd.Series]:
+    """Each contract's mid at the last snapshot of each session from its recommendation on
+    (index: snapshot dates)."""
+    wanted: dict[str, set[str]] = {}
+    since: dict[str, date] = {}
+    for underlying, found, session in followed:
+        wanted.setdefault(underlying, set()).update(leg["contract"] for leg in found)
+        day = pd.Timestamp(session).date()
+        since[underlying] = min(since.get(underlying, day), day)
+    points: dict[str, dict[date, float]] = {}
+    for (day, underlying), path in sorted(snapshot_partitions(lake).items()):
+        if underlying not in wanted or day <= since[underlying]:
+            continue
+        chain = read_parquet_dir(path, RAW_OPTION_CHAIN_SCHEMA)
+        chain = chain[chain["contract"].isin(wanted[underlying])]
+        if chain.empty:
+            continue
+        last = chain[chain["snapshot_at"] == chain["snapshot_at"].max()]
+        for contract, bid, ask in zip(last["contract"], last["bid"], last["ask"], strict=True):
+            if pd.notna(bid) and pd.notna(ask) and ask > 0:
+                points.setdefault(str(contract), {})[day] = (float(bid) + float(ask)) / 2
+    return {c: pd.Series(v).sort_index() for c, v in points.items()}
+
+
+def _stock_indicators(bars: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    out = {}
+    for symbol, g in bars.groupby("symbol"):
+        frame = g[["adj_high", "adj_low", "adj_close"]].astype(float)
+        frame.columns = ["high", "low", "close"]
+        frame.index = pd.DatetimeIndex(g["session"])
+        out[str(symbol)] = indicators(frame.sort_index())
+    return out
+
+
+def follow_plan(
+    found: list[dict[str, Any]],
+    plan: Mapping[str, Any],
+    entry: float | None,
+    marks: Mapping[str, pd.Series],
+    ind: pd.DataFrame | None,
+    start: date,
+    raw: pd.DataFrame,
+    symbol: str,
+    today: date,
+) -> dict[str, Any] | None:
+    """Walk the sessions after the recommendation and close where the exit plan says: the
+    profit target or the stop on the position's value (per share; for a credit, what it costs
+    to buy back), the stock-side rule, the time stop, the days-to-expiry limit, or expiry. Marks
+    are the middle of the bid and ask at each session's last snapshot."""
+    if entry is None or not found:
+        return None
+    credit = bool(plan.get("credit"))
+    target, stop = _float(plan.get("take_profit")), _float(plan.get("stop"))
+    sell_by = date.fromisoformat(str(plan["sell_by"])) if plan.get("sell_by") else None
+    out_by = date.fromisoformat(str(plan["out_by"])) if plan.get("out_by") else None
+    expiry = min(date.fromisoformat(str(leg["expiration"])[:10]) for leg in found)
+    rule = (plan.get("stock") or {}).get("rule")
+    stock_exit = exit_signal(ind, rule) if ind is not None and rule else None
+    days = sorted({d for leg in found for d in marks.get(leg["contract"], pd.Series()).index})
+    last: dict[str, Any] | None = None
+    for n, day in enumerate((d for d in days if d > start), start=1):
+        value = 0.0
+        for leg in found:
+            series = marks.get(leg["contract"])
+            if series is None or day not in series.index:
+                break
+            value += (1.0 if leg["side"] == "buy" else -1.0) * float(series[day])
+        else:
+            reason = _exit_reason(value, credit, target, stop)
+            if reason is None and stock_exit is not None:
+                hit = stock_exit.get(pd.Timestamp(day))
+                reason = "stock" if bool(hit) else None
+            if reason is None and sell_by is not None and day >= sell_by:
+                reason = "time"
+            if reason is None and out_by is not None and day >= out_by:
+                reason = "days to expiry"
+            last = _closed(value, entry, day, n, reason)
+            if reason is not None:
+                return last
+    if today > expiry:
+        spot = _close_on(raw, symbol, expiry)
+        if spot is not None:
+            value = sum(
+                (1.0 if leg["side"] == "buy" else -1.0)
+                * _intrinsic(str(leg["right"]), float(leg["strike"]), spot)
+                for leg in found
+            )
+            return _closed(value, entry, expiry, last["sessions"] + 1 if last else 0, "expiry")
+    return last | {"status": "open", "reason": None} if last is not None else None
+
+
+def _exit_reason(
+    value: float, credit: bool, target: float | None, stop: float | None
+) -> str | None:
+    if credit:  # what buying it back would cost
+        owed = -value
+        if target is not None and owed <= target:
+            return "target"
+        if stop is not None and owed >= stop:
+            return "stop"
+        return None
+    if target is not None and value >= target:
+        return "target"
+    if stop is not None and value <= stop:
+        return "stop"
+    return None
+
+
+def _closed(
+    value: float, entry: float, day: date, sessions: int, reason: str | None
+) -> dict[str, Any]:
+    return {
+        "status": "closed" if reason else "open",
+        "reason": reason,
+        "exit": day.isoformat(),
+        "sessions": sessions,
+        "value": value,
+        "pnl": (value - entry) * 100,
+        "result": (value - entry) / abs(entry) if entry else None,
     }
 
 
@@ -549,6 +726,29 @@ def _close_on(raw: pd.DataFrame, symbol: str, day: date) -> float | None:
     return float(s.iloc[-1]) if len(s) else None
 
 
+def _plan_stats(mine: list[dict[str, Any]]) -> dict[str, Any]:
+    """How the ideas did following their exit plans: the closed ones' win rate and median."""
+    closed = [
+        r["followed"]["result"]
+        for r in mine
+        if (r.get("followed") or {}).get("status") == "closed"
+        and r["followed"].get("result") is not None
+    ]
+    return {
+        "plan_closed": len(closed),
+        "plan_win_rate": (sum(1 for x in closed if x > 0) / len(closed)) if closed else None,
+        "plan_median": _median(closed),
+    }
+
+
+def _by_setup(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out = []
+    for name in sorted({r["setup"] for r in rows if r.get("setup")}):
+        mine = [r for r in rows if r.get("setup") == name]
+        out.append({"setup": name, "recommendations": len(mine), **_plan_stats(mine)})
+    return out
+
+
 def _summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     out = []
     for k in LISTS:
@@ -573,6 +773,7 @@ def _summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 },
                 **{f"median_move_{h}d": _median(v) for h, v in moved.items()},
                 "beat_spy": _share(r.get("move_vs_spy") for r in mine),
+                **_plan_stats(mine),
             }
         )
     return out

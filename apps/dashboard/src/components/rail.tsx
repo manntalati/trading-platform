@@ -259,13 +259,14 @@ const IDEA_LISTS = [
   { key: "leaps", label: "LEAPS" },
   { key: "bearish", label: "Bearish" },
   { key: "income", label: "Premium" },
+  { key: "volatility", label: "Volatility" },
 ] as const;
 
 /** The latest recommendations: the top idea of each list, what's new since the previous session. */
 export function IdeasPanel(p: PanelProps) {
   const research = useApi<Research>("/api/research", 120_000);
   const r = research.data;
-  const fresh = r ? IDEA_LISTS.reduce((n, l) => n + r[l.key].filter((i) => i.new).length, 0) : 0;
+  const fresh = r ? IDEA_LISTS.reduce((n, l) => n + (r[l.key] ?? []).filter((i) => i.new).length, 0) : 0;
   return (
     <RailPanel
       id="ideas"
@@ -277,14 +278,15 @@ export function IdeasPanel(p: PanelProps) {
     >
       {r &&
         IDEA_LISTS.map(({ key, label }) => {
-          const top = r[key][0];
+          const list = r[key] ?? []; // runs stored before a list existed lack it
+          const top = list[0];
           if (!top) return <RailRow key={key} label={`${label}: nothing right now`} />;
           return (
             <RailRow
               key={key}
               icon={top.new ? <Dot tone="good" /> : "▸"}
               label={`${label} · ${top.symbol}`}
-              value={`${r[key].length} listed`}
+              value={`${list.length} listed`}
               href={`#/research/lookup/${encodeURIComponent(top.symbol)}`}
             />
           );
