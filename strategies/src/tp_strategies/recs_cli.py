@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 
@@ -64,10 +64,12 @@ def _pct(v: float | None, signed: bool = True) -> str:
 @app.command()
 def show(
     only: Annotated[
-        str | None, typer.Option(help="One list: swing, leaps, bearish, income.")
+        str | None,
+        typer.Option(help="One list: swing, leaps, bearish, income, volatility, watch."),
     ] = None,
 ) -> None:
-    """The latest run, each list best first; ★ marks what's new since the previous session."""
+    """The latest run, each list best first, with the setup, the contract, the modeled edge, the
+    entry limit and the exit plan; ★ marks what's new since the previous session."""
     _, lake = _setup()
     latest = recs.latest_run(lake)
     if latest is None:
@@ -81,18 +83,51 @@ def show(
         ideas = latest["research"].get(k) or []
         typer.echo(f"{recs.LIST_NAMES[k]} ({len(ideas)})")
         for i in ideas:
-            pick = i.get("pick") or {}
-            label = (
-                pick.get("label") or (pick.get("long") or {}).get("label") or pick.get("kind") or ""
-            )
-            typer.echo(
-                f"  {'★' if i.get('new') else ' '} {i['symbol']:<6} {i['score']:.2f}  {label}"
-            )
+            typer.echo(f"  {'★' if i.get('new') else ' '} {i['symbol']:<6} {_line(i)}")
+            plan = (i.get("pick") or {}).get("exit")
+            if plan:
+                typer.echo(f"           {_plan_line(i['pick'])}")
         dropped = (latest.get("dropped") or {}).get(k) or []
         if dropped:
             typer.echo(f"    no longer listed: {', '.join(dropped)}")
         typer.echo("")
+    watch = latest["research"].get("watch") or []
+    if watch and only in (None, "watch"):
+        typer.echo(f"Watch for an entry ({len(watch)})")
+        for w in watch:
+            typer.echo(f"    {w['symbol']:<6} {w['text']}")
+        typer.echo("")
     typer.echo(latest.get("disclaimer", ""))
+
+
+def _line(idea: dict[str, Any]) -> str:
+    pick = idea.get("pick") or {}
+    play = idea.get("play") or {}
+    legs = pick.get("legs") or []
+    label = legs[0]["label"] if legs else pick.get("label") or pick.get("kind") or ""
+    model = pick.get("model") or {}
+    edge = (
+        f"  expected {_pct(model.get('expected_return'))} over {model.get('horizon')} sessions,"
+        f" {_pct(model.get('prob_profit'), False)} odds"
+        if model
+        else ""
+    )
+    return f"{play.get('title', '')}: {pick.get('structure', '')} {label}{edge}"
+
+
+def _plan_line(pick: dict[str, Any]) -> str:
+    entry, plan = pick.get("entry") or {}, pick["exit"]
+    side = "credit" if entry.get("side") == "credit" else "limit"
+    parts = [f"{side} {entry.get('limit')} (valid to {entry.get('valid_until')})"]
+    if plan.get("take_profit") is not None:
+        parts.append(f"take profit at {plan['take_profit']}")
+    if plan.get("stop") is not None:
+        parts.append(f"stop at {plan['stop']}")
+    stock = plan.get("stock") or {}
+    if stock.get("text"):
+        parts.append(f"or {stock['text']}")
+    parts.append(f"out by {plan.get('sell_by')}")
+    return "; ".join(parts)
 
 
 @app.command()
@@ -112,13 +147,33 @@ def scorecard(
             f"{s['name']:<16} {s['recommendations']:>4} ideas · profitable {profitable}"
             f" of {s['marked']} marked · median {_pct(s['median_result'])} · right way after 21"
             f" sessions {right_way} · beat the S&P 500 {_pct(s['beat_spy'], False)}"
+            f" · following the exit plans: {s['plan_closed']} closed, won"
+            f" {_pct(s['plan_win_rate'], False)}, median {_pct(s['plan_median'])}"
         )
+    if record.get("by_setup"):
+        typer.echo("\nBy setup, following the exit plans:")
+        for s in record["by_setup"]:
+            typer.echo(
+                f"  {s['setup']:<14} {s['recommendations']:>4} ideas · {s['plan_closed']} closed,"
+                f" won {_pct(s['plan_win_rate'], False)}, median {_pct(s['plan_median'])}"
+            )
     typer.echo("")
     for r in record["recommendations"][:limit]:
+        followed = r.get("followed") or {}
+        plan = (
+            f"  plan: {followed['status']}"
+            + (
+                f" ({followed['reason']}, {_pct(followed['result'])})"
+                if followed.get("reason")
+                else f" {_pct(followed.get('result'))}"
+            )
+            if followed
+            else ""
+        )
         typer.echo(
             f"{r['recommended_at'][:10]}  {r['list']:<8} {r['symbol']:<6} {r['structure']:<18}"
             f" stock {_pct(r['move'])}  position {_pct(r['result'])}"
-            f"{'  (expired)' if r.get('status') == 'expired' else ''}"
+            f"{'  (expired)' if r.get('status') == 'expired' else ''}{plan}"
         )
 
 

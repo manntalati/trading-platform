@@ -32,8 +32,9 @@ from tp_core.fundamentals import summary as fundamentals_summary
 from tp_core.portfolio import holdings_table, latest_snapshot
 from tp_core.storage import Lake
 from tp_core.volatility import iv_history, latest_chains
+from tp_strategies import playbook
 from tp_strategies import recommendations as recs
-from tp_strategies.options_research import DISCLAIMER, analyze, bars_from_lake, rv_forecast
+from tp_strategies.options_research import DISCLAIMER, bars_from_lake
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/research", dependencies=[Depends(require_token)])
@@ -84,16 +85,18 @@ def symbol_view(ctx: queries.Context, symbol: str, now: datetime) -> dict[str, A
     chain = latest_chains(ctx.lake, [symbol]).get(symbol)
     history = iv_history(ctx.lake)
     mine = history[history["underlying"] == symbol].set_index("snapshot_date")["iv30"]
-    analysis = analyze(
+    name = playbook.prepare(
         symbol,
-        closes[symbol],
+        bars[symbol],
         chain=chain,
         benchmark=closes.get("SPY"),
         iv_hist=mine,
         now=now,
         rate=ctx.risk_free_rate(),
-        forecast=rv_forecast(bars.get(symbol)),
+        earnings=playbook.earnings_by_symbol(ctx.lake).get(symbol),
     )
+    analysis = name.analysis
+    analysis["playbook"] = playbook.for_symbol(name, playbook.load_calibration(ctx.lake))
     age = None
     if chain is not None and not chain.empty:
         age = (today - chain["snapshot_at"].max().tz_convert(NEW_YORK).date()).days
@@ -261,8 +264,9 @@ volatility, its rank, implied vs realized, the smile's 25-delta skew, the term s
 slope and any event it shows), what the company's SEC filings say (trailing EPS, P/E, book to \
 market, the last earnings surprise, the last results date and an estimate of the next), the \
 contracts the rules picked (bought at the ask, sold at the \
-bid, with breakeven, odds and greeks; premium-selling structures and a calendar too), and the \
-owner's portfolio.
+bid, with breakeven, odds and greeks; premium-selling structures and a calendar too), the \
+playbook's view (the entry setups live on it, the contract each is best expressed with under \
+the dashboard's volatility forecast, its entry limit and exit plan), and the owner's portfolio.
 
 How to answer:
 - Give a straight view on the setup and the question asked, using the numbers. Lead with the \

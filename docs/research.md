@@ -1,10 +1,11 @@
 # Options research: swings, LEAPS and selling premium
 
-**Research → Options ideas** ranks stocks that set up for an options trade and picks the contract
-each approach would use. **Research → Look up a symbol** shows any ticker the same way, and
-**Portfolio → Positions** says what you could do with the options and shares you already hold.
-Every idea comes from fixed rules (`tp_strategies.options_research`) and shows the numbers behind
-it. They're research prompts, not advice: options can lose their whole value, and quickly.
+**Research → Options ideas** lists the options trades the playbook's setups call for today, each
+with the contract that expresses it best, an entry limit and an exit plan. **Research → Look up a
+symbol** shows any ticker in depth, and **Portfolio → Positions** says what you could do with the
+options and shares you already hold. Every idea comes from fixed rules (`tp_strategies.setups`,
+`tp_strategies.playbook`, `tp_strategies.option_edge`) and shows the numbers behind it. They're
+research prompts, not advice: options can lose their whole value, and quickly.
 
 ## Which names
 
@@ -30,34 +31,86 @@ press **Fetch**: that pulls two years of daily bars and today's chain from Alpac
 minute). The daily option snapshot also covers everything you hold, so rolls and covered calls
 on your positions are always priced.
 
-## The stock setups
+## The playbook
 
-From the daily bars:
+The ideas used to be the strongest trends ranked by momentum, which change slowly, so the same
+names topped the lists day after day. Now an idea needs a **setup that just fired**, and its
+contract is chosen by what it's expected to make, so the lists turn over as setups fire and
+expire, and the options' price decides as much as the chart.
 
-| Setup | Rule |
-|---|---|
-| Uptrend | price above its 50-day average, which is above the 200-day |
-| Pullback | an uptrend trading back near its 20-day average (−4% to +1%): a calmer entry |
-| Extended | 8%+ above the 20-day average, or up 15%+ in a month: chasing risks a pullback |
-| Downtrend | price below the 50-day, which is below the 200-day |
-| Relative strength | 3-month return against the S&P 500 (SPY) |
+### Setups: when to get in
 
-Ranking (percentile ranks within the names scanned, so a score compares names with each other):
+From the daily bars (`tp_strategies.setups`):
 
-- **Swing calls** (uptrends): 6-month momentum, strength against the S&P 500, distance above the
-  200-day; a bonus for a pullback, a penalty for extended.
-- **LEAPS** (uptrends): 1-year return, distance above the 200-day, and a shallow worst drop over
-  the year: steady compounders suit a contract held for a year or two.
-- **Bearish puts** (downtrends): the mirror of swing.
-- **Selling premium** (anything not in a downtrend, when options are expensive): ranked by how
-  expensive (IV rank, and implied against realized volatility). An uptrend gets a cash-secured
-  put (a put credit spread as the alternative that caps the risk); a stock without a trend gets
-  an iron condor.
+| Setup | List | Fires when | Horizon | Out on the stock when |
+|---|---|---|---|---|
+| Pullback in an uptrend | swing | RSI(2) under 10, above the 200-day, 50-day above the 200-day | 10 sessions | a close above the 5-day average |
+| Breakout from a squeeze | swing | a new 50-day closing high above the 200-day, within 5 sessions of the tightest Bollinger bandwidth of 6 months | 20 | a close below the 10-day |
+| Earnings beat | swing | results with a surprise (SUE) of +1.5 or more, the stock up over the 10 sessions to their filing | 40 | a close below the 50-day |
+| Trend leader at its 50-day | LEAPS | 12-1 month momentum of 10%+ (top 40% of the names), within 15% of the 52-week high, back near its 50-day | 126 | a close below the 200-day |
+| Bounce in a downtrend | bearish | RSI(2) over 90 below the 200-day, 50-day below the 200-day | 10 | a close below the 5-day |
+| Breakdown to a new low | bearish | a new 50-day closing low below the 200-day | 20 | a close above the 10-day |
+| Earnings miss | bearish | SUE of -1.5 or less, the stock down into the filing | 40 | a close above the 50-day |
 
+And from the option chain:
+
+| Setup | List | Fires when |
+|---|---|---|
+| Expensive options: sell premium | income | 30-day implied at least 1.25x the volatility forecast, IV rank 50%+ when known, no event priced before expiry, not in a downtrend |
+| Cheap options: buy volatility | volatility | 30-day implied at most 0.9x the forecast, the term structure not inverted, no event priced in |
+
+A signal counts for a few sessions (two for a pullback, ten for a leader) unless its stock-side
+exit has come since. Leaders still well above their 50-day are listed under LEAPS as ones to
+**wait for**, with the entry level.
+
+### The contract: what the model expects
+
+For each setup every liquid candidate is valued at the setup's horizon (`tp_strategies.option_edge`):
+long calls or puts across the expiries that leave at least 21 days at the horizon and deltas from
+0.40 to 0.75, debit spreads selling the 0.30- or 0.20-delta strike, LEAPS 9+ months out at delta
+0.70-0.85, put credit spreads, cash-secured puts and iron condors 25 to 50 days out (valued at 21
+days to expiry, when they'd be closed), and at-the-money straddles. Under the model:
+
+- the stock ends the horizon lognormally around today's price, with **the setup's drift** (what
+  stocks did after the same signal in the backtest; with no calibration an ordinary 7%-a-year
+  market drift, so puts start with the wind against them) and **the volatility forecast** for the
+  horizon (HAR-RV for the next month, blended toward the year's realized for longer horizons);
+- each leg is valued with the implied volatility today's surface gives an option of the time it
+  will have left and the moneyness it will have (the skew is fitted on out-of-the-money options,
+  weighted by vega), drifting back toward the stock's usual implied volatility once there is a
+  year of history;
+- legs are bought at the ask and sold at the bid, closed across half the spread, $0.65 a
+  contract each way.
+
+The pick is the candidate with the best expected return per unit of its spread of outcomes, less
+a penalty for wide quotes. So cheap options favour a plain call and expensive ones a spread (the
+sold leg pays for the volatility); a stock with a great chart and overpriced options ranks below
+one with a decent chart and cheap ones. Each pick shows:
+
+- **Expected** return on the capital at risk over the horizon, the odds of a profit, and the
+  worst tenth of outcomes;
+- the **greeks** of the position: delta in shares, gamma, theta a day (and as a share of the
+  premium), vega a volatility point;
+- **gamma against theta**: the daily move the stock needs for its gamma to pay a day's decay,
+  next to the move it's forecast to make (`sqrt(2 * theta / gamma)`);
+- the **entry**: a limit at the middle of the bid and ask, the most worth paying (the modeled value
+  at the horizon; past it the expected return turns negative), and the last session the signal
+  counts;
+- the **exit plan**: a profit target and a stop on the premium (for a credit: keep 50% of it, stop
+  at a loss of twice it), the stock-side rule with today's level, a time stop, and the date to be
+  out by (21 days before expiry for swings, 180 for LEAPS: the decay speeds up after).
+
+The defaults for drift and exits are rules of thumb until the backtest has run; then each setup
+gets the drift its signal actually had and the exits that held up best out of sample (below,
+[What to run](#what-to-run)). One idea per name per list, at most two names per sector or fund
+class, best first.
+
+## The contracts on Look up
 ## The contracts
 
-Priced from the latest chain at the ask to buy and the bid to sell, with implied volatility
-solved from the mid and Black-Scholes greeks:
+**Look up** shows, besides the playbook's view of the name (the setups live on it, how close the
+others are), one contract per approach by fixed rules, priced from the latest chain at the ask to
+buy and the bid to sell, with implied volatility solved from the mid and Black-Scholes greeks:
 
 | Approach | Contract |
 |---|---|
@@ -148,9 +201,14 @@ Each run is stored (`reports/recommendations/<run>.json` for 30 days, and one li
   For premium selling it's the share of the premium kept. Per list: how many ideas, how many are
   profitable, the median result, how often the stock went the right way, how often it beat the
   S&P 500.
+- **Following the plan**: each idea's exit plan is followed through the daily chain snapshots, and
+  the position closed at the first session its target, stop, stock-side rule, time stop or
+  days-to-expiry limit was reached (or valued at expiry). That's what following the plans would
+  have made, per list and per setup, on real quotes: the live check on the backtest.
 
-From the terminal: `uv run tp-recs run` (make one now), `tp-recs show` (the latest, ★ for new)
-and `tp-recs scorecard` (the track record). A track record of rules applied to past data is
+From the terminal: `uv run tp-recs run` (make one now), `tp-recs show` (the latest, ★ for new,
+with each idea's entry and exit plan) and `tp-recs scorecard` (the track record, with what
+following the plans made). A track record of rules applied to past data is
 evidence about the rules, not a promise; a few weeks of it is mostly noise.
 
 ## Asking Claude

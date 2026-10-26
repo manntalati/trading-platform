@@ -1388,3 +1388,50 @@ a.quote:hover .sym {
   font-size: 12px;
   white-space: nowrap;
 }
+
+/* -- the playbook: the setup, the entry and the exit plan ------------------------------------ */
+
+.pill.setup {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.plan {
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.plan-label {
+  display: inline-block;
+  min-width: 40px;
+  color: var(--ink-2);
+  font-weight: 600;
+}
+
+.watch {
+  display: grid;
+  gap: 4px;
+}
+
+.watch-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+  color: inherit;
+  text-decoration: none;
+}
+
+.watch-row .spacer {
+  flex: 1;
+}
+
+.watch-row:hover .mono {
+  color: var(--accent);
+}

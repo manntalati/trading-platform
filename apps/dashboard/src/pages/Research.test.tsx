@@ -1,5 +1,5 @@
 import { render, screen } from "@testing-library/react";
-import type { CalendarPick, ContractPick, CreditSpreadPick, IronCondorPick, OptionSummary, ResearchIdea, SpreadPick } from "../types";
+import type { CalendarPick, ContractPick, CreditSpreadPick, IronCondorPick, OptionSummary, PlayPick, ResearchIdea, SpreadPick } from "../types";
 import { fitLabel, skewLine } from "./Options";
 import { EarningsCard, IdeaCard, PickLine, PickSummary } from "./Research";
 
@@ -44,35 +44,81 @@ const spread: SpreadPick = {
   theta_day: -3.1,
 };
 
+const model = { expected_return: 0.12, sd: 0.6, sharpe: 0.2, prob_profit: 0.46, q10: -0.55, entry: 4.1, expected_exit: 4.6, capital: 4.1, horizon: 10, drift: 0.01, vol: 0.28 };
+const play: PlayPick = {
+  kind: "call debit spread",
+  structure: "call debit spread",
+  legs: [
+    { ...call, side: "buy", gamma: 3.1 },
+    { ...call, strike: 110, label: "XYZ Mar 13 '26 $110 Call", side: "sell", price: 2.0, gamma: 2.0 },
+  ],
+  expiration: "2026-03-13",
+  dte: 60,
+  debit: 4.1,
+  credit: null,
+  cost: 410,
+  capital: 410,
+  width: 10,
+  max_loss: 410,
+  max_gain: 590,
+  greeks: { delta: 21, gamma: 1.1, theta_day: -3.1, vega: 6, theta_pct: -0.0076 },
+  breakeven_move: null,
+  forecast_move: 0.017,
+  model,
+  mid: 4.0,
+  entry: { limit: 4.0, side: "debit", worst: 4.6, valid_until: "2026-01-14", worth_it: true },
+  exit: {
+    rules: { take_profit: 0.5, stop_loss: -0.5, time_stop: 10, min_dte: 21, underlying: "above_ma5" },
+    take_profit: 6.15,
+    stop: 2.05,
+    sell_by: "2026-01-26",
+    out_by: "2026-02-20",
+    stock: { rule: "above_ma5", text: "a close above the 5-day average", level: 101.4, side: "above" },
+  },
+};
+
 const idea: ResearchIdea = {
   symbol: "XYZ",
   kind: "swing",
   score: 0.82,
   spot: 102,
-  setup: { direction: "bullish", tags: ["uptrend", "pullback"], rs_3m: 0.06 },
+  setup: { direction: "bullish", tags: ["uptrend"], rs_3m: 0.06 },
   stock: { price: 102 },
   vol: { iv30: 0.32, hv20: 0.2, iv_hv: 1.6, rv_forecast: 0.22, iv_rv: 1.45, rank: null, percentile: null, history_days: 5, event: null, rich: true, as_of: null },
-  pick: spread,
-  alternative: call,
-  why: ["Uptrend: +3.0% vs its 50-day and +12.0% vs its 200-day average (price above both)."],
+  play: { name: "pullback", title: "Pullback in an uptrend", rule: "RSI(2) under 10 in an uptrend", fired: "2026-01-12", age: 0, strength: 0.8, horizon: 10, drift: 0.003, drift_source: "market", backtest: {} },
+  pick: play,
+  alternative: { ...play, structure: "call", legs: play.legs.slice(0, 1), width: null, max_gain: null },
+  why: ["Pullback in an uptrend (today): RSI(2) under 10 in an uptrend."],
   risks: ["Already held: 100 shares."],
   held: "100 shares",
 };
 
 describe("IdeaCard", () => {
-  it("shows the structure, the numbers, why and what to watch", () => {
+  it("shows the setup, the position, the model's view and the plan in and out", () => {
     render(<IdeaCard idea={idea} />);
     expect(screen.getByRole("link", { name: "XYZ" })).toHaveAttribute("href", "#/research/lookup/XYZ");
-    expect(screen.getByText("pullback")).toBeInTheDocument();
+    expect(screen.getByText("Pullback in an uptrend · today")).toBeInTheDocument();
     expect(screen.getByText(/options expensive · IV 1.5x forecast/)).toBeInTheDocument();
-    expect(screen.getByText("$590.00")).toBeInTheDocument(); // max gain
-    expect(screen.getByText(/Uptrend: \+3.0%/)).toBeInTheDocument();
+    expect(screen.getByText("max gain $590.00")).toBeInTheDocument();
+    expect(screen.getByText(/Sell XYZ Mar 13 '26 \$110 Call at \$2.00/)).toBeInTheDocument();
+    expect(screen.getByText("+12% expected")).toBeInTheDocument();
+    expect(screen.getByText(/limit \$4.00 debit \(the mid\)/)).toBeInTheDocument();
+    expect(screen.getByText("$4.60")).toBeInTheDocument(); // pay no more than
+    expect(screen.getByText(/take profit at \$6.15 \(\+50%\)/)).toBeInTheDocument();
+    expect(screen.getByText(/or on a close above the 5-day average \(now \$101.40\)/)).toBeInTheDocument();
+    expect(screen.getByText("2026-01-26")).toBeInTheDocument(); // out by
     expect(screen.getByText("Already held: 100 shares.")).toBeInTheDocument();
     expect(screen.getByText(/Alternative:/)).toBeInTheDocument();
   });
 });
 
 describe("PickSummary", () => {
+  it("shows a debit spread's capped gain (Look up)", () => {
+    render(<PickSummary pick={spread} />);
+    expect(screen.getByText("$590.00")).toBeInTheDocument();
+    expect(screen.getByText("1.4x the cost")).toBeInTheDocument();
+  });
+
   it("prices a LEAPS against the shares it stands in for", () => {
     const leaps = { ...call, dte: 520, delta: 0.8, shares_equivalent: 80, capital_freed: 7500, stock_cost: 10200, carry_per_year_pct: 0.031, breakeven_cagr: 0.035 };
     render(<PickSummary pick={leaps} />);

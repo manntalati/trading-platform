@@ -1,5 +1,6 @@
 """Stored recommendations: what's new, the log and the track record (synthetic XYZ, ABC)."""
 
+import json
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -155,3 +156,82 @@ def test_input_stamp_changes_when_a_job_writes(lake: Lake) -> None:
     (lake.reports_dir("options_snapshot")).mkdir(parents=True, exist_ok=True)
     (lake.reports_dir("options_snapshot") / "2023-12-29-r1.json").write_text("{}")
     assert recs.input_stamp(lake) != before
+
+
+def test_legs_inside_a_playbook_pick_and_its_plan_are_logged() -> None:
+    long = leg(CALL, "buy", 2.0, "2024-01-19", 100.0, "call")
+    short = leg(CALL, "sell", 0.8, "2024-01-19", 110.0, "call")
+    pick = {
+        "kind": "call debit spread",
+        "legs": [long, short],
+        "credit": None,
+        "entry": {"limit": 1.2},
+        "model": {"entry": 1.2},
+        "exit": {
+            "take_profit": 1.8,
+            "stop": 0.6,
+            "sell_by": "2024-01-05",
+            "out_by": "2023-12-29",
+            "stock": {"rule": "above_ma5"},
+            "rules": {},
+        },
+    }
+    assert [x["side"] for x in recs.legs(pick)] == ["buy", "sell"]
+    at = datetime(2023, 12, 1, 21, 0, tzinfo=UTC)
+    ideas = [idea("XYZ", "swing", pick) | {"play": {"name": "pullback"}}]
+    (row,) = recs.log_rows(run(at, date(2023, 12, 1), swing=ideas)).to_dict("records")
+    assert row["setup"] == "pullback"
+    assert row["structure"] == "call debit spread"
+    plan = json.loads(row["plan"])
+    assert plan == {
+        "take_profit": 1.8,
+        "stop": 0.6,
+        "sell_by": "2024-01-05",
+        "out_by": "2023-12-29",
+        "stock": {"rule": "above_ma5"},
+        "credit": False,
+    }
+
+
+def marks(*values: float, start: date = date(2023, 12, 4)) -> pd.Series:
+    days = [start + timedelta(days=i) for i in range(len(values))]
+    return pd.Series(values, index=days)
+
+
+def follow(
+    found: list[dict[str, Any]],
+    plan: dict[str, Any],
+    entry: float,
+    series: dict[str, pd.Series],
+    today: date = date(2023, 12, 20),
+) -> dict[str, Any]:
+    out = recs.follow_plan(found, plan, entry, series, None, date(2023, 12, 1),
+                           pd.DataFrame(), "XYZ", today)  # fmt: skip
+    assert out is not None
+    return out
+
+
+def test_following_the_plan_closes_at_the_first_exit() -> None:
+    call = [leg(CALL, "buy", 2.0, "2024-01-19", 100.0, "call")]
+    plan = {"take_profit": 3.0, "stop": 1.0, "sell_by": "2023-12-15", "out_by": "2023-12-29",
+            "credit": False}  # fmt: skip
+    hit = follow(call, plan, 2.0, {CALL: marks(2.2, 2.6, 3.1, 3.5)})
+    assert (hit["status"], hit["reason"], hit["exit"]) == ("closed", "target", "2023-12-06")
+    assert hit["result"] == pytest.approx(0.55)
+    assert hit["sessions"] == 3
+    stopped = follow(call, plan, 2.0, {CALL: marks(1.6, 0.9, 2.5)})
+    assert (stopped["reason"], stopped["result"]) == ("stop", pytest.approx(-0.55))
+    timed = follow(call, plan, 2.0, {CALL: marks(*[2.1] * 14)})
+    assert (timed["reason"], timed["exit"]) == ("time", "2023-12-15")
+    still = follow(call, plan, 2.0, {CALL: marks(2.1, 2.3)}, today=date(2023, 12, 6))
+    assert (still["status"], still["value"]) == ("open", 2.3)
+
+
+def test_following_a_credit_plan_buys_it_back() -> None:
+    put = [leg(PUT, "sell", 1.5, "2023-12-15", 90.0, "put")]
+    plan = {"take_profit": 0.75, "stop": 4.5, "sell_by": None, "out_by": None, "credit": True}
+    kept = follow(put, plan, -1.5, {PUT: marks(1.2, 0.9, 0.7)})
+    assert (kept["reason"], kept["result"]) == ("target", pytest.approx(0.8 / 1.5))
+    blown = follow(put, plan, -1.5, {PUT: marks(2.5, 4.8)})
+    assert blown["reason"] == "stop"
+    assert blown["pnl"] == pytest.approx((1.5 - 4.8) * 100)

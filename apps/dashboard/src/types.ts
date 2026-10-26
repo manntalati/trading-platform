@@ -687,23 +687,121 @@ export interface Setup {
   rs_3m: Num;
 }
 
+// the playbook (strategies/src/tp_strategies/playbook.py): a setup, the position that expresses
+// it best under the volatility forecast, and how to get in and out
+
+export interface PlayLeg extends ContractPick {
+  side: "buy" | "sell";
+  gamma: number; // per contract
+}
+
+export interface PlayModel {
+  expected_return: number; // on the capital at risk, at the horizon
+  sd: number;
+  sharpe: number;
+  prob_profit: number;
+  q10: number; // 1 in 10 outcomes is worse than this
+  entry: number; // per share: + paid, - received
+  expected_exit: number;
+  capital: number;
+  horizon: number; // sessions
+  drift: number; // the stock's expected log return over the horizon
+  vol: number;
+}
+
+export interface PlayEntry {
+  limit: number; // per share: the middle of the bid and ask
+  side: "debit" | "credit";
+  worst: number; // pay no more (credit: take no less): the modeled value at the horizon
+  valid_until: string | null;
+  worth_it: boolean;
+}
+
+export interface PlayExit {
+  rules: { take_profit: Num; stop_loss: Num; time_stop: number; min_dte: number; underlying: string | null };
+  take_profit?: number; // the position's value per share (credit: what buying it back costs)
+  stop?: number;
+  sell_by: string | null;
+  out_by: string;
+  stock: { rule: string; text: string; level: Num; side: "above" | "below" } | null;
+}
+
+export interface PlayPick {
+  kind: string;
+  structure: string;
+  legs: PlayLeg[];
+  expiration: string;
+  dte: number;
+  debit: Num;
+  credit: Num;
+  cost: number;
+  capital: number;
+  width: Num;
+  max_loss: Num;
+  max_gain: Num;
+  greeks: { delta: number; gamma: number; theta_day: number; vega: number; theta_pct: Num };
+  breakeven_move: Num; // the daily move that pays the decay (long gamma only)
+  forecast_move: Num; // the stock's forecast daily move
+  model: PlayModel;
+  mid: number;
+  fair_value?: Num;
+  entry: PlayEntry;
+  exit: PlayExit;
+}
+
+export interface Play {
+  name: string;
+  title: string;
+  rule: string;
+  fired: string;
+  age: number; // sessions since it fired
+  strength: number;
+  horizon: number;
+  drift: number;
+  drift_source: "backtest" | "market";
+  backtest: {
+    events?: number;
+    underlying?: { hit_rate?: Num; median?: Num; mean?: Num };
+    option?: { trades?: number; win_rate?: Num; median?: Num; mean?: Num };
+  };
+}
+
+export function isPlay(p: unknown): p is PlayPick {
+  return typeof p === "object" && p !== null && "legs" in p && "model" in p;
+}
+
 export interface ResearchIdea {
   symbol: string;
-  kind: "swing" | "leaps" | "bearish" | "income";
+  kind: IdeaList;
+  list?: IdeaList;
   score: number;
   spot: Num;
   setup: Setup;
   stock: StockStats;
   vol: VolContext;
-  pick: Pick | null;
-  alternative: Pick | null;
+  play?: Play;
+  pick: PlayPick | Pick | null;
+  alternative: PlayPick | Pick | null;
   why: string[];
   risks: string[];
-  held: string | null;
+  held?: string | null;
+  group?: string;
   new?: boolean; // not on the same list in the previous session's last run
 }
 
-export type IdeaList = "swing" | "leaps" | "bearish" | "income";
+export interface WatchItem {
+  symbol: string;
+  spot: number;
+  entry_level: number;
+  ma50: number;
+  momentum: number;
+  from_high: number;
+  above_ma50: number;
+  setup: string;
+  text: string;
+}
+
+export type IdeaList = "swing" | "leaps" | "bearish" | "income" | "volatility";
 
 // the stored run a /api/research answer comes from (tp_strategies/recommendations.py)
 export interface ResearchRun {
@@ -726,6 +824,10 @@ export interface Research {
   leaps: ResearchIdea[];
   bearish: ResearchIdea[];
   income: ResearchIdea[];
+  volatility: ResearchIdea[];
+  watch?: WatchItem[];
+  calibration?: { generated_at: string; start?: string; end?: string; names?: number; model?: string } | null;
+  live_setups?: Record<string, number>;
   errors?: Record<string, string>; // symbols the scan skipped, with why
   disclaimer: string;
 }
@@ -745,6 +847,7 @@ export interface SymbolResearch {
   chain_age_days: Num;
   fundamentals?: Fundamentals | null;
   held: string | null;
+  playbook?: { ideas: ResearchIdea[]; watch: boolean; levels: string[]; calibrated: boolean };
   disclaimer: string;
   ask?: { available: boolean; model: string };
 }
@@ -954,9 +1057,20 @@ export interface TrackLeg {
   right: "call" | "put";
 }
 
+export interface FollowedPlan {
+  status: "open" | "closed";
+  reason: "target" | "stop" | "stock" | "time" | "days to expiry" | "expiry" | null;
+  exit: string;
+  sessions: number;
+  value: number;
+  pnl: number;
+  result: Num;
+}
+
 export interface TrackedRecommendation {
   list: IdeaList;
   symbol: string;
+  setup?: string | null;
   structure: string;
   recommended_at: string;
   last_seen: string;
@@ -975,6 +1089,7 @@ export interface TrackedRecommendation {
   result: Num; // a debit: return on it; a credit: the share of the premium kept
   status?: "open" | "expired";
   marked: string | null;
+  followed?: FollowedPlan | null; // the exit plan, followed through the daily snapshots
 }
 
 export interface TrackSummary {
@@ -989,12 +1104,16 @@ export interface TrackSummary {
   median_move_5d: Num;
   median_move_21d: Num;
   beat_spy: Num;
+  plan_closed?: number;
+  plan_win_rate?: Num;
+  plan_median?: Num;
 }
 
 export interface TrackRecord {
   as_of: string;
   recommendations: TrackedRecommendation[];
   summary: TrackSummary[];
+  by_setup?: { setup: string; recommendations: number; plan_closed: number; plan_win_rate: Num; plan_median: Num }[];
 }
 
 // /api/jobs (services/api/src/tp_api/scheduler.py)
