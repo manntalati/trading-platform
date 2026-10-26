@@ -236,9 +236,8 @@ def options_history(
     settings = Settings()
     lake = Lake(settings.data_root)
     requests = option_history.wanted(lake)
-    if not requests:
-        typer.echo("nothing to fetch: run `tp-recs calibrate` first (it lists the contracts)")
-        return
+    if not requests:  # still reported, so the scheduler counts the week as done
+        typer.echo("nothing to fetch yet: `tp-recs calibrate` lists the contracts")
     result = run_option_history(
         lake,
         cast(OptionHistorySource, make_source(source, settings)),

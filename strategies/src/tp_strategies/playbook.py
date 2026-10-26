@@ -718,7 +718,7 @@ def build_lists(
                 idea["held"] = held[name.symbol]
                 idea["risks"].append(f"Already held: {held[name.symbol]}.")
             found[idea["list"]].append(idea)
-        if leader_watch(name.ind):
+        if name.priced is not None and not name.priced.empty and leader_watch(name.ind):
             ind = name.ind.iloc[-1]
             watch.append(
                 {

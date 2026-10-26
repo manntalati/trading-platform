@@ -83,3 +83,10 @@ def test_one_failing_underlying_does_not_stop_the_rest(
     assert not result.ok
     assert "AAPL C" in result.errors
     assert result.matched == 1
+
+
+def test_nothing_wanted_is_still_reported(tmp_path: Path) -> None:
+    lake = Lake(tmp_path)
+    result = run_option_history(lake, FakeSource(as_of=date(2024, 7, 12)), [], now=NOW)
+    assert (result.requests, result.bars) == (0, 0)
+    assert list(lake.reports_dir("option_history").glob("*.json"))
