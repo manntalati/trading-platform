@@ -209,6 +209,20 @@ def test_option_chain_maps_quotes_and_greeks(source: AlpacaSource) -> None:
     query = parse_qs(urlparse(responses.calls[0].request.url).query)
     assert query["feed"] == ["indicative"]
     assert query["expiration_date_lte"] == ["2024-08-01"]
+    assert "strike_price_gte" not in query
+
+
+@responses.activate
+def test_option_chain_and_contracts_within_a_strike_range(source: AlpacaSource) -> None:
+    responses.get(CHAIN_URL, json={"snapshots": {}, "next_page_token": None})
+    responses.get(CONTRACTS_URL, json={"option_contracts": [], "next_page_token": None})
+    source.option_chain("SPY", expiration_lte=date(2024, 8, 1), strikes=(280.0, 896.5))
+    source.option_contracts("SPY", expiration_lte=date(2024, 8, 1), strikes=(280.0, 896.5))
+    chain = parse_qs(urlparse(responses.calls[0].request.url).query)
+    assert (chain["strike_price_gte"], chain["strike_price_lte"]) == (["280.0"], ["896.5"])
+    contracts = parse_qs(urlparse(responses.calls[1].request.url).query)
+    assert contracts["strike_price_gte"] == ["280.00"]
+    assert contracts["strike_price_lte"] == ["896.50"]
 
 
 @responses.activate

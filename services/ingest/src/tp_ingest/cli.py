@@ -90,14 +90,16 @@ def _setup_logging(verbose: bool) -> None:
 
 
 def _symbols(settings: Settings, symbols: str | None) -> list[str]:
-    """Explicit ``--symbols``, else the [bars] universe plus everything in the synced portfolio
-    (so holdings outside the universe get price history for the portfolio analytics)."""
+    """Explicit ``--symbols``, else the [bars] universe, the options universe (the research needs
+    their price history) and everything in the synced portfolio (so holdings outside the universe
+    get price history for the portfolio analytics)."""
     if symbols:
         return [s.strip().upper() for s in symbols.split(",") if s.strip()]
     try:
-        universe = list(load_universes(settings.universes_file).bars)
+        universes = load_universes(settings.universes_file)
     except (OSError, ValueError) as exc:
         _config_error(exc)
+    universe = list(dict.fromkeys([*universes.bars, *universes.options_underlyings]))
     extra = [s for s in held_symbols(Lake(settings.data_root)) if s not in universe]
     if extra:
         log.info("adding %d portfolio holding(s) to the bars universe: %s", len(extra), extra)
@@ -192,10 +194,10 @@ def options_snapshot(
         universes = load_universes(settings.universes_file)
     except (OSError, ValueError) as exc:
         _config_error(exc)
+    held = held_symbols(Lake(settings.data_root))
     if underlyings:
         symbols = [s.strip().upper() for s in underlyings.split(",") if s.strip()]
     else:  # the options universe, plus what you hold (for rolls and covered calls)
-        held = held_symbols(Lake(settings.data_root))
         symbols = list(dict.fromkeys([*universes.options_underlyings, *held]))
     result = options_jobs.run_snapshot(
         Lake(settings.data_root),
@@ -203,6 +205,8 @@ def options_snapshot(
         symbols,
         now=now_utc(),
         max_dte=universes.options_max_dte if max_dte is None else max_dte,
+        strike_window=universes.options_strike_window,
+        whole=set(held),
     )
     typer.echo(result.summary())
     for failure in result.failures:

@@ -105,12 +105,58 @@ class Rules:
     cut_loss: float = -0.5
     low_odds: float = 0.2
     ideas_per_list: int = 6
+    per_group: int = 2  # names from one sector (or one fund class) per list
 
 
 # -- pricing contracts ----------------------------------------------------------------------------
 
 
-PRICED_COLUMNS = ("mid", "spread_pct", "years", "iv", "delta", "theta", "vega")
+PRICED_COLUMNS = ("mid", "spread_pct", "years", "iv", "delta", "gamma", "theta", "vega")
+VENDOR_GREEKS = ["delta", "gamma", "theta", "vega", "rho"]
+PRICED_STRIKES = (0.3, 2.0)  # as a share of spot: every window the picks and rolls look in
+
+
+def price_chain(
+    chain: pd.DataFrame,
+    spot: float,
+    now: datetime,
+    rate: float,
+    strikes: tuple[float, float] = PRICED_STRIKES,
+) -> pd.DataFrame:
+    """Every two-sided quote of ``chain`` (both sides, strikes within ``strikes`` of spot) with
+    mid, spread, implied volatility solved from the mid and greeks per share, in one pass over
+    the whole chain. The picks filter this; pricing it once per symbol is what keeps a scan of
+    many chains fast. Implied volatility is Black-Scholes, with the American model for a deep
+    in-the-money put Black-Scholes can't fit and the vendor's figure as the last resort."""
+    c = chain[
+        chain["strike"].between(spot * strikes[0], spot * strikes[1])
+        & (chain["bid"] > 0)
+        & (chain["ask"] >= chain["bid"])
+    ].drop(columns=VENDOR_GREEKS, errors="ignore")
+    if c.empty:
+        return c.assign(**{k: pd.Series(dtype=float) for k in PRICED_COLUMNS})
+    c = c.copy()
+    c["mid"] = (c["bid"] + c["ask"]) / 2
+    c["spread_pct"] = (c["ask"] - c["bid"]) / c["mid"]
+    expirations = [e if isinstance(e, date) else pd.Timestamp(e).date() for e in c["expiration"]]
+    by_expiry = {e: years_until(e, now) for e in set(expirations)}
+    years = np.array([by_expiry[e] for e in expirations])
+    call = (c["right"] == "C").to_numpy()
+    mid = c["mid"].to_numpy(dtype=float)
+    strike = c["strike"].to_numpy(dtype=float)
+    iv = bs.implied_vol_array(mid, spot, strike, years, call, rate)
+    intrinsic = np.where(call, np.maximum(spot - strike, 0.0), np.maximum(strike - spot, 0.0))
+    for i in np.flatnonzero(np.isnan(iv) & ~call & (mid > intrinsic)):
+        iv[i] = american.implied_vol(mid[i], spot, strike[i], years[i], call=False, rate=rate) or (
+            math.nan
+        )
+    vendor = pd.to_numeric(c["implied_volatility"], errors="coerce").to_numpy(dtype=float)
+    iv = np.where(np.isnan(iv) & (vendor > 0), vendor, iv)
+    g = bs.greeks_array(spot, strike, years, iv, call, rate)
+    c["years"], c["iv"] = years, iv
+    for name in ("delta", "gamma", "theta", "vega"):
+        c[name] = g[name]
+    return c.dropna(subset=["delta"])
 
 
 def priced(
@@ -124,53 +170,21 @@ def priced(
     strikes: tuple[float, float] = (0.5, 1.5),
 ) -> pd.DataFrame:
     """Two-sided quotes of one side of the chain within an expiry and strike window, with mid,
-    spread, implied volatility (solved from the mid) and greeks per share. Always has those
+    spread, implied volatility (solved from the mid) and greeks per share. ``chain`` is a raw
+    snapshot or one ``price_chain`` already priced (then this only filters). Always has those
     columns, even when nothing in the window qualifies (an empty frame)."""
-    c = chain[
+    if not _is_priced(chain):
+        chain = price_chain(chain, spot, now, rate, strikes)
+    out: pd.DataFrame = chain[
         (chain["right"] == right)
         & chain["dte"].between(*dte)
         & chain["strike"].between(spot * strikes[0], spot * strikes[1])
-        & (chain["bid"] > 0)
-        & (chain["ask"] >= chain["bid"])
-    ].copy()
-    if c.empty:
-        vendor = c.drop(columns=["delta", "gamma", "theta", "vega", "rho"], errors="ignore")
-        return vendor.assign(**{k: pd.Series(dtype=float) for k in PRICED_COLUMNS})
-    c["mid"] = (c["bid"] + c["ask"]) / 2
-    c["spread_pct"] = (c["ask"] - c["bid"]) / c["mid"]
-    rows = []
-    for _, r in c.iterrows():
-        exp = (
-            r["expiration"]
-            if isinstance(r["expiration"], date)
-            else pd.Timestamp(r["expiration"]).date()
-        )
-        years = years_until(exp, now)
-        call = right == "C"
-        iv = bs.implied_vol(float(r["mid"]), spot, float(r["strike"]), years, call=call, rate=rate)
-        if (
-            iv is None
-            and not call
-            and float(r["mid"]) > bs.intrinsic(spot, float(r["strike"]), False)
-        ):
-            iv = american.implied_vol(float(r["mid"]), spot, float(r["strike"]), years,
-                                      call=False, rate=rate)  # fmt: skip
-        if iv is None and pd.notna(r["implied_volatility"]) and r["implied_volatility"] > 0:
-            iv = float(r["implied_volatility"])
-        g = bs.greeks(spot, float(r["strike"]), years, iv, call=call, rate=rate) if iv else None
-        rows.append(
-            {
-                "years": years,
-                "iv": iv,
-                "delta": g.delta if g else math.nan,
-                "theta": g.theta if g else math.nan,
-                "vega": g.vega if g else math.nan,
-            }
-        )
-    extra = pd.DataFrame(rows, index=c.index)
-    # the vendor's greeks are replaced by ones consistent with the mid and this spot
-    vendor = c.drop(columns=["delta", "gamma", "theta", "vega", "rho"], errors="ignore")
-    return pd.concat([vendor, extra], axis=1).dropna(subset=["delta"])
+    ]
+    return out
+
+
+def _is_priced(chain: pd.DataFrame) -> bool:
+    return all(k in chain.columns for k in PRICED_COLUMNS)
 
 
 def contract_view(
@@ -649,7 +663,7 @@ def _fit_near(
 ) -> ExpiryFit | None:
     """The SVI fit of the expiration nearest ``days`` out (at least a week) that fits."""
     exps = sorted(
-        {e for e in chain["expiration"] if 7 <= years_until(e, now) * bs.YEAR_DAYS <= 120},
+        {e for e in set(chain["expiration"]) if 7 <= years_until(e, now) * bs.YEAR_DAYS <= 120},
         key=lambda e: abs(years_until(e, now) * bs.YEAR_DAYS - days),
     )
     for exp in exps[:3]:
@@ -745,6 +759,7 @@ def analyze(
     }
     if chain is None or chain.empty or not spot:
         return out
+    chain = price_chain(chain, spot, now, rate)
     picks: dict[str, Any] = {}
     for right, name in (("C", "call"), ("P", "put")):
         row = swing_pick(chain, spot, now, rate, right, rules)  # type: ignore[arg-type]
@@ -806,10 +821,15 @@ def _scenarios(row: pd.Series, spot: float, now: datetime, rate: float) -> dict[
 
 
 def rank_ideas(
-    analyses: list[dict[str, Any]], held: Mapping[str, str], rules: Rules | None = None
+    analyses: list[dict[str, Any]],
+    held: Mapping[str, str],
+    rules: Rules | None = None,
+    groups: Mapping[str, str] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Swing calls, LEAPS, bearish puts and premium selling, best first, each with why and
-    what to watch.
+    what to watch. Only names with a contract that fits make a list, and at most
+    ``rules.per_group`` from one sector or fund class (``groups``: symbol -> group) so one hot
+    industry can't fill it.
 
     Scores are percentile ranks within the scanned names (so they compare names with each
     other, not with an absolute bar): swing favours 6-month momentum, strength against the
@@ -856,7 +876,26 @@ def rank_ideas(
             )
             out["income"].append(_idea(a, "income", richness, held))
     for k in out:
-        out[k] = sorted(out[k], key=lambda x: -x["score"])[: rules.ideas_per_list]
+        ranked = sorted((i for i in out[k] if i["pick"] is not None), key=lambda x: -x["score"])
+        out[k] = _diversified(ranked, groups or {}, rules.per_group, rules.ideas_per_list)
+    return out
+
+
+def _diversified(
+    ranked: list[dict[str, Any]], groups: Mapping[str, str], per_group: int, size: int
+) -> list[dict[str, Any]]:
+    """The best ``size`` ideas, skipping any beyond ``per_group`` from one group."""
+    out: list[dict[str, Any]] = []
+    taken: dict[str, int] = {}
+    for idea in ranked:
+        group = groups.get(idea["symbol"], idea["symbol"])
+        if taken.get(group, 0) >= per_group:
+            continue
+        taken[group] = taken.get(group, 0) + 1
+        idea["group"] = group
+        out.append(idea)
+        if len(out) == size:
+            break
     return out
 
 
@@ -1101,7 +1140,8 @@ def scan(
         except Exception as exc:  # one odd chain must not take the whole scan down
             log.exception("options research: %s failed", symbol)
             errors[symbol] = f"{type(exc).__name__}: {exc}"
-    ideas = rank_ideas(analyses, held or {}, rules)
+    groups = {s: classifier.sectors.get(s) or classifier.funds.get(s) or s for s in wanted}
+    ideas = rank_ideas(analyses, held or {}, rules, groups)
     without = sorted({a["symbol"] for a in analyses if not a["picks"]})
     return {
         "as_of": now.isoformat(),
@@ -1131,6 +1171,14 @@ def holding_actions(
     chain: rolls, taking profits, cutting low-odds losers, covered calls, LEAPS in place of
     shares, protective puts. Each says what it costs or brings in."""
     rules = rules or Rules()
+    have_chain = chain is not None and not chain.empty
+    if position.get("kind") == "option":  # the same spot each would price with
+        spot = _num((position.get("stats") or {}).get("spot"))
+        spot = spot or (chain_spot(chain) if chain is not None and have_chain else None)
+    else:
+        spot = _num(position.get("price"))
+    if chain is not None and have_chain and spot:
+        chain = price_chain(chain, spot, now, rate)
     if position.get("kind") == "option":
         return _option_actions(position, chain, now, rate, rules)
     return _stock_actions(position, chain, now, rate, rules)

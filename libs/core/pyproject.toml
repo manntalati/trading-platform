@@ -9,6 +9,7 @@ dependencies = [
     "pandas>=2.2",
     "pyarrow>=17",
     "pydantic-settings>=2.5",
+    "scipy>=1.13",
 ]
 
 [build-system]

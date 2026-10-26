@@ -8,7 +8,7 @@ universe. One immutable raw file per underlying per day.
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -20,7 +20,7 @@ from tp_core.calendar import NEW_YORK, is_session
 from tp_core.occ import parse_occ
 from tp_core.schemas import RAW_OPTION_CHAIN_SCHEMA, RAW_OPTION_CHAIN_SNAPSHOTS, conform
 from tp_core.storage import Lake, new_run_id, write_json, write_raw
-from tp_ingest.sources.base import OptionsSource
+from tp_ingest.sources.base import OptionsSource, StrikeRange
 
 log = logging.getLogger(__name__)
 
@@ -81,7 +81,12 @@ def run_snapshot(
     *,
     now: datetime,
     max_dte: int = 365,
+    strike_window: tuple[float, float] | None = None,
+    whole: Collection[str] = (),
 ) -> OptionsJobResult:
+    """Store each underlying's chain. ``strike_window`` (shares of the underlying's price) keeps
+    only the strikes in it, except for the ``whole`` underlyings (the ones you hold) and any
+    whose price isn't known."""
     snapshot_date = now.astimezone(NEW_YORK).date()
     result = OptionsJobResult(run_id=new_run_id(now), snapshot_date=snapshot_date)
     if not is_session(snapshot_date):
@@ -100,7 +105,11 @@ def run_snapshot(
         snap = UnderlyingSnapshot(underlying)
         result.underlyings.append(snap)
         try:
-            chain = _snapshot_one(source, underlying, expiration_lte, spots, now, result.run_id)
+            window = None if underlying in whole else strike_window
+            strikes = _strike_range(spots, underlying, window)
+            chain = _snapshot_one(
+                source, underlying, expiration_lte, spots, now, result.run_id, strikes
+            )
             snap.contracts = len(chain)
             snap.with_quote = int(chain["bid"].notna().sum())
             snap.crossed = int((chain["bid"] > chain["ask"]).sum())
@@ -131,6 +140,17 @@ def run_snapshot(
     return result
 
 
+def _strike_range(
+    spots: pd.DataFrame, underlying: str, window: tuple[float, float] | None
+) -> StrikeRange | None:
+    if window is None or underlying not in spots.index:
+        return None
+    price = pd.to_numeric(pd.Series([spots.loc[underlying, "price"]]), errors="coerce").iloc[0]
+    if not price > 0:
+        return None
+    return (round(float(price) * window[0], 2), round(float(price) * window[1], 2))
+
+
 def _snapshot_one(
     source: OptionsSource,
     underlying: str,
@@ -138,9 +158,10 @@ def _snapshot_one(
     spots: pd.DataFrame,
     now: datetime,
     run_id: str,
+    strikes: StrikeRange | None = None,
 ) -> pd.DataFrame:
-    quotes = source.option_chain(underlying, expiration_lte=expiration_lte)
-    contracts = source.option_contracts(underlying, expiration_lte=expiration_lte)
+    quotes = source.option_chain(underlying, expiration_lte=expiration_lte, strikes=strikes)
+    contracts = source.option_contracts(underlying, expiration_lte=expiration_lte, strikes=strikes)
     chain = quotes.merge(contracts, on="contract", how="outer")
 
     parsed = [parse_occ(c) for c in chain["contract"]]

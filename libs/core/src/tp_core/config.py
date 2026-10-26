@@ -147,6 +147,8 @@ class Universes:
     bars: tuple[str, ...]
     options_underlyings: tuple[str, ...] = ()
     options_max_dte: int = 365
+    # strikes stored, as a share of the underlying's price (None: the whole chain)
+    options_strike_window: tuple[float, float] | None = None
     watchlist: tuple[str, ...] = ()
     research: tuple[str, ...] = ()  # names the options research scans (beyond the options list)
 
@@ -187,10 +189,14 @@ def load_universes(path: Path, *, local: bool = True) -> Universes:
             s for s in extra.get("dashboard", {}).get("watchlist", []) if s not in watchlist
         ]
         bars, underlyings = list(dict.fromkeys(bars)), list(dict.fromkeys(underlyings))
+    window = options.get("strike_window")
+    if window is not None and not (len(window) == 2 and 0 < window[0] < 1 < window[1]):
+        raise ValueError(f"[options] strike_window in {path} must be [below 1, above 1]: {window}")
     return Universes(
         bars=tuple(bars),
         options_underlyings=tuple(underlyings),
         options_max_dte=int(options.get("max_dte", 365)),
+        options_strike_window=(float(window[0]), float(window[1])) if window else None,
         watchlist=tuple(dict.fromkeys(watchlist)),
         research=tuple(research),
     )

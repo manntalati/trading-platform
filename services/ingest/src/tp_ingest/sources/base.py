@@ -108,6 +108,9 @@ OPTION_CONTRACT_COLUMNS = (
 )
 
 
+StrikeRange = tuple[float, float]  # lowest and highest strike, in dollars
+
+
 class OptionsSource(Protocol):
     name: str
     options_feed: str
@@ -116,11 +119,16 @@ class OptionsSource(Protocol):
         """Latest trade and quote per underlying; columns ``UNDERLYING_COLUMNS``."""
         ...
 
-    def option_chain(self, underlying: str, *, expiration_lte: date) -> pd.DataFrame:
-        """Latest quote, trade, IV and greeks per contract; columns ``OPTION_QUOTE_COLUMNS``."""
+    def option_chain(
+        self, underlying: str, *, expiration_lte: date, strikes: StrikeRange | None = None
+    ) -> pd.DataFrame:
+        """Latest quote, trade, IV and greeks per contract (strikes within ``strikes``, in
+        dollars, when given); columns ``OPTION_QUOTE_COLUMNS``."""
         ...
 
-    def option_contracts(self, underlying: str, *, expiration_lte: date) -> pd.DataFrame:
+    def option_contracts(
+        self, underlying: str, *, expiration_lte: date, strikes: StrikeRange | None = None
+    ) -> pd.DataFrame:
         """Contract reference data incl. open interest; columns ``OPTION_CONTRACT_COLUMNS``."""
         ...
 

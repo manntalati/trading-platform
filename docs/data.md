@@ -130,11 +130,15 @@ which is exactly the case the jump check exists for.
 ## Option chain snapshots
 
 Free historical options chains are scarce, so we build our own: every trading day at 15:45 ET
-`tp-data options snapshot` stores the full chain (expirations up to `max_dte`: 800 days, so LEAPS
-are included) for each underlying in the `[options]` section of `config/universes.toml`, your
-`[research] symbols` in `config/universes.local.toml`, and everything you hold (stocks and the
-underlyings of your options). The 30-day implied volatility of each snapshot is kept in
-`clean/option_iv_daily` for the options research's IV rank ([research.md](research.md)).
+`tp-data options snapshot` stores the chain (expirations up to `max_dte`: 800 days, so LEAPS
+are included) for each underlying in the `[options]` section of `config/universes.toml` (about
+100 liquid names across sectors), your `[research] symbols` in `config/universes.local.toml`, and
+everything you hold (stocks and the underlyings of your options). Strikes are kept within
+`strike_window` (50% to 160% of the underlying's price), which is everything the research prices
+and keeps a snapshot of the whole list to a few megabytes; the names you hold are stored whole, so
+every contract you own is priced. Every options name also gets daily bars. The 30-day implied
+volatility of each snapshot is kept in `clean/option_iv_daily` for the options research's IV rank
+([research.md](research.md)).
 
 Each row is one contract at one moment (`RAW_OPTION_CHAIN_SCHEMA`): OCC symbol plus parsed
 `expiration`/`right`/`strike`/`dte`; the underlying's last trade and quote; the option's bid/ask

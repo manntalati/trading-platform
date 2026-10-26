@@ -8,9 +8,12 @@ it. They're research prompts, not advice: options can lose their whole value, an
 
 ## Which names
 
-Everything with daily bars: your own list (below), the options universe, your holdings, and the
-bars universe. Cash, bond and leveraged funds are left out. Contracts are picked only for names
-with an option chain from the last five days.
+Everything with daily bars: your own list (below), the options universe (about 100 liquid names:
+index and sector ETFs, mega caps and the most traded single-stock options), your holdings, and
+the bars universe. Cash, bond and leveraged funds are left out. Contracts are picked only for
+names with an option chain from the last five days, and a name only makes a list with a contract
+that fits; at most two names from one sector (or one fund class, for ETFs) make each list, so one
+hot industry can't fill it.
 
 ### Adding your own tickers
 

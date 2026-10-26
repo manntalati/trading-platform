@@ -8,12 +8,19 @@ value; good enough to read a position's risk, not to make a market. Time is cale
 The probabilities are *risk-neutral*: what the option's price implies, not a forecast. They are
 how the market prices the odds, which is the right yardstick for "is holding worth it": an
 option is fairly priced exactly when its expected payoff under these odds equals its price.
+
+The ``*_array`` functions do the same over numpy arrays (a whole chain at once), element by
+element; they agree with the scalar ones.
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Any
+
+import numpy as np
+from scipy import special
 
 YEAR_DAYS = 365.0
 MIN_VOL, MAX_VOL = 1e-4, 5.0
@@ -206,3 +213,133 @@ def expected_move(spot: float, years: float, vol: float) -> float:
     if years <= 0 or vol <= 0:
         return 0.0
     return spot * vol * math.sqrt(years)
+
+
+# -- whole chains at once -------------------------------------------------------------------------
+
+Array = np.ndarray[Any, np.dtype[np.float64]]
+
+
+def _arrays(*values: Any) -> list[Array]:
+    return [np.asarray(v, dtype=float) for v in np.broadcast_arrays(*values)]
+
+
+def price_array(
+    spot: Any, strike: Any, years: Any, vol: Any, call: Any, rate: float = 0.0, div: float = 0.0
+) -> Array:
+    """``price`` element by element (``call``: a boolean array or one bool)."""
+    s, k, t, v = _arrays(spot, strike, years, vol)
+    c = np.broadcast_to(np.asarray(call, dtype=bool), s.shape)
+    live = (t > 0) & (v > 0)
+    tt, vv = np.where(live, t, 1.0), np.where(live, v, 1.0)
+    sd = vv * np.sqrt(tt)
+    d1 = (np.log(s / k) + (rate - div + 0.5 * vv * vv) * tt) / sd
+    d2 = d1 - sd
+    df, qf = np.exp(-rate * tt), np.exp(-div * tt)
+    calls = s * qf * special.ndtr(d1) - k * df * special.ndtr(d2)
+    puts = k * df * special.ndtr(-d2) - s * qf * special.ndtr(-d1)
+    value = np.where(c, calls, puts)
+    # expired: intrinsic; no volatility: the discounted intrinsic value of the forward
+    forward = s * np.exp((rate - div) * np.maximum(t, 0.0))
+    flat = np.exp(-rate * np.maximum(t, 0.0)) * np.where(
+        c, np.maximum(forward - k, 0.0), np.maximum(k - forward, 0.0)
+    )
+    spent = np.where(c, np.maximum(s - k, 0.0), np.maximum(k - s, 0.0))
+    out: Array = np.where(live, value, np.where(t <= 0, spent, flat))
+    return out
+
+
+def greeks_array(
+    spot: Any, strike: Any, years: Any, vol: Any, call: Any, rate: float = 0.0, div: float = 0.0
+) -> dict[str, Array]:
+    """``greeks`` element by element: ``price``, ``delta``, ``gamma``, ``theta`` (per calendar
+    day) and ``vega`` (per volatility point). NaN where the volatility is NaN."""
+    s, k, t, v = _arrays(spot, strike, years, vol)
+    c = np.broadcast_to(np.asarray(call, dtype=bool), s.shape)
+    live = (t > 0) & (v > 0)
+    tt, vv = np.where(live, t, 1.0), np.where(live, v, 1.0)
+    root = np.sqrt(tt)
+    sd = vv * root
+    d1 = (np.log(s / k) + (rate - div + 0.5 * vv * vv) * tt) / sd
+    d2 = d1 - sd
+    df, qf = np.exp(-rate * tt), np.exp(-div * tt)
+    pdf = np.exp(-0.5 * d1 * d1) / math.sqrt(2.0 * math.pi)
+    gamma = qf * pdf / (s * sd)
+    vega = s * qf * pdf * root / 100.0
+    decay = -s * qf * pdf * vv / (2.0 * root)
+    call_theta = decay - rate * k * df * special.ndtr(d2) + div * s * qf * special.ndtr(d1)
+    put_theta = decay + rate * k * df * special.ndtr(-d2) - div * s * qf * special.ndtr(-d1)
+    delta = np.where(c, qf * special.ndtr(d1), -qf * special.ndtr(-d1))
+    itm = np.where(c, s > k, s < k)
+    dead = np.where(itm, np.where(c, 1.0, -1.0), 0.0)
+    out = {
+        "price": price_array(s, k, t, v, c, rate, div),
+        "delta": np.where(live, delta, dead),
+        "gamma": np.where(live, gamma, 0.0),
+        "theta": np.where(live, np.where(c, call_theta, put_theta) / YEAR_DAYS, 0.0),
+        "vega": np.where(live, vega, 0.0),
+    }
+    missing = np.isnan(v)
+    return {name: np.where(missing, np.nan, values) for name, values in out.items()}
+
+
+def implied_vol_array(
+    value: Any,
+    spot: Any,
+    strike: Any,
+    years: Any,
+    call: Any,
+    rate: float = 0.0,
+    div: float = 0.0,
+    *,
+    iterations: int = 100,
+) -> Array:
+    """``implied_vol`` element by element, NaN where no volatility fits. The same safeguarded
+    Newton iteration, run on every element at once until all have converged."""
+    p, s, k, t = _arrays(value, spot, strike, years)
+    c = np.broadcast_to(np.asarray(call, dtype=bool), s.shape)
+    ok = (t > 0) & (p > 0) & (s > 0) & (k > 0)
+    lo = np.full(s.shape, MIN_VOL)
+    hi = np.full(s.shape, MAX_VOL)
+    tt = np.where(ok, t, 1.0)
+    ok &= p > price_array(s, k, tt, lo, c, rate, div) + 1e-9
+    ok &= p < price_array(s, k, tt, hi, c, rate, div)
+    vol = np.clip(np.sqrt(2.0 * math.pi / tt) * p / np.where(s > 0, s, 1.0), 0.05, 2.0)
+    done = ~ok
+    with np.errstate(all="ignore"):  # far from the money, vega underflows: bisection takes over
+        vol = _solve(p, s, k, tt, c, rate, div, vol, lo, hi, done, iterations)
+    out: Array = np.where(ok, vol, np.nan)
+    return out
+
+
+def _solve(
+    p: Array,
+    s: Array,
+    k: Array,
+    tt: Array,
+    c: Any,
+    rate: float,
+    div: float,
+    vol: Array,
+    lo: Array,
+    hi: Array,
+    done: Any,
+    iterations: int,
+) -> Array:
+    for _ in range(iterations):
+        if done.all():
+            break
+        diff = price_array(s, k, tt, vol, c, rate, div) - p
+        settled = np.abs(diff) < 1e-10
+        hi = np.where(~done & (diff > 0), vol, hi)
+        lo = np.where(~done & (diff <= 0), vol, lo)
+        sd = vol * np.sqrt(tt)
+        d1 = (np.log(s / k) + (rate - div + 0.5 * vol * vol) * tt) / sd
+        vega = s * np.exp(-div * tt) * np.exp(-0.5 * d1 * d1) / math.sqrt(2 * math.pi) * np.sqrt(tt)
+        step = np.where(vega > 1e-12, vol - diff / vega, np.nan)
+        inside = (step > lo) & (step < hi)
+        nxt = np.where(inside, step, 0.5 * (lo + hi))
+        settled |= (np.abs(nxt - vol) < 1e-10) | (hi - lo < 1e-10)
+        vol = np.where(done | (np.abs(diff) < 1e-10), vol, nxt)
+        done |= settled
+    return vol

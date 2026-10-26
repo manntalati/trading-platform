@@ -26,6 +26,7 @@ from tp_ingest.sources.base import (
     OPTION_CONTRACT_COLUMNS,
     OPTION_QUOTE_COLUMNS,
     UNDERLYING_COLUMNS,
+    StrikeRange,
 )
 
 HISTORY_START = date(2015, 1, 2)
@@ -59,6 +60,7 @@ class FakeSource:
     feed: str = "synthetic"
     options_feed: str = "synthetic"
     calls: list[tuple[str, tuple[str, ...], date, date]] = field(default_factory=list)
+    strike_requests: dict[str, StrikeRange | None] = field(default_factory=dict)
 
     def news(self, symbols: Sequence[str], start: datetime, end: datetime) -> pd.DataFrame:
         """One headline per symbol per day at 14:00 UTC, alternating good and bad news."""
@@ -215,14 +217,17 @@ class FakeSource:
             )
         return pd.DataFrame(rows, columns=list(UNDERLYING_COLUMNS))
 
-    def option_chain(self, underlying: str, *, expiration_lte: date) -> pd.DataFrame:
+    def option_chain(
+        self, underlying: str, *, expiration_lte: date, strikes: StrikeRange | None = None
+    ) -> pd.DataFrame:
         self.calls.append(("option_chain", (underlying,), self.as_of, expiration_lte))
+        self.strike_requests[underlying] = strikes
         if underlying in self.failing_underlyings:
             raise ConnectionError(f"synthetic failure for {underlying}")
         spot = self._spot(underlying)
         at = pd.Timestamp(datetime.combine(self.as_of, datetime.min.time(), tzinfo=UTC))
         rows = []
-        for expiration, strike, right in self._grid(underlying, expiration_lte):
+        for expiration, strike, right in self._grid(underlying, expiration_lte, strikes):
             t = max((expiration - self.as_of).days, 1) / 365
             vol = 0.20 + 0.10 * abs(math.log(strike / spot))  # a mild smile
             price, delta = _black_scholes(spot, strike, t, vol, right)
@@ -248,7 +253,9 @@ class FakeSource:
             )
         return pd.DataFrame(rows, columns=list(OPTION_QUOTE_COLUMNS))
 
-    def option_contracts(self, underlying: str, *, expiration_lte: date) -> pd.DataFrame:
+    def option_contracts(
+        self, underlying: str, *, expiration_lte: date, strikes: StrikeRange | None = None
+    ) -> pd.DataFrame:
         self.calls.append(("option_contracts", (underlying,), self.as_of, expiration_lte))
         prior = self.as_of - timedelta(days=1)
         rows = [
@@ -260,7 +267,7 @@ class FakeSource:
                 "close_price": None,
                 "close_price_date": None,
             }
-            for expiration, strike, right in self._grid(underlying, expiration_lte)
+            for expiration, strike, right in self._grid(underlying, expiration_lte, strikes)
         ]
         return pd.DataFrame(rows, columns=list(OPTION_CONTRACT_COLUMNS))
 
@@ -268,11 +275,16 @@ class FakeSource:
         close = self._history(symbol, self.as_of)["close"].iloc[-1]
         return float(round(close, 2))
 
-    def _grid(self, underlying: str, expiration_lte: date) -> list[tuple[date, float, Right]]:
-        """Weekly Friday expirations for 8 weeks plus quarterly ones, strikes ±20% of spot."""
+    def _grid(
+        self, underlying: str, expiration_lte: date, window: StrikeRange | None = None
+    ) -> list[tuple[date, float, Right]]:
+        """Weekly Friday expirations for 8 weeks plus quarterly ones, strikes ±20% of spot (those
+        inside ``window``, when given)."""
         spot = self._spot(underlying)
         step = 1.0 if spot < 200 else 5.0
         strikes = [step * k for k in range(int(spot * 0.8 / step), int(spot * 1.2 / step) + 1)]
+        if window is not None:
+            strikes = [k for k in strikes if window[0] <= k <= window[1]]
         first_friday = self.as_of + timedelta(days=(4 - self.as_of.weekday()) % 7)
         expirations = {first_friday + timedelta(weeks=w) for w in range(8)}
         expirations |= {first_friday + timedelta(weeks=13 * q) for q in range(1, 9)}

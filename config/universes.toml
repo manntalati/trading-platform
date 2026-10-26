@@ -34,16 +34,37 @@ stocks = [
 ]
 
 [options]
-# Daily chain snapshots: build our own options history from day one. Liquid, tight markets,
-# mix of index ETFs, mega caps, and a few vol/sector names.
+# Daily chain snapshots: build our own options history from day one, and the names the options
+# research can pick contracts on. Liquid, tight markets across sectors: index and sector ETFs,
+# mega caps, and the most actively traded single-stock options. Every name here also gets daily
+# bars (tp-data bars daily backfills a new one on its first run).
 underlyings = [
-    "SPY", "QQQ", "IWM", "DIA", "TLT", "GLD", "EEM", "XLF", "XLE", "SMH",
-    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AMD", "AVGO", "NFLX",
-    "JPM", "BAC", "XOM", "COIN", "UBER",
+    # index, rates, gold and emerging markets
+    "SPY", "QQQ", "IWM", "DIA", "TLT", "GLD", "EEM",
+    # sectors and themes
+    "XLF", "XLE", "SMH", "XLK", "XLV", "XLY", "XLI", "XBI", "KRE", "GDX", "FXI", "ARKK",
+    # technology
+    "AAPL", "MSFT", "NVDA", "AMD", "AVGO", "ORCL", "CRM", "ADBE", "INTC", "QCOM", "AMAT",
+    "LRCX", "MRVL", "ARM", "SMCI", "DELL", "PANW", "CRWD", "SNOW", "NET", "DDOG", "ANET", "MSTR",
+    # communication services
+    "GOOGL", "META", "NFLX", "DIS", "CMCSA", "T", "VZ", "SPOT", "ROKU", "SNAP", "PINS", "RBLX",
+    # consumer
+    "AMZN", "TSLA", "HD", "LOW", "MCD", "SBUX", "NKE", "F", "GM", "RIVN", "ABNB", "DASH", "BABA",
+    "PDD", "COST", "WMT", "TGT", "PG", "KO", "PEP",
+    # financials
+    "JPM", "BAC", "GS", "MS", "C", "WFC", "SCHW", "AXP", "V", "MA", "PYPL", "COIN",
+    # health care
+    "LLY", "UNH", "MRK", "ABBV", "AMGN", "MRNA",
+    # energy, industrials, materials
+    "XOM", "CVX", "OXY", "SLB", "CAT", "BA", "GE", "LMT", "UPS", "UBER", "FCX", "NEM",
 ]
 # Expirations further out than this are skipped. Two years covers LEAPS (the January expiries
 # one and two years out) for the options research.
 max_dte = 800
+# Strikes kept, as a share of the underlying's price: everything the research prices (deep
+# in-the-money LEAPS to far out-of-the-money wings) without the strikes nobody trades. The names
+# you hold are always stored whole, so every contract you own is priced.
+strike_window = [0.5, 1.6]
 
 [dashboard]
 # Always streamed live on the dashboard, alongside your market-priced holdings. Alpaca's free

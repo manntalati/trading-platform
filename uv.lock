@@ -4770,6 +4770,7 @@ dependencies = [
     { name = "pandas" },
     { name = "pyarrow" },
     { name = "pydantic-settings" },
+    { name = "scipy" },
 ]
 
 [package.metadata]
@@ -4779,6 +4780,7 @@ requires-dist = [
     { name = "pandas", specifier = ">=2.2" },
     { name = "pyarrow", specifier = ">=17" },
     { name = "pydantic-settings", specifier = ">=2.5" },
+    { name = "scipy", specifier = ">=1.13" },
 ]
 
 [[package]]
