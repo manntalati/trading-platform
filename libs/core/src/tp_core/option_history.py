@@ -21,6 +21,7 @@ from typing import Any
 import pandas as pd
 import pyarrow as pa
 
+from tp_core.schemas import conform
 from tp_core.storage import Lake, read_parquet_dir, write_parquet
 
 WANTED = ("playbook", "wanted_contracts.json")  # under reports/
@@ -50,6 +51,7 @@ MATCHES_SCHEMA = pa.schema(
         ("expiration", pa.date32()),
         ("strike", pa.float64()),
         ("matched_at", pa.timestamp("us", tz="UTC")),
+        ("bars_fetched", pa.bool_()),  # its bars were asked for (and answered); else retried
     ]
 )
 
@@ -85,8 +87,10 @@ def save_bars(lake: Lake, bars: pd.DataFrame) -> None:
 
 
 def save_matches(lake: Lake, matches: pd.DataFrame) -> None:
+    """Merge ``matches`` in (a request matched again keeps the latest); missing columns are
+    null."""
     old = load_matches(lake)
-    frames = [f for f in (old, matches[[f.name for f in MATCHES_SCHEMA]]) if len(f)]
+    frames = [f for f in (old, conform(matches, MATCHES_SCHEMA)) if len(f)]
     if not frames:
         return
     out = pd.concat(frames, ignore_index=True).drop_duplicates("key", keep="last")
