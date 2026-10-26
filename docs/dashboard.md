@@ -90,6 +90,13 @@ the last close in the lake. Holdings without a live price (mutual funds, options
 at the broker's last valuation; an option's underlying is live, so its moneyness updates.
 Outside market hours the stream is quiet and the dashboard shows last closes.
 
+Alpaca allows **one** live stream per account. If another connection holds it, Alpaca answers
+`connection limit exceeded`; the stream keeps retrying (with back-off) and the status chip turns
+**Offline** with the reason, while prices show the last close. The usual cause is two `tp-api`
+processes on the same keys, such as the Mac agent (`make mac-agent`) and one started by hand:
+`pgrep -fl tp-api` lists them, `make mac-agent-remove` stops the agent. Right after a restart it
+can also be the previous connection, which Alpaca drops within a few minutes.
+
 ## API
 
 All JSON. Reads (`GET`):

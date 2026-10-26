@@ -90,3 +90,72 @@ def test_nothing_wanted_is_still_reported(tmp_path: Path) -> None:
     result = run_option_history(lake, FakeSource(as_of=date(2024, 7, 12)), [], now=NOW)
     assert (result.requests, result.bars) == (0, 0)
     assert list(lake.reports_dir("option_history").glob("*.json"))
+
+
+def test_only_standard_contracts_are_matched() -> None:
+    from tp_ingest.jobs.option_history import standard
+
+    assert standard("SPY240621C00500000", "SPY")
+    assert standard("BRKB240621C00400000", "BRK.B")
+    assert not standard("1RIVN260116C00017400", "RIVN")  # adjusted after a corporate action
+    assert not standard("AAPL1240621C00100000", "AAPL")
+    assert not standard("SPYX240621C00500000", "SPY")
+
+
+def test_an_adjusted_contract_in_a_batch_costs_nothing_and_misses_are_retried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What happened on a real run: Alpaca listed an adjusted contract (``1SPY…``) and refused
+    the whole bars request for its batch. It isn't matched any more; and the contracts whose
+    bars an earlier run lost are fetched on the next one."""
+    lake = Lake(tmp_path)
+    source = FakeSource(as_of=date(2024, 7, 12))
+    k = round(source._spot("SPY") / 5) * 5.0
+    listed, bars = source.listed_contracts, source.option_bars
+
+    def with_adjusted(underlying: str, **kwargs: object) -> pd.DataFrame:
+        out = listed(underlying, **kwargs)  # type: ignore[arg-type]
+        odd = out.iloc[:1].assign(contract=lambda d: "1" + d["contract"], strike=k)
+        return pd.concat([odd, out], ignore_index=True)
+
+    def strict_bars(contracts: list[str], start: date, end: date) -> pd.DataFrame:
+        if any(c[0].isdigit() for c in contracts):
+            raise ValueError(f"invalid symbol: {next(c for c in contracts if c[0].isdigit())}")
+        return bars(contracts, start, end)
+
+    monkeypatch.setattr(source, "listed_contracts", with_adjusted)
+    monkeypatch.setattr(source, "option_bars", strict_bars)
+    wanted = [request("SPY", "C", e, k + d, "2024-04-01", "2024-05-01")
+              for e in ("2024-05-17", "2024-06-21") for d in (0.0, 5.0, 10.0)]  # fmt: skip
+    result = run_option_history(lake, source, wanted, now=NOW)
+    assert result.ok, result.errors
+    matches = option_history.load_matches(lake)
+    assert not matches["contract"].str.startswith("1").any()
+    assert matches["bars_fetched"].all()
+
+    # an earlier run's lost batch: matched, no bars, never marked fetched
+    lost = matches.assign(bars_fetched=None)
+    option_history.save_matches(lake, lost)
+    (lake.clean_dir(option_history.OPTION_BARS) / "part.parquet").unlink()
+    again = run_option_history(lake, source, wanted, now=NOW)
+    assert (again.new, again.retried) == (0, len(wanted))
+    assert set(option_history.load_bars(lake)["contract"]) == set(matches["contract"])
+    third = run_option_history(lake, source, wanted, now=NOW)
+    assert (third.new, third.retried, third.bars) == (0, 0, 0)
+
+
+def test_a_failing_batch_is_split_down_to_the_contract_at_fault(tmp_path: Path) -> None:
+    from tp_ingest.jobs.option_history import _fetch_splitting
+
+    asked: list[list[str]] = []
+
+    def fetch(batch: list[str]) -> None:
+        asked.append(batch)
+        if "bad" in batch:
+            raise ValueError("invalid symbol: bad")
+
+    errors: dict[str, str] = {}
+    _fetch_splitting(["a", "b", "bad", "c"], fetch, errors)
+    assert list(errors) == ["bars bad"]
+    assert ["a"] in asked or ["a", "b"] in asked
+    assert ["c"] in asked

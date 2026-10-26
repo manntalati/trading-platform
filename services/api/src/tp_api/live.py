@@ -60,11 +60,37 @@ class FakeQuoteSource:
             await asyncio.sleep(self.interval)
 
 
+STREAM_LOGGER = "alpaca.data.live.websocket"
+CONNECTION_LIMIT = (
+    "Alpaca allows one live price stream per account, and another connection has it: a second "
+    "tp-api (the Mac agent and one started by hand, say), another app on these keys, or this "
+    "server's own previous connection, which Alpaca frees within a few minutes of a restart. "
+    "Prices show the last close meanwhile; it reconnects by itself."
+)
+
+
+class _StreamErrors(logging.Handler):
+    """alpaca-py logs its connection failures and retries on its own: keep the latest, so the
+    dashboard can say why prices aren't live."""
+
+    def __init__(self, source: AlpacaQuoteSource) -> None:
+        super().__init__(logging.WARNING)
+        self.source = source
+
+    def emit(self, record: logging.LogRecord) -> None:
+        text = record.getMessage()
+        if "connection limit exceeded" in text:
+            self.source.error = CONNECTION_LIMIT
+        elif "error" in text.lower():
+            self.source.error = text
+
+
 class AlpacaQuoteSource:
     """Alpaca's real-time trade stream (IEX on the free plan).
 
     alpaca-py's stream owns its own event loop, so it runs in a thread and hands ticks to ours
-    through ``call_soon_threadsafe``.
+    through ``call_soon_threadsafe``. It reconnects by itself after an error, so the error is
+    read from its log (``error``) and cleared by the next trade.
     """
 
     name = "alpaca"
@@ -72,6 +98,7 @@ class AlpacaQuoteSource:
     def __init__(self, api_key: str, secret_key: str, feed: str = "iex") -> None:
         self._keys = (api_key, secret_key)
         self._feed = feed
+        self.error: str | None = None
 
     async def stream(self, symbols: list[str]) -> AsyncIterator[Tick]:
         from alpaca.data.enums import DataFeed
@@ -86,12 +113,17 @@ class AlpacaQuoteSource:
             loop.call_soon_threadsafe(_put_nowait, queue, tick)
 
         stream.subscribe_trades(on_trade, *symbols)  # type: ignore[arg-type]  # raw_data dicts
+        errors = _StreamErrors(self)
+        logging.getLogger(STREAM_LOGGER).addHandler(errors)
         thread = threading.Thread(target=stream.run, name="alpaca-stream", daemon=True)
         thread.start()
         try:
             while True:
-                yield await queue.get()
+                tick = await queue.get()
+                self.error = None  # prices are arriving: whatever it was has cleared
+                yield tick
         finally:
+            logging.getLogger(STREAM_LOGGER).removeHandler(errors)
             with contextlib.suppress(Exception):
                 stream.stop()
 
@@ -179,11 +211,19 @@ class LiveHub:
             self.error = f"{type(exc).__name__}: {exc}"
             log.exception("quote stream stopped")
 
+    def feed_error(self) -> str | None:
+        """Why prices aren't live: the stream stopped, or the source reports a problem it is
+        retrying past."""
+        return self.error or getattr(self.source, "error", None)
+
     async def _broadcast(self) -> None:
+        shown: str | None = None
         while True:
             await asyncio.sleep(self.interval)
-            if not self._dirty or not self._subscribers:
+            error = self.feed_error()
+            if (not self._dirty and error == shown) or not self._subscribers:
                 continue
+            shown = error
             changed, self._dirty = self._dirty, set()
             message = self.message(changed)
             for queue in list(self._subscribers):
@@ -237,7 +277,7 @@ class LiveHub:
             "at": datetime.now(UTC).isoformat(),
             "quotes": [self.quote(s) for s in sorted(symbols)],
             "portfolio": self.portfolio_value() if self.positions else None,
-            "feed": {"source": self.source.name, "error": self.error},
+            "feed": {"source": self.source.name, "error": self.feed_error()},
         }
 
     def snapshot(self) -> dict[str, Any]:

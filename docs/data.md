@@ -175,8 +175,12 @@ strike within 10%, expired contracts included) and fetches its daily bars:
 | `clean/option_bars_1d/part.parquet` | one row per contract and session: open, high, low, close, volume, trades, VWAP |
 | `clean/option_history_contracts/part.parquet` | which contract each request was matched to (none, if nothing was close) |
 
-Requests already matched are skipped, so after the first run (a few thousand contracts, 10 to 30
-minutes) it only fetches what new signals add. Bars are trades, not quotes: a session with no
+Only standard contracts are matched: after a split or a special dividend the old contracts are
+renamed (`1RIVN…`, `AAPL1…`) and deliver something other than 100 shares, so their prices don't
+compare (and the bars endpoint refuses them). Requests already matched are skipped, so after the
+first run (a few thousand contracts, 10 to 30 minutes) it only fetches what new signals add; a
+contract whose bars request failed is retried on the next run, and a failing batch of 100 is
+split until the contract at fault is found, so it can't cost the others their bars. Bars are trades, not quotes: a session with no
 trade has no bar, and a close can sit anywhere inside the spread, so the backtest still charges
 half a spread each way on them. The scheduler runs it on Saturdays before the calibration.
 
