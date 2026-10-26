@@ -147,6 +147,26 @@ def test_analyze_and_rank_ideas() -> None:
     assert any("caps the gain" in r for r in income["risks"])
 
 
+def test_lists_skip_names_without_a_contract_and_cap_each_sector() -> None:
+    spy = closes(0.0003, seed=9)
+    names = ["AAA", "BBB", "CCC", "DDD"]
+    analyses = []
+    for i, name in enumerate(names):
+        series = closes(0.003 + 0.0005 * i, seed=20 + i)
+        with_chain = chain(series.iloc[-1], symbol=name) if name != "DDD" else None
+        analyses.append(analyze(name, series, chain=with_chain, benchmark=spy, iv_hist=None,
+                                now=NOW, rate=0.04))  # fmt: skip
+    assert analyses[3]["picks"] == {}  # DDD: no chain, so nothing to trade
+    groups = {"AAA": "Tech", "BBB": "Tech", "CCC": "Tech", "DDD": "Energy"}
+    ideas = rank_ideas(analyses, held={}, groups=groups)
+    for k in ("swing", "leaps"):
+        assert "DDD" not in {i["symbol"] for i in ideas[k]}
+        assert len(ideas[k]) == RULES.per_group  # the third tech name waits its turn
+        assert {i["group"] for i in ideas[k]} == {"Tech"}
+    one_each = rank_ideas(analyses, held={}, rules=Rules(per_group=1), groups=groups)
+    assert len(one_each["swing"]) == 1
+
+
 def test_premium_selling_structures() -> None:
     c = chain()
     csp = cash_secured_put_pick(c, 100.0, NOW, 0.04, RULES)

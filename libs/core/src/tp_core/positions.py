@@ -9,6 +9,7 @@ gets you) so the decision is easier to make, not to make it for you.
 
 from __future__ import annotations
 
+import functools
 import math
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -52,6 +53,7 @@ class OptionPosition:
     multiplier: float = 100.0
 
 
+@functools.lru_cache(maxsize=8192)
 def expiry_time(expiration: date) -> datetime:
     """Options stop trading at the close of their expiration day (4:00 PM New York)."""
     try:

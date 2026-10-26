@@ -2,6 +2,7 @@
 
 import math
 
+import numpy as np
 import pytest
 
 from tp_core import greeks as bs
@@ -102,3 +103,30 @@ def test_higher_greeks_match_finite_differences() -> None:
         assert h.charm == pytest.approx(delta(years=t - day) - delta(), rel=1e-2)
         assert h.vomma == pytest.approx((vega(v + 1e-4) - vega(v - 1e-4)) / 2e-4 / 100, rel=1e-4)
     assert bs.higher_greeks(s, k, 0.0, v, call=True) == bs.HigherGreeks(0.0, 0.0, 0.0, 0.0)
+
+
+def test_the_array_functions_agree_with_the_scalar_ones() -> None:
+    rng = np.random.default_rng(0)
+    n = 2000
+    strike = rng.uniform(30, 250, n)
+    years = np.concatenate([[0.0, 0.5], rng.uniform(0.005, 2.5, n - 2)])
+    vol = np.concatenate([[0.3, 0.0], rng.uniform(0.05, 1.5, n - 2)])
+    call = rng.random(n) < 0.5
+    prices = bs.price_array(100.0, strike, years, vol, call, rate=0.04)
+    g = bs.greeks_array(100.0, strike, years, vol, call, rate=0.04)
+    for i in range(n):
+        one = bs.greeks(100.0, strike[i], years[i], vol[i], call=bool(call[i]), rate=0.04)
+        assert prices[i] == pytest.approx(one.price, abs=1e-9)
+        for name in ("delta", "gamma", "theta", "vega"):
+            assert g[name][i] == pytest.approx(getattr(one, name), abs=1e-9)
+    quoted = prices * rng.uniform(0.9, 1.1, n)  # some fall outside what any volatility gives
+    iv = bs.implied_vol_array(quoted, 100.0, strike, years, call, rate=0.04)
+    for i in range(n):
+        one_iv = bs.implied_vol(
+            quoted[i], 100.0, strike[i], years[i], call=bool(call[i]), rate=0.04
+        )
+        if one_iv is None:
+            assert math.isnan(iv[i])
+        else:
+            assert iv[i] == pytest.approx(one_iv, abs=1e-7)
+    assert np.isnan(bs.greeks_array(100.0, 100.0, 0.5, np.nan, True)["delta"])

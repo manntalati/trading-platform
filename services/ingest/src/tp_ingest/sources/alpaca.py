@@ -36,6 +36,7 @@ from tp_ingest.sources.base import (
     OPTION_CONTRACT_COLUMNS,
     OPTION_QUOTE_COLUMNS,
     UNDERLYING_COLUMNS,
+    StrikeRange,
 )
 
 # Alpaca's response keys → our action_type values.
@@ -195,11 +196,15 @@ class AlpacaSource:
         raw = cast(dict[str, dict[str, Any]], self._stocks.get_stock_snapshot(request))
         return underlying_snapshots_from_raw(raw)
 
-    def option_chain(self, underlying: str, *, expiration_lte: date) -> pd.DataFrame:
+    def option_chain(
+        self, underlying: str, *, expiration_lte: date, strikes: StrikeRange | None = None
+    ) -> pd.DataFrame:
         request = OptionChainRequest(
             underlying_symbol=underlying,
             feed=OptionsFeed(self.options_feed),
             expiration_date_lte=expiration_lte,
+            strike_price_gte=strikes[0] if strikes else None,
+            strike_price_lte=strikes[1] if strikes else None,
         )
         raw = cast(dict[str, dict[str, Any]], self._options.get_option_chain(request))
         return option_chain_from_raw(raw)
@@ -215,13 +220,17 @@ class AlpacaSource:
         raw = cast(dict[str, dict[str, Any]], self._options.get_option_snapshot(request))
         return option_chain_from_raw(raw)
 
-    def option_contracts(self, underlying: str, *, expiration_lte: date) -> pd.DataFrame:
+    def option_contracts(
+        self, underlying: str, *, expiration_lte: date, strikes: StrikeRange | None = None
+    ) -> pd.DataFrame:
         contracts: list[dict[str, Any]] = []
         page_token: str | None = None
         while True:  # this endpoint is not auto-paginated by the SDK
             request = GetOptionContractsRequest(
                 underlying_symbols=[underlying],
                 expiration_date_lte=expiration_lte,
+                strike_price_gte=f"{strikes[0]:.2f}" if strikes else None,
+                strike_price_lte=f"{strikes[1]:.2f}" if strikes else None,
                 limit=10_000,
                 page_token=page_token,
             )

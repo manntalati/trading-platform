@@ -51,6 +51,21 @@ def test_max_dte_is_passed_to_the_source(lake: Lake) -> None:
     assert load_chain_snapshots(lake)["dte"].max() <= 10
 
 
+def test_strike_window_trims_the_chain_except_for_holdings(lake: Lake) -> None:
+    source = FakeSource(as_of=date(2024, 7, 12))
+    run_snapshot(lake, source, ["SPY", "AAPL"], now=NOW, max_dte=60, strike_window=(0.95, 1.05),
+                 whole={"AAPL"})  # fmt: skip
+    window = source.strike_requests["SPY"]
+    assert window is not None
+    spot = load_chain_snapshots(lake, "SPY")["underlying_price"].iloc[0]
+    assert window == (pytest.approx(spot * 0.95, abs=0.01), pytest.approx(spot * 1.05, abs=0.01))
+    spy = load_chain_snapshots(lake, "SPY")
+    assert spy["strike"].between(*window).all()
+    assert source.strike_requests["AAPL"] is None  # held: every contract, for rolls and marks
+    aapl = load_chain_snapshots(lake, "AAPL")
+    assert aapl["strike"].min() < aapl["underlying_price"].iloc[0] * 0.9
+
+
 def test_holiday_is_skipped(lake: Lake) -> None:
     july_4th = datetime(2024, 7, 4, 19, 45, tzinfo=UTC)
     result = run_snapshot(lake, FakeSource(), ["SPY"], now=july_4th)

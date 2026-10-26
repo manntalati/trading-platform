@@ -35,8 +35,16 @@ def test_repo_universe_has_20_etfs_and_38_stocks() -> None:
 
 def test_repo_universe_has_options_underlyings() -> None:
     universes = load_universes(REPO_ROOT / "config" / "universes.toml", local=False)
-    assert 20 <= len(universes.options_underlyings) <= 30
+    assert 90 <= len(universes.options_underlyings) <= 120  # enough names for ideas to rotate
     assert universes.options_max_dte == 800  # two years out: LEAPS included
+    assert universes.options_strike_window == (0.5, 1.6)
+
+
+def test_strike_window_must_straddle_the_price(tmp_path: Path) -> None:
+    path = tmp_path / "u.toml"
+    path.write_text('[bars]\netfs = ["SPY"]\n[options]\nstrike_window = [1.1, 1.6]\n')
+    with pytest.raises(ValueError, match="strike_window"):
+        load_universes(path, local=False)
 
 
 def test_local_universe_adds_your_own_tickers(tmp_path: Path) -> None:
