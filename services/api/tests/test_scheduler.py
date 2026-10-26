@@ -96,6 +96,13 @@ def test_windows_follow_the_exchange_calendar() -> None:
     weekly = next(j for j in sched.JOBS if j.name == "validation")
     (v,) = weekly.windows_around(ny(date(2024, 7, 14), 9))  # Sunday morning
     assert v.start == ny(date(2024, 7, 13), 10)
+    # past option prices first, then the playbook calibration that uses them
+    history = next(j for j in sched.JOBS if j.name == "option-history")
+    calibrate = next(j for j in sched.JOBS if j.name == "calibrate")
+    (h,) = history.windows_around(ny(date(2024, 7, 13), 12))
+    (c,) = calibrate.windows_around(ny(date(2024, 7, 13), 12))
+    assert (h.start, c.start) == (ny(date(2024, 7, 13), 8), ny(date(2024, 7, 13), 9))
+    assert calibrate.command == ("tp-recs", "calibrate")
 
 
 def test_a_missed_evening_is_caught_up_and_then_left_alone(tmp_path: Path) -> None:

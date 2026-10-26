@@ -1,5 +1,6 @@
 """Options research endpoints on the demo lake (fake bars, fake chains, demo portfolio)."""
 
+import shutil
 import time
 from collections.abc import Iterator
 from datetime import UTC, date, datetime
@@ -105,6 +106,19 @@ def test_ideas_are_stored_runs_with_a_track_record(client: tuple[TestClient, Any
         "income",
         "volatility",
     }
+
+
+def test_calibration_before_and_after_a_run(client: tuple[TestClient, Any]) -> None:
+    c, app = client
+    assert c.get("/api/research/calibration").json() == {"setups": {}}
+    from tp_strategies.playbook_backtest import calibrate
+
+    lake = Lake(app.state.settings.data_root)
+    calibrate(lake, ["AAPL", "MSFT", "NVDA", "JPM", "SPY"], now=NOW)
+    body = c.get("/api/research/calibration").json()
+    assert body["setups"]["pullback"]["horizon"] == 10
+    assert body["names"] >= 1
+    shutil.rmtree(lake.reports_dir("playbook"))  # the lake is shared with the other tests
 
 
 def test_jobs_status_and_a_job_on_request(client: tuple[TestClient, Any]) -> None:

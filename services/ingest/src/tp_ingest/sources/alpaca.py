@@ -18,6 +18,7 @@ from alpaca.data.historical.stock import StockHistoricalDataClient
 from alpaca.data.requests import (
     CorporateActionsRequest,
     NewsRequest,
+    OptionBarsRequest,
     OptionChainRequest,
     OptionSnapshotRequest,
     StockBarsRequest,
@@ -25,14 +26,18 @@ from alpaca.data.requests import (
 )
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from alpaca.trading.client import TradingClient
+from alpaca.trading.enums import AssetStatus, ContractType
 from alpaca.trading.requests import GetOptionContractsRequest
 
 from tp_core.calendar import NEW_YORK
 from tp_core.config import Settings
+from tp_core.occ import parse_occ
 from tp_ingest.sources.base import (
     BAR_COLUMNS,
     CORPORATE_ACTION_COLUMNS,
+    LISTED_COLUMNS,
     NEWS_COLUMNS,
+    OPTION_BAR_COLUMNS,
     OPTION_CONTRACT_COLUMNS,
     OPTION_QUOTE_COLUMNS,
     UNDERLYING_COLUMNS,
@@ -240,6 +245,89 @@ class AlpacaSource:
             if not page_token:
                 break
         return option_contracts_from_raw(contracts)
+
+    # -- past contracts ---------------------------------------------------------------------------
+
+    def listed_contracts(
+        self, underlying: str, *, right: str, expiration: tuple[date, date], strikes: StrikeRange
+    ) -> pd.DataFrame:
+        found: list[dict[str, Any]] = []
+        kind = ContractType.CALL if right == "C" else ContractType.PUT
+        for status in (AssetStatus.INACTIVE, AssetStatus.ACTIVE):  # expired, then still listed
+            page_token: str | None = None
+            while True:
+                request = GetOptionContractsRequest(
+                    underlying_symbols=[underlying],
+                    status=status,
+                    type=kind,
+                    expiration_date_gte=expiration[0],
+                    expiration_date_lte=expiration[1],
+                    strike_price_gte=f"{strikes[0]:.2f}",
+                    strike_price_lte=f"{strikes[1]:.2f}",
+                    limit=10_000,
+                    page_token=page_token,
+                )
+                page = cast(dict[str, Any], self._trading.get_option_contracts(request))
+                found.extend(page.get("option_contracts") or [])
+                page_token = page.get("next_page_token")
+                if not page_token:
+                    break
+        return listed_from_raw(found)
+
+    def option_bars(self, contracts: Sequence[str], start: date, end: date) -> pd.DataFrame:
+        if not contracts:
+            return option_bars_from_raw({})
+        end_at = min(
+            datetime.combine(end, time.max, tzinfo=NEW_YORK), datetime.now(UTC) - _SIP_DELAY
+        )
+        request = OptionBarsRequest(
+            symbol_or_symbols=list(contracts),
+            timeframe=TimeFrame.Day,
+            start=datetime.combine(start, time.min, tzinfo=NEW_YORK),
+            end=end_at,
+        )
+        raw = cast(dict[str, list[dict[str, Any]]], self._options.get_option_bars(request))
+        return option_bars_from_raw(raw)
+
+
+def listed_from_raw(contracts: list[dict[str, Any]]) -> pd.DataFrame:
+    """The contracts endpoint's ``symbol`` per contract, parsed (expiry, strike, right)."""
+    rows = []
+    for c in contracts:
+        occ = parse_occ(str(c["symbol"]))
+        rows.append(
+            {
+                "contract": c["symbol"],
+                "expiration": occ.expiration,
+                "strike": occ.strike,
+                "right": occ.right,
+            }
+        )
+    return pd.DataFrame(rows, columns=list(LISTED_COLUMNS)).drop_duplicates("contract")
+
+
+def option_bars_from_raw(raw: dict[str, list[dict[str, Any]]]) -> pd.DataFrame:
+    """Map ``{OCC: [{t, o, h, l, c, v, n, vw}, ...]}`` to ``OPTION_BAR_COLUMNS``; daily bars are
+    stamped at midnight New York, so the session is the stamp's New York date."""
+    rows = [
+        {
+            "contract": contract,
+            "session": pd.Timestamp(bar["t"]).tz_convert(NEW_YORK).date(),
+            "open": bar.get("o"),
+            "high": bar.get("h"),
+            "low": bar.get("l"),
+            "close": bar.get("c"),
+            "volume": bar.get("v"),
+            "trade_count": bar.get("n"),
+            "vwap": bar.get("vw"),
+        }
+        for contract, bars in raw.items()
+        for bar in bars
+    ]
+    df = pd.DataFrame(rows, columns=list(OPTION_BAR_COLUMNS))
+    for col in ("open", "high", "low", "close", "volume", "trade_count", "vwap"):
+        df[col] = pd.to_numeric(df[col], errors="coerce").astype("float64")
+    return df
 
 
 def bars_from_raw(raw: dict[str, list[dict[str, Any]]]) -> pd.DataFrame:

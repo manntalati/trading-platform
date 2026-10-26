@@ -160,6 +160,26 @@ Caveats:
   in the job report, not removed.
 - A missed day can't be backfilled from Alpaca later; that's the point of running it daily.
 
+## Past option prices (for the playbook's backtest)
+
+`tp-recs calibrate` backtests the options playbook on years of daily bars with modeled option
+prices ([research.md](research.md#what-to-run)). For its trades since February 2024 (when
+Alpaca's daily option bars start), it also lists the contract each would have used, a target
+expiry and strike, in `reports/playbook/wanted_contracts.json`. `tp-data options history` then
+finds the listed contract nearest each (the nearest expiry within 35 days, then the nearest
+strike within 10%, expired contracts included) and fetches its daily bars:
+
+| Path | What |
+|---|---|
+| `raw/alpaca/option_bars_1d/ingest_date=.../run-*.parquet` | the bars as fetched (immutable) |
+| `clean/option_bars_1d/part.parquet` | one row per contract and session: open, high, low, close, volume, trades, VWAP |
+| `clean/option_history_contracts/part.parquet` | which contract each request was matched to (none, if nothing was close) |
+
+Requests already matched are skipped, so after the first run (a few thousand contracts, 10 to 30
+minutes) it only fetches what new signals add. Bars are trades, not quotes: a session with no
+trade has no bar, and a close can sit anywhere inside the spread, so the backtest still charges
+half a spread each way on them. The scheduler runs it on Saturdays before the calibration.
+
 ## Macro series (VIX and Treasury yields)
 
 `tp-data macro daily` downloads five daily series and keeps them like the bars: one immutable raw

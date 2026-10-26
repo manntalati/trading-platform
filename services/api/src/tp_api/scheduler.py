@@ -145,10 +145,18 @@ def _fundamentals(day: date) -> list[tuple[datetime, datetime]]:
     return [(ny(day, 20), ny(next_session(day), 20))]
 
 
-def _weekly(now: datetime) -> list[tuple[datetime, datetime]]:
-    local = now.astimezone(NEW_YORK).date()
-    saturday = local - timedelta(days=(local.weekday() - 5) % 7)
-    return [(ny(saturday, 10), ny(saturday + timedelta(days=1), 23))]
+def _saturday(hour: int) -> Callable[[datetime], list[tuple[datetime, datetime]]]:
+    """This week's Saturday from ``hour`` New York time to Sunday night."""
+
+    def windows(now: datetime) -> list[tuple[datetime, datetime]]:
+        local = now.astimezone(NEW_YORK).date()
+        saturday = local - timedelta(days=(local.weekday() - 5) % 7)
+        return [(ny(saturday, hour), ny(saturday + timedelta(days=1), 23))]
+
+    return windows
+
+
+_weekly = _saturday(10)
 
 
 # -- is it already done? ---------------------------------------------------------------------------
@@ -305,6 +313,25 @@ JOBS: tuple[Job, ...] = (
         written_since(REPORTS / "fundamentals", "*.json"),
         _fundamentals,
         needs=_needs_sec,
+    ),
+    Job(
+        "option-history",
+        "Past option prices",
+        "Saturdays from 08:00",
+        ("tp-data", "options", "history"),
+        written_since(REPORTS / "option_history", "*.json"),
+        weekly=_saturday(8),
+        needs=_needs_alpaca,
+        timeout=2 * 3600.0,
+    ),
+    Job(
+        "calibrate",
+        "Playbook calibration",
+        "Saturdays from 09:00",
+        ("tp-recs", "calibrate"),
+        written_since(REPORTS / "playbook", "calibration.json"),
+        weekly=_saturday(9),
+        timeout=2 * 3600.0,
     ),
     Job(
         "validation",

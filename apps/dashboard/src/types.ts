@@ -1109,6 +1109,37 @@ export interface TrackSummary {
   plan_median?: Num;
 }
 
+// /api/research/calibration (strategies/src/tp_strategies/playbook_backtest.py)
+export interface CalibrationStats {
+  trades: number;
+  mean?: Num;
+  median?: Num;
+  win_rate?: Num;
+  q10?: Num;
+  avg_sessions?: Num;
+}
+
+export interface SetupCalibration {
+  title: string;
+  horizon: number;
+  events: number;
+  baseline: Num;
+  drift: Num;
+  underlying?: { mean: Num; median: Num; hit_rate: Num; excess: Num };
+  exits?: { take_profit: Num; stop_loss: Num; time_stop: number; underlying: string | null };
+  option?: CalibrationStats & { detail?: { default?: CalibrationStats } };
+  real?: CalibrationStats & { model_bias: Num };
+}
+
+export interface Calibration {
+  generated_at?: string;
+  start?: string;
+  end?: string;
+  names?: number;
+  model?: string;
+  setups: Record<string, SetupCalibration>;
+}
+
 export interface TrackRecord {
   as_of: string;
   recommendations: TrackedRecommendation[];

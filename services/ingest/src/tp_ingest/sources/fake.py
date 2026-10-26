@@ -18,11 +18,13 @@ import numpy as np
 import pandas as pd
 
 from tp_core.calendar import NEW_YORK, session_midnight_utc, sessions
-from tp_core.occ import Right, format_occ
+from tp_core.occ import Right, format_occ, parse_occ
 from tp_ingest.sources.base import (
     BAR_COLUMNS,
     CORPORATE_ACTION_COLUMNS,
+    LISTED_COLUMNS,
     NEWS_COLUMNS,
+    OPTION_BAR_COLUMNS,
     OPTION_CONTRACT_COLUMNS,
     OPTION_QUOTE_COLUMNS,
     UNDERLYING_COLUMNS,
@@ -270,6 +272,57 @@ class FakeSource:
             for expiration, strike, right in self._grid(underlying, expiration_lte, strikes)
         ]
         return pd.DataFrame(rows, columns=list(OPTION_CONTRACT_COLUMNS))
+
+    def listed_contracts(
+        self, underlying: str, *, right: str, expiration: tuple[date, date], strikes: StrikeRange
+    ) -> pd.DataFrame:
+        """Third-Friday expirations and $5 strikes within half the underlying's price, as if
+        every month had been listed."""
+        self.calls.append(("listed_contracts", (underlying,), expiration[0], expiration[1]))
+        spot = self._spot(underlying)
+        strikes = (max(strikes[0], spot * 0.5), min(strikes[1], spot * 1.5))
+        rows = []
+        month = date(expiration[0].year, expiration[0].month, 1)
+        while month <= expiration[1]:
+            first_friday = month + timedelta(days=(4 - month.weekday()) % 7)
+            third = first_friday + timedelta(weeks=2)
+            if expiration[0] <= third <= expiration[1]:
+                lo, hi = math.ceil(strikes[0] / 5) * 5, math.floor(strikes[1] / 5) * 5
+                for k in range(int(lo), int(hi) + 1, 5):
+                    occ = format_occ(underlying, third, right, float(k))  # type: ignore[arg-type]
+                    rows.append(
+                        {"contract": occ, "expiration": third, "strike": float(k), "right": right}
+                    )
+            month = (month + timedelta(days=32)).replace(day=1)
+        return pd.DataFrame(rows, columns=list(LISTED_COLUMNS))
+
+    def option_bars(self, contracts: Sequence[str], start: date, end: date) -> pd.DataFrame:
+        """A bar every session: the contract's Black-Scholes value at 30% volatility on the
+        underlying's synthetic close."""
+        self.calls.append(("option_bars", tuple(contracts), start, end))
+        rows = []
+        for contract in contracts:
+            occ = parse_occ(contract)
+            history = self._history(occ.root, min(end, self.as_of))
+            for session, close in zip(history["session"], history["close"], strict=True):
+                if not start <= session <= min(end, occ.expiration):
+                    continue
+                t = max((occ.expiration - session).days, 1) / 365
+                price, _ = _black_scholes(float(close), occ.strike, t, 0.3, occ.right)
+                rows.append(
+                    {
+                        "contract": contract,
+                        "session": session,
+                        "open": price,
+                        "high": price,
+                        "low": price,
+                        "close": round(price, 2),
+                        "volume": 10.0,
+                        "trade_count": 3.0,
+                        "vwap": price,
+                    }
+                )
+        return pd.DataFrame(rows, columns=list(OPTION_BAR_COLUMNS))
 
     def _spot(self, symbol: str) -> float:
         close = self._history(symbol, self.as_of)["close"].iloc[-1]

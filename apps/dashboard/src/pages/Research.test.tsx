@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import type { CalendarPick, ContractPick, CreditSpreadPick, IronCondorPick, OptionSummary, PlayPick, ResearchIdea, SpreadPick } from "../types";
 import { fitLabel, skewLine } from "./Options";
-import { EarningsCard, IdeaCard, PickLine, PickSummary } from "./Research";
+import { BacktestCard, EarningsCard, IdeaCard, PickLine, PickSummary } from "./Research";
 
 const call: ContractPick = {
   contract: "XYZ260313C00100000",
@@ -243,5 +243,41 @@ describe("EarningsCard", () => {
     expect(screen.getByText("last: 2024-10-28")).toBeInTheDocument();
     expect(screen.getByText("+2.4σ")).toBeInTheDocument();
     expect(screen.getByText("18.4")).toBeInTheDocument();
+  });
+});
+
+describe("BacktestCard", () => {
+  it("shows each setup's backtest, or how to make one", () => {
+    const { rerender } = render(<BacktestCard c={{ setups: {} }} />);
+    expect(screen.getByText(/Not calibrated yet/)).toBeInTheDocument();
+    rerender(
+      <BacktestCard
+        c={{
+          generated_at: "2026-10-24T13:00:00+00:00",
+          start: "2019-01-02",
+          end: "2026-10-23",
+          names: 104,
+          model: "Black-Scholes at 1.15x an EWMA volatility forecast",
+          setups: {
+            pullback: {
+              title: "Pullback in an uptrend",
+              horizon: 10,
+              events: 812,
+              baseline: 0.002,
+              drift: 0.006,
+              underlying: { mean: 0.007, median: 0.008, hit_rate: 0.61, excess: 0.004 },
+              exits: { take_profit: 0.5, stop_loss: -0.5, time_stop: 10, underlying: "above_ma5" },
+              option: { trades: 320, mean: 0.06, median: 0.04, win_rate: 0.54, detail: { default: { trades: 320, mean: 0.03 } } },
+              real: { trades: 41, mean: 0.02, model_bias: 0.03 },
+            },
+          },
+        }}
+      />,
+    );
+    expect(screen.getByText("Pullback in an uptrend")).toBeInTheDocument();
+    expect(screen.getByText("812")).toBeInTheDocument();
+    expect(screen.getByText("61%")).toBeInTheDocument();
+    expect(screen.getByText(/exits: \+50% · −50% · 10 sessions · above ma5/)).toBeInTheDocument();
+    expect(screen.getByText("of 41")).toBeInTheDocument();
   });
 });

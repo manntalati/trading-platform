@@ -329,3 +329,43 @@ def test_news_maps_headlines_and_pages(source: AlpacaSource) -> None:
     assert df.loc[0, "symbols"] == "XYZ,ABC"
     assert str(df.loc[0, "created_at"].tz) == "UTC"
     assert "symbols=XYZ%2CABC" in responses.calls[0].request.url
+
+
+OPTION_BARS_URL = "https://data.alpaca.markets/v1beta1/options/bars"
+
+
+@responses.activate
+def test_listed_contracts_expired_and_live(source: AlpacaSource) -> None:
+    def page(*symbols: str) -> dict[str, object]:
+        return {"option_contracts": [{"symbol": s} for s in symbols], "next_page_token": None}
+
+    responses.get(CONTRACTS_URL, json=page("SPY240216C00500000", "SPY240315C00505000"))
+    responses.get(CONTRACTS_URL, json=page("SPY260116C00600000"))
+    df = source.listed_contracts("SPY", right="C", expiration=(date(2024, 1, 1), date(2026, 3, 1)),
+                                 strikes=(450.0, 650.0))  # fmt: skip
+    assert list(df["contract"]) == ["SPY240216C00500000", "SPY240315C00505000",
+                                    "SPY260116C00600000"]  # fmt: skip
+    assert df["strike"].tolist() == [500.0, 505.0, 600.0]
+    assert df["expiration"].iloc[0] == date(2024, 2, 16)
+    first, second = (parse_qs(urlparse(c.request.url).query) for c in responses.calls)
+    assert (first["status"], second["status"]) == (["inactive"], ["active"])
+    assert first["type"] == ["call"]
+    assert first["expiration_date_gte"] == ["2024-01-01"]
+    assert first["strike_price_lte"] == ["650.00"]
+
+
+@responses.activate
+def test_option_bars_by_session(source: AlpacaSource) -> None:
+    responses.get(
+        OPTION_BARS_URL,
+        json={"bars": {"SPY240216C00500000": [_bar("2024-02-01T05:00:00Z", 6.1),
+                                              _bar("2024-02-02T05:00:00Z", 6.4)]},
+              "next_page_token": None},
+    )  # fmt: skip
+    df = source.option_bars(["SPY240216C00500000"], date(2024, 2, 1), date(2024, 2, 2))
+    assert df["session"].tolist() == [date(2024, 2, 1), date(2024, 2, 2)]
+    assert df["close"].tolist() == [6.1, 6.4]
+    query = parse_qs(urlparse(responses.calls[0].request.url).query)
+    assert query["symbols"] == ["SPY240216C00500000"]
+    assert query["timeframe"] == ["1Day"]
+    assert source.option_bars([], date(2024, 2, 1), date(2024, 2, 2)).empty
