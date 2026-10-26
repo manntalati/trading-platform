@@ -34,6 +34,7 @@ from tp_core.storage import Lake
 from tp_core.volatility import iv_history, latest_chains
 from tp_strategies import playbook
 from tp_strategies import recommendations as recs
+from tp_strategies.budget import budget_from_settings
 from tp_strategies.options_research import DISCLAIMER, bars_from_lake
 
 log = logging.getLogger(__name__)
@@ -59,6 +60,7 @@ def new_run(ctx: queries.Context, now: datetime) -> dict[str, Any]:
         classifier=ctx.classifier,
         now=now,
         default_rate=ctx.settings.risk_free_rate,
+        budget=budget_from_settings(ctx.lake, ctx.settings),
     )
     return recs.load_run(result.path)
 
@@ -96,7 +98,9 @@ def symbol_view(ctx: queries.Context, symbol: str, now: datetime) -> dict[str, A
         earnings=playbook.earnings_by_symbol(ctx.lake).get(symbol),
     )
     analysis = name.analysis
-    analysis["playbook"] = playbook.for_symbol(name, playbook.load_calibration(ctx.lake))
+    analysis["playbook"] = playbook.for_symbol(
+        name, playbook.load_calibration(ctx.lake), budget_from_settings(ctx.lake, ctx.settings)
+    )
     age = None
     if chain is not None and not chain.empty:
         age = (today - chain["snapshot_at"].max().tz_convert(NEW_YORK).date()).days

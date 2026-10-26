@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import type { CalendarPick, ContractPick, CreditSpreadPick, IronCondorPick, OptionSummary, PlayPick, ResearchIdea, SpreadPick } from "../types";
 import { fitLabel, skewLine } from "./Options";
+import { BudgetLine, OutOfReachList } from "./Playbook";
 import { BacktestCard, EarningsCard, IdeaCard, PickLine, PickSummary } from "./Research";
 
 const call: ContractPick = {
@@ -75,6 +76,7 @@ const play: PlayPick = {
     out_by: "2026-02-20",
     stock: { rule: "above_ma5", text: "a close above the 5-day average", level: 101.4, side: "above" },
   },
+  size: { contracts: 2, capital: 820, max_loss: 820, share_of_account: 0.0164, buying_power_left: 2180, over_guideline: false, limited_by: "risk" },
 };
 
 const idea: ResearchIdea = {
@@ -109,6 +111,43 @@ describe("IdeaCard", () => {
     expect(screen.getByText("2026-01-26")).toBeInTheDocument(); // out by
     expect(screen.getByText("Already held: 100 shares.")).toBeInTheDocument();
     expect(screen.getByText(/Alternative:/)).toBeInTheDocument();
+    expect(screen.getByText("2 contracts")).toBeInTheDocument();
+    expect(screen.getByText("$820.00 · 1.6% at risk")).toBeInTheDocument();
+  });
+});
+
+describe("BudgetLine and OutOfReachList", () => {
+  it("says what the ideas are sized for, and what didn't fit", () => {
+    const budget = { buying_power: 3000, account_value: 50_000, account: "Individual …1234", risk_per_trade: 0.02, risk_cap: 1000, options_level: 2, as_of: null, paper: false };
+    render(
+      <p>
+        <BudgetLine budget={budget} />
+      </p>,
+    );
+    expect(screen.getByText("Individual …1234")).toBeInTheDocument();
+    expect(screen.getByText("$3,000")).toBeInTheDocument();
+    expect(screen.getByText(/options level 2/)).toBeInTheDocument();
+    render(
+      <OutOfReachList
+        budget={budget}
+        items={[
+          { symbol: "XYZ", list: "leaps", setup: "Trend leader at its 50-day", structure: "LEAPS call", needs: 8400, reason: "buying power", level: 2, score: 0.3 },
+          { symbol: "ABC", list: "income", setup: "Expensive options: sell premium", structure: "put credit spread", needs: 400, reason: "options level", level: 3, score: 0.2 },
+        ]}
+      />,
+    );
+    expect(screen.getByText(/Out of reach with \$3,000 of buying power/)).toBeInTheDocument();
+    expect(screen.getByText(/the cheapest fit, a LEAPS call, needs \$8,400/)).toBeInTheDocument();
+    expect(screen.getByText(/needs options level 3/)).toBeInTheDocument();
+  });
+
+  it("asks for a sync before sizing", () => {
+    render(
+      <p>
+        <BudgetLine budget={null} />
+      </p>,
+    );
+    expect(screen.getByText(/Not sized to an account yet/)).toBeInTheDocument();
   });
 });
 

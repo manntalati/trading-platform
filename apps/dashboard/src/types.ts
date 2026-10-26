@@ -726,6 +726,39 @@ export interface PlayExit {
   stock: { rule: string; text: string; level: Num; side: "above" | "below" } | null;
 }
 
+// what the options ideas can spend (strategies/src/tp_strategies/budget.py)
+export interface Budget {
+  buying_power: number;
+  account_value: number;
+  account: string;
+  risk_per_trade: number;
+  risk_cap: number;
+  options_level: number | null;
+  as_of: string | null;
+  paper: boolean;
+}
+
+export interface PlaySize {
+  contracts: number;
+  capital: number; // what they take from the buying power
+  max_loss: number;
+  share_of_account: Num;
+  buying_power_left: number;
+  over_guideline: boolean; // even one contract risks more than the guideline
+  limited_by: "risk" | "buying power";
+}
+
+export interface OutOfReach {
+  symbol: string;
+  list: IdeaList;
+  setup: string;
+  structure: string;
+  needs: number; // per contract
+  reason: "buying power" | "options level";
+  level: number;
+  score: number;
+}
+
 export interface PlayPick {
   kind: string;
   structure: string;
@@ -747,6 +780,7 @@ export interface PlayPick {
   fair_value?: Num;
   entry: PlayEntry;
   exit: PlayExit;
+  size?: PlaySize; // with a brokerage sync: how many contracts fit
 }
 
 export interface Play {
@@ -826,6 +860,8 @@ export interface Research {
   income: ResearchIdea[];
   volatility: ResearchIdea[];
   watch?: WatchItem[];
+  budget?: Budget | null;
+  out_of_reach?: OutOfReach[];
   calibration?: { generated_at: string; start?: string; end?: string; names?: number; model?: string } | null;
   live_setups?: Record<string, number>;
   errors?: Record<string, string>; // symbols the scan skipped, with why
@@ -847,7 +883,14 @@ export interface SymbolResearch {
   chain_age_days: Num;
   fundamentals?: Fundamentals | null;
   held: string | null;
-  playbook?: { ideas: ResearchIdea[]; watch: boolean; levels: string[]; calibrated: boolean };
+  playbook?: {
+    ideas: ResearchIdea[];
+    out_of_reach?: OutOfReach[];
+    budget?: Budget | null;
+    watch: boolean;
+    levels: string[];
+    calibrated: boolean;
+  };
   disclaimer: string;
   ask?: { available: boolean; model: string };
 }

@@ -73,6 +73,10 @@ def test_research_ranks_ideas_with_contracts(client: tuple[TestClient, Any]) -> 
         assert set(idea) >= {"symbol", "kind", "score", "setup", "vol", "pick", "risks"}
     priced = [i for i in ideas if i["pick"]]
     assert priced
+    budget = body["budget"]  # sized for the demo portfolio's account with the most buying power
+    assert budget["account"] == "Individual …1234"
+    for idea in priced:
+        assert idea["pick"]["size"]["capital"] <= budget["buying_power"]
     assert body["iv_history_days"] == 1
     assert "Not investment advice" in body["disclaimer"]
     assert c.get("/api/research").json() == body  # cached

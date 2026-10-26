@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { money, num, pct, signedMoney } from "../format";
-import { isPlay, type PlayPick, type ResearchIdea, type VolContext, type WatchItem } from "../types";
+import { isPlay, type Budget, type OutOfReach, type PlayPick, type ResearchIdea, type VolContext, type WatchItem } from "../types";
 
 /** One playbook idea: the setup that fired, the position that expresses it best under the volatility
  * forecast, what the model expects of it, and how to get in and out. */
@@ -143,6 +143,17 @@ export function PlaySummary({ pick }: { pick: PlayPick }) {
             sub={pick.forecast_move != null ? `forecast ${pct(pick.forecast_move, 1)}/day` : null}
           />
         )}
+        {pick.size && (
+          <Fact
+            label="Size"
+            value={
+              <span className={pick.size.over_guideline ? "down" : undefined}>
+                {pick.size.contracts} contract{pick.size.contracts === 1 ? "" : "s"}
+              </span>
+            }
+            sub={`${money(pick.size.capital)} · ${pct(pick.size.share_of_account, 1)} at risk`}
+          />
+        )}
       </div>
       <EntryExit pick={pick} />
     </div>
@@ -189,6 +200,44 @@ export function EntryExit({ pick }: { pick: PlayPick }) {
         {x.sell_by && x.sell_by !== x.out_by ? <span className="muted"> (and before {x.out_by}, {x.rules.min_dte} days to expiry)</span> : null}
       </div>
     </div>
+  );
+}
+
+/** Where the ideas' sizes come from: the account, its buying power and the risk guideline. */
+export function BudgetLine({ budget }: { budget: Budget | null | undefined }) {
+  if (!budget) {
+    return (
+      <>
+        Not sized to an account yet: once the brokerage is synced (<code>tp-broker sync</code>), ideas only use contracts your buying power pays for.{" "}
+      </>
+    );
+  }
+  return (
+    <>
+      Sized for <strong>{budget.account}</strong>
+      {budget.paper ? " (paper)" : ""}: buying power <strong>{money(budget.buying_power)}</strong>, at most {pct(budget.risk_per_trade, 0)} of{" "}
+      {money(budget.account_value)} ({money(budget.risk_cap)}) at risk a trade
+      {budget.options_level != null ? `, options level ${budget.options_level}` : ""}
+      {budget.as_of ? ` (synced ${new Date(budget.as_of).toLocaleString()})` : ""}.{" "}
+    </>
+  );
+}
+
+/** Setups that fired where nothing the account can trade fits. */
+export function OutOfReachList({ items, budget }: { items: OutOfReach[]; budget: Budget | null | undefined }) {
+  if (!items.length) return null;
+  return (
+    <p className="muted small">
+      Out of reach{budget ? ` with ${money(budget.buying_power)} of buying power` : ""}:{" "}
+      {items.map((m, i) => (
+        <span key={`${m.symbol}-${m.setup}`}>
+          {i > 0 && "; "}
+          <a href={`#/research/lookup/${encodeURIComponent(m.symbol)}`}>{m.symbol}</a> {m.setup.toLowerCase()} (
+          {m.reason === "buying power" ? `the cheapest fit, a ${m.structure}, needs ${money(m.needs)}` : `needs options level ${m.level}`})
+        </span>
+      ))}
+      .
+    </p>
   );
 }
 

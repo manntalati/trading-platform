@@ -22,6 +22,7 @@ from tp_core.config import Settings, Universes, load_universes
 from tp_core.portfolio import Classifier
 from tp_core.storage import Lake
 from tp_strategies import recommendations as recs
+from tp_strategies.budget import budget_from_settings
 
 app = typer.Typer(
     add_completion=False,
@@ -52,6 +53,7 @@ def run() -> None:
         classifier=Classifier.load(settings.classifications_file),
         now=datetime.now(UTC),
         default_rate=settings.risk_free_rate,
+        budget=budget_from_settings(lake, settings),
     )
     typer.echo(result.summary())
 
@@ -77,7 +79,16 @@ def show(
         typer.echo("no recommendations yet: run `tp-recs run`")
         raise typer.Exit(1)
     at = datetime.fromisoformat(latest["as_of"]).astimezone(NEW_YORK)
-    typer.echo(f"as of {at:%a %Y-%m-%d %H:%M} ET (bars through {latest.get('bars_session')})\n")
+    typer.echo(f"as of {at:%a %Y-%m-%d %H:%M} ET (bars through {latest.get('bars_session')})")
+    budget = latest["research"].get("budget")
+    typer.echo(
+        f"sized for {budget['account']}: buying power ${budget['buying_power']:,.0f}, up to "
+        f"{budget['risk_per_trade']:.0%} of ${budget['account_value']:,.0f} a trade"
+        + (f", options level {budget['options_level']}" if budget.get("options_level") else "")
+        + "\n"
+        if budget
+        else "not sized to an account: sync the brokerage (tp-broker sync)\n"
+    )
     for k in recs.LISTS:
         if only and k != only:
             continue
@@ -91,6 +102,20 @@ def show(
         dropped = (latest.get("dropped") or {}).get(k) or []
         if dropped:
             typer.echo(f"    no longer listed: {', '.join(dropped)}")
+        typer.echo("")
+    missed = latest["research"].get("out_of_reach") or []
+    if missed and only is None:
+        typer.echo(f"Out of reach ({len(missed)})")
+        for m in missed:
+            why = (
+                "more than the buying power"
+                if m["reason"] == "buying power"
+                else f"needs options level {m['level']}"
+            )
+            typer.echo(
+                f"    {m['symbol']:<6} {m['setup']}: {m['structure']} at "
+                f"${m['needs']:,.0f} a contract, {why}"
+            )
         typer.echo("")
     watch = latest["research"].get("watch") or []
     if watch and only in (None, "watch"):
@@ -128,6 +153,14 @@ def _plan_line(pick: dict[str, Any]) -> str:
     if stock.get("text"):
         parts.append(f"or {stock['text']}")
     parts.append(f"out by {plan.get('sell_by')}")
+    size = pick.get("size")
+    if size:
+        parts.append(
+            f"{size['contracts']} contract{'s' * (size['contracts'] != 1)} "
+            f"(${size['capital']:,.0f}, at most ${size['max_loss']:,.0f} at risk"
+            + (", over your risk guideline" if size["over_guideline"] else "")
+            + ")"
+        )
     return "; ".join(parts)
 
 

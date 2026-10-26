@@ -42,6 +42,7 @@ from tp_core.reference import LakeReference
 from tp_core.storage import Lake
 from tp_core.volatility import chain_spot, iv_history
 from tp_strategies import option_edge as edge
+from tp_strategies.budget import LEVELS, Budget
 from tp_strategies.option_edge import Leg, Outlook, Surface
 from tp_strategies.options_research import (
     DISCLAIMER,
@@ -74,6 +75,7 @@ RICH_RATIO = 1.25
 CHEAP_RATIO = 0.9
 MIN_OPEN_INTEREST = 50
 WATCH_SIZE = 8
+OUT_OF_REACH_SIZE = 10
 
 
 # -- calibration ----------------------------------------------------------------------------------
@@ -497,9 +499,15 @@ def option_setups(name: Name) -> list[Active]:
 
 
 def ideas_for(
-    name: Name, calibration: Mapping[str, Any] | None, setups: Mapping[str, Setup]
+    name: Name,
+    calibration: Mapping[str, Any] | None,
+    setups: Mapping[str, Setup],
+    budget: Budget | None = None,
+    missed: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """An idea per live setup on this name, with the contract that expresses it best."""
+    """An idea per live setup on this name, with the contract that expresses it best among
+    those ``budget`` allows: the account's options level, its buying power, and (where any
+    fits) the most one idea should risk. A setup nothing fits goes in ``missed``."""
     if name.priced is None or name.priced.empty:
         return []
     surface = Surface(name.priced, name.spot)
@@ -525,12 +533,48 @@ def ideas_for(
                 )
         if not found:
             continue
+        if budget is not None:
+            fits = _fitting(found, budget)
+            if not fits:
+                if missed is not None:
+                    missed.append(_missed(name, act, found, budget))
+                continue
+            found = fits
         if setup.structure == "leaps_call":  # a LEAPS stands in for shares: lead with one
             found = sorted(found, key=lambda c: (_family(c) != "single", -c.score))
         best = found[0]
         other = next((c for c in found[1:] if _family(c) != _family(best)), None)
-        out.append(_idea(name, act, best, other, calibration))
+        out.append(_idea(name, act, best, other, calibration, budget))
     return out
+
+
+def need(c: Candidate) -> float:
+    """What one contract of ``c`` needs in the account, in dollars: the debit, or what the broker
+    holds against a credit (the most it can lose; a cash-secured put's strike)."""
+    return float(c.model["capital"]) * 100
+
+
+def _fitting(found: list[Candidate], budget: Budget) -> list[Candidate]:
+    """The candidates the account can trade and pay for, keeping only those within the risk
+    guideline when any are (best first, as given)."""
+    allowed = [c for c in found if budget.allows(c.structure) and budget.affords(need(c))]
+    within = [c for c in allowed if budget.within_risk(need(c))]
+    return within or allowed
+
+
+def _missed(name: Name, act: Active, found: list[Candidate], budget: Budget) -> dict[str, Any]:
+    allowed = [c for c in found if budget.allows(c.structure)]
+    cheapest = min(allowed or found, key=need)
+    return {
+        "symbol": name.symbol,
+        "list": act.setup.list,
+        "setup": act.setup.title,
+        "structure": cheapest.structure,
+        "needs": need(cheapest),
+        "reason": "buying power" if allowed else "options level",
+        "level": LEVELS.get(cheapest.structure, 3),
+        "score": cheapest.score,
+    }
 
 
 def _family(c: Candidate) -> str:
@@ -543,6 +587,7 @@ def _idea(
     best: Candidate,
     other: Candidate | None,
     calibration: Mapping[str, Any] | None,
+    budget: Budget | None = None,
 ) -> dict[str, Any]:
     setup = act.setup
     fired = act.fired.date()
@@ -555,6 +600,10 @@ def _idea(
         alternative = position_view(other, name)
         alternative["entry"] = entry_plan(alternative, until)
         alternative["exit"] = exit_plan(setup, alternative, name, fired)
+    if budget is not None:
+        view["size"] = budget.size(need(best), need(best))
+        if alternative is not None and other is not None:
+            alternative["size"] = budget.size(need(other), need(other))
     model = best.model
     drift, source = setup_drift(setup, calibration)
     stats = ((calibration or {}).get("setups") or {}).get(setup.name) or {}
@@ -583,8 +632,26 @@ def _idea(
         "pick": view,
         "alternative": alternative,
         "why": _why(name, act, view, drift, source, stats),
-        "risks": _risks(name, setup, view),
+        "risks": _risks(name, setup, view) + _size_risks(view, budget),
     }
+
+
+def _size_risks(view: Mapping[str, Any], budget: Budget | None) -> list[str]:
+    size = view.get("size")
+    if budget is None or not size:
+        return []
+    if size["over_guideline"]:
+        return [
+            f"One contract can lose {_usd(view['max_loss'])}, "
+            f"{_pct(view['max_loss'] / budget.account_value if budget.account_value else None, 1)} "
+            f"of the account: over your {budget.risk_per_trade:.0%} a trade (TP_OPTIONS_RISK). "
+            "Nothing on this setup fits under it."
+        ]
+    return []
+
+
+def _usd(value: float | None) -> str:
+    return "—" if value is None else f"${value:,.0f}"
 
 
 def _pct(v: Any, digits: int = 1, *, signed: bool = False) -> str:
@@ -706,14 +773,17 @@ def build_lists(
     calibration: Mapping[str, Any] | None,
     per_list: int = 6,
     per_group: int = 2,
+    budget: Budget | None = None,
 ) -> dict[str, Any]:
     """The playbook's ideas by list, best modeled edge first (at most ``per_group`` per sector),
-    and the leaders to watch for an entry."""
+    fitted to ``budget`` when there is one; the leaders to watch for an entry; and the setups
+    nothing the account can trade fits (``out_of_reach``)."""
     setups = calibrated_setups(calibration)
     found: dict[str, list[dict[str, Any]]] = {k: [] for k in LISTS}
     watch: list[dict[str, Any]] = []
+    missed: list[dict[str, Any]] = []
     for name in names:
-        for idea in ideas_for(name, calibration, setups):
+        for idea in ideas_for(name, calibration, setups, budget, missed):
             if held.get(name.symbol):
                 idea["held"] = held[name.symbol]
                 idea["risks"].append(f"Already held: {held[name.symbol]}.")
@@ -745,6 +815,8 @@ def build_lists(
     leaps = {i["symbol"] for i in out["leaps"]}
     watch = [w for w in watch if w["symbol"] not in leaps]
     out["watch"] = sorted(watch, key=lambda w: -w["momentum"])[:WATCH_SIZE]
+    out["out_of_reach"] = sorted(missed, key=lambda m: -m["score"])[:OUT_OF_REACH_SIZE]
+    out["budget"] = budget.to_dict() if budget is not None else None
     return out
 
 
@@ -835,8 +907,10 @@ def scan(
     held: Mapping[str, str] | None = None,
     rules: Rules | None = None,
     calibration: Mapping[str, Any] | None = None,
+    budget: Budget | None = None,
 ) -> dict[str, Any]:
-    """Analyze ``symbols`` (those with daily bars) and list the playbook's ideas."""
+    """Analyze ``symbols`` (those with daily bars) and list the playbook's ideas, fitted to
+    ``budget`` (the account's buying power; ``tp_strategies.budget``)."""
     rules = rules or Rules()
     today = now.astimezone(NEW_YORK).date()
     wanted = [s for s in dict.fromkeys(symbols) if eligible(s, classifier)]
@@ -881,6 +955,7 @@ def scan(
         calibration=calibration,
         per_list=rules.ideas_per_list,
         per_group=rules.per_group,
+        budget=budget,
     )
     with_chain = [n for n in names if n.analysis["picks"]]
     return {
@@ -912,11 +987,15 @@ def _live_counts(lists: Mapping[str, Any]) -> dict[str, int]:
     return out
 
 
-def for_symbol(name: Name, calibration: Mapping[str, Any] | None) -> dict[str, Any]:
-    """The playbook on one name for Look up: the setups live on it with their contracts, how
-    close the others are, and whether it's a leader to wait on."""
+def for_symbol(
+    name: Name, calibration: Mapping[str, Any] | None, budget: Budget | None = None
+) -> dict[str, Any]:
+    """The playbook on one name for Look up: the setups live on it with their contracts (fitted
+    to ``budget``), the ones nothing affordable fits, how close the others are, and whether
+    it's a leader to wait on."""
     setups = calibrated_setups(calibration)
-    ideas = ideas_for(name, calibration, setups)
+    missed: list[dict[str, Any]] = []
+    ideas = ideas_for(name, calibration, setups, budget, missed)
     ind = name.ind.iloc[-1]
     near: list[str] = []
     if pd.notna(ind["rsi2"]):
@@ -935,6 +1014,8 @@ def for_symbol(name: Name, calibration: Mapping[str, Any] | None) -> dict[str, A
         near.append(f"50-day average {ind['ma50']:,.2f} ({ind['close'] / ind['ma50'] - 1:+.1%})")
     return {
         "ideas": ideas,
+        "out_of_reach": missed,
+        "budget": budget.to_dict() if budget is not None else None,
         "watch": leader_watch(name.ind),
         "levels": near,
         "calibrated": calibration is not None,

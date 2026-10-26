@@ -100,6 +100,33 @@ one with a decent chart and cheap ones. Each pick shows:
   at a loss of twice it), the stock-side rule with today's level, a time stop, and the date to be
   out by (21 days before expiry for swings, 180 for LEAPS: the decay speeds up after).
 
+### Sized to your account
+
+Ideas only use contracts you can actually buy, from the latest brokerage sync
+(`tp_strategies.budget`):
+
+- **The account**: a position lives in one account, so ideas are sized for one: the one
+  `TP_OPTIONS_ACCOUNT` names in `.env` (its name, or the last 4 digits of its number), else the
+  one with the most buying power. The Alpaca paper account counts only when nothing else is
+  linked.
+- **Buying power**: as Fidelity reports it (cash available to trade now; purchases that haven't
+  settled are already out of it), or cash plus money-market funds when it isn't reported.
+- **What each candidate needs**, per contract: the debit for anything bought, what the broker
+  holds against a credit spread or an iron condor (the most it can lose), the strike x 100 for a
+  cash-secured put. Candidates that need more than the buying power are left out **before** the
+  best is chosen, so you get the best contract that fits: a cheaper strike, a spread instead of a
+  single call, or a nearer expiry. Among those, the ones that keep the most one contract can lose
+  within `TP_OPTIONS_RISK` of the account's value (2% by default) come first.
+- **Size**: as many contracts as the buying power pays for and the risk guideline allows; if
+  even one contract risks more than the guideline, it's one, flagged.
+- **Options level**: set `TP_OPTIONS_LEVEL` to the level your broker approved (1 covered calls; 2
+  also buying calls and puts, straddles and cash-secured puts; 3 also spreads and iron condors)
+  and nothing above it is suggested.
+- Setups that fired where nothing fits are listed under each list as **out of reach**, with what
+  the cheapest fit would need.
+
+A new sync (hourly on trading days) makes a new set of ideas, so they follow your cash.
+
 The defaults for drift and exits are rules of thumb until the backtest has run; then each setup
 gets the drift its signal actually had and the exits that held up best out of sample (below,
 [What to run](#what-to-run)). One idea per name per list, at most two names per sector or fund
