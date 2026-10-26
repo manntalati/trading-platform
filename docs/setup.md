@@ -41,6 +41,9 @@ uv run tp-broker sync                           # your positions and trades
 uv run tp-data macro backfill                   # VIX and Treasury yields since 1990
 uv run tp-data fundamentals                     # SEC filings for the universe and your holdings
 uv run tp-data options snapshot                 # today's option chains: only while the market is open
+uv run tp-recs calibrate                        # backtest the options playbook's setups and exits
+uv run tp-data options history                  # real prices for those trades (from Feb 2024)
+uv run tp-recs calibrate                        # again, checked against the real prices
 ```
 
 Optional: your own tickers in `config/universes.local.toml` (git-ignored; see

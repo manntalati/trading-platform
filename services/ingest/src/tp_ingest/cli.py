@@ -34,7 +34,9 @@ log = logging.getLogger("tp_ingest")
 app = typer.Typer(help="Market data ingest jobs.", no_args_is_help=True, add_completion=False)
 bars_app = typer.Typer(help="Daily stock/ETF bars.", no_args_is_help=True)
 app.add_typer(bars_app, name="bars")
-options_app = typer.Typer(help="Option chain snapshots.", no_args_is_help=True)
+options_app = typer.Typer(
+    help="Option chain snapshots, and past contracts' daily bars.", no_args_is_help=True
+)
 app.add_typer(options_app, name="options")
 macro_app = typer.Typer(
     help="Macro series: VIX and Treasury yields (FRED, Cboe, the Treasury).", no_args_is_help=True
@@ -211,6 +213,41 @@ def options_snapshot(
     typer.echo(result.summary())
     for failure in result.failures:
         typer.echo(f"  FAILED {failure.underlying}: {failure.error}")
+    if not result.ok:
+        raise typer.Exit(code=1)
+
+
+@options_app.command("history")
+def options_history(
+    limit: Annotated[
+        int | None, typer.Option(min=1, help="Fetch at most this many new contracts.")
+    ] = None,
+    source: SourceOpt = SourceName.alpaca,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Daily bars of the past contracts the playbook's backtest would have traded (the list
+    `tp-recs calibrate` writes), so the next calibration checks its model against real prices.
+    Only contracts not fetched before; Alpaca has option bars from February 2024."""
+    from tp_core import option_history
+    from tp_ingest.jobs.option_history import run_option_history
+    from tp_ingest.sources.base import OptionHistorySource
+
+    _setup_logging(verbose)
+    settings = Settings()
+    lake = Lake(settings.data_root)
+    requests = option_history.wanted(lake)
+    if not requests:  # still reported, so the scheduler counts the week as done
+        typer.echo("nothing to fetch yet: `tp-recs calibrate` lists the contracts")
+    result = run_option_history(
+        lake,
+        cast(OptionHistorySource, make_source(source, settings)),
+        requests,
+        now=now_utc(),
+        limit=limit,
+    )
+    typer.echo(result.summary())
+    for what, error in result.errors.items():
+        typer.echo(f"  FAILED {what}: {error}")
     if not result.ok:
         raise typer.Exit(code=1)
 

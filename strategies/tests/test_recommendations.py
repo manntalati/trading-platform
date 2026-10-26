@@ -235,3 +235,29 @@ def test_following_a_credit_plan_buys_it_back() -> None:
     blown = follow(put, plan, -1.5, {PUT: marks(2.5, 4.8)})
     assert blown["reason"] == "stop"
     assert blown["pnl"] == pytest.approx((1.5 - 4.8) * 100)
+
+
+def test_the_plan_is_followed_from_the_session_after_the_recommendation(lake: Lake) -> None:
+    closes = close_matrix(load_bars(lake))
+    day, nxt = closes.index[-2].date(), closes.index[-1].date()
+    at = datetime.combine(day, datetime.min.time(), tzinfo=UTC) + timedelta(hours=19)
+    call = leg(CALL, "buy", 2.0, "2024-01-19", 100.0, "call")
+    pick = {"kind": "call", "legs": [call], "credit": None,
+            "exit": {"take_profit": 99.0, "stop": 0.01, "sell_by": "2024-01-10",
+                     "out_by": "2024-01-10", "stock": None}}  # fmt: skip
+    ideas = [idea("XYZ", "swing", pick) | {"play": {"name": "pullback"}}]
+    recs.store_run(lake, run(at, closes.index[-3].date(), swing=ideas), now=at)
+    spot = float(closes["XYZ"].iloc[-1])
+    for d in (day, nxt):  # the snapshot it was priced from, then the next session's
+        snap_at = datetime.combine(d, datetime.min.time(), tzinfo=UTC) + timedelta(hours=20)
+        chain = synthetic_chain("XYZ", spot, snap_at, expirations=[date(2024, 1, 19)],
+                                strikes=[100.0], half_spread=0.0)  # fmt: skip
+        write_raw(lake, RAW_OPTION_CHAIN_SNAPSHOTS, chain, run_id=f"r-{d}",
+                  partition={"snapshot_date": d.isoformat(), "underlying": "XYZ"},
+                  schema=RAW_OPTION_CHAIN_SCHEMA)  # fmt: skip
+    rows = recs.track_record(lake, nxt)["recommendations"]
+    (row,) = [r for r in rows if r.get("setup") == "pullback"]
+    followed = row["followed"]
+    assert followed["status"] == "open"
+    assert followed["sessions"] == 1  # only the session after; not the entry's own snapshot
+    assert followed["exit"] == nxt.isoformat()

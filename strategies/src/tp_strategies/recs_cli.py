@@ -3,6 +3,7 @@
     tp-recs run         scan for ideas and check the portfolio now; store the run
     tp-recs show        the latest run: each list, best first, new ones marked
     tp-recs scorecard   how past recommendations have done since
+    tp-recs calibrate   backtest the playbook's setups: the drift and exits the ideas use
 
 The job scheduler (``tp-jobs``, or the dashboard's server) runs ``tp-recs run`` by itself
 whenever new data lands, so this is for a run by hand or from cron.
@@ -175,6 +176,33 @@ def scorecard(
             f" stock {_pct(r['move'])}  position {_pct(r['result'])}"
             f"{'  (expired)' if r.get('status') == 'expired' else ''}{plan}"
         )
+
+
+@app.command()
+def calibrate() -> None:
+    """Backtest every playbook setup on the names the ideas scan, over all their daily bars, and
+    store each setup's drift and best exits (chosen on the earlier 60% of signals, reported on the
+    rest) for the live ideas. Also lists the real contracts worth fetching for the next
+    calibration (`tp-data options history`). Takes a minute or two; the scheduler runs it
+    weekly."""
+    from tp_strategies.options_research import eligible
+    from tp_strategies.playbook_backtest import calibrate as run_calibration
+    from tp_strategies.playbook_backtest import report_lines
+
+    settings, lake = _setup()
+    try:
+        universes = load_universes(settings.universes_file)
+    except OSError:
+        universes = Universes(bars=())
+    classifier = Classifier.load(settings.classifications_file)
+    symbols = [s for s in recs.research_symbols(lake, universes) if eligible(s, classifier)]
+    try:
+        report = run_calibration(lake, symbols, now=datetime.now(UTC))
+    except LookupError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(1) from exc
+    for line in report_lines(report):
+        typer.echo(line)
 
 
 def main() -> None:

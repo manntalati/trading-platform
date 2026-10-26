@@ -105,8 +105,39 @@ gets the drift its signal actually had and the exits that held up best out of sa
 [What to run](#what-to-run)). One idea per name per list, at most two names per sector or fund
 class, best first.
 
+## What to run
+
+Nothing needs training by hand; the backtest calibrates itself. Once, after updating:
+
+```bash
+uv run tp-data bars daily          # backfills five years for the ~80 names new to the options list
+uv run tp-data options snapshot    # chains for all ~100 names (market hours; a few minutes)
+uv run tp-recs calibrate           # backtest every setup: its drift and its best exits (a minute or two)
+uv run tp-data options history     # real daily bars of the contracts those trades used since Feb 2024
+uv run tp-recs calibrate           # again: now checked against the real prices
+uv run tp-recs run                 # the ideas with the calibration (or Update now on the page)
+```
+
+After that the scheduler keeps it current: the chains and bars every trading day, past option
+prices on Saturdays from 08:00, the calibration from 09:00 (`tp-jobs status` shows both), and a
+new set of ideas whenever any of them lands. `tp-data fundamentals` (daily, already scheduled)
+is what the earnings setups read.
+
+`tp-recs calibrate` prints, per setup: how many times it fired, how often the stock went its way
+over the horizon and by how much (against all names over the same horizon), the drift the live
+model will use, and the option trade's result on the later 40% of the signals (the ones the
+exits weren't chosen on) with the chosen exits and with the defaults. With real prices it also
+says how the same trades did on them and how far the model was off. What the backtest can't
+see: the modeled trades assume implied volatility moves with realized volatility, so they miss
+IV crushes and spikes (the real-price trades don't); and the names are today's liquid ones, so
+it overstates what the setups did on the names as they were at the time.
+
+What to trust, in order: the track record's **following the plan** column (real quotes, real
+recommendations, but only as many as the weeks it has run), then the real-price backtest (real
+contracts, from February 2024), then the modeled backtest (years of history, a model of the
+options). A setup that looks good only on the last of these is a guess.
+
 ## The contracts on Look up
-## The contracts
 
 **Look up** shows, besides the playbook's view of the name (the setups live on it, how close the
 others are), one contract per approach by fixed rules, priced from the latest chain at the ask to

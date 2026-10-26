@@ -233,6 +233,15 @@ def track_record(c: Ctx) -> dict[str, Any]:
     return out
 
 
+@router.get("/calibration")
+def calibration(c: Ctx) -> dict[str, Any]:
+    """The playbook backtest's per-setup results (``tp-recs calibrate``); empty before its first
+    run."""
+    found = playbook.load_calibration(c.lake)
+    out: dict[str, Any] = queries.clean(found or {"setups": {}})
+    return out
+
+
 @router.get("/symbol/{symbol}")
 def research_symbol(c: Ctx, symbol: str) -> dict[str, Any]:
     return symbol_view(c, symbol.upper(), now_utc())

@@ -1435,3 +1435,7 @@ a.quote:hover .sym {
 .watch-row:hover .mono {
   color: var(--accent);
 }
+
+.pick-title .leg {
+  white-space: normal; /* a leg with its quotes is long on a phone */
+}

@@ -142,6 +142,9 @@ def test_a_leader_above_its_50_day_is_one_to_watch() -> None:
     assert [w["symbol"] for w in lists["watch"]] == ["S01"]
     watch = lists["watch"][0]
     assert watch["entry_level"] == pytest.approx(watch["ma50"] * 1.01)
+    no_chain = prepare("S02", frame(path(320, 0.003, seed=7)), chain=None, benchmark=None,
+                       iv_hist=None, now=NOW, rate=0.0)  # fmt: skip
+    assert build_lists([no_chain], held={}, groups={}, calibration=None)["watch"] == []
     view = for_symbol(leader, None)
     assert view["watch"] is True
     assert any("RSI(2)" in line for line in view["levels"])

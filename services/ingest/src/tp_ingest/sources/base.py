@@ -133,6 +133,36 @@ class OptionsSource(Protocol):
         ...
 
 
+LISTED_COLUMNS = ("contract", "expiration", "strike", "right")
+OPTION_BAR_COLUMNS = (
+    "contract",
+    "session",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "trade_count",
+    "vwap",
+)
+
+
+class OptionHistorySource(Protocol):
+    """Past option contracts and their daily bars (``tp-data options history``)."""
+
+    def listed_contracts(
+        self, underlying: str, *, right: str, expiration: tuple[date, date], strikes: StrikeRange
+    ) -> pd.DataFrame:
+        """Every contract of one side (``right``: C or P) of ``underlying``, expired or not,
+        expiring within ``expiration`` with a strike within ``strikes``; ``LISTED_COLUMNS``."""
+        ...
+
+    def option_bars(self, contracts: Sequence[str], start: date, end: date) -> pd.DataFrame:
+        """Daily bars of ``contracts`` (at most 100) from ``start`` to ``end``;
+        ``OPTION_BAR_COLUMNS``. Sessions without a trade have no bar."""
+        ...
+
+
 class FullSource(MarketDataSource, OptionsSource, IntradaySource, Protocol):
     """Bars, corporate actions and options from one vendor (Alpaca and the fake both are)."""
 

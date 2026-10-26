@@ -22,6 +22,7 @@ import {
   type Research as ResearchData,
   type SpreadPick,
   type SymbolResearch,
+  type Calibration,
   type TrackRecord,
   type TrackedRecommendation,
 } from "../types";
@@ -194,22 +195,97 @@ function Followed({ r }: { r: TrackedRecommendation }) {
   return (
     <>
       {f.result != null ? <Delta value={f.result} digits={0} /> : "—"}
-      <div className="muted small">{f.status === "closed" ? `${f.reason} · ${f.exit}` : `open · ${f.sessions} sessions`}</div>
+      <div className="muted small">{f.status === "closed" ? `${f.reason} · ${f.exit}` : `open · ${f.sessions} session${f.sessions === 1 ? "" : "s"}`}</div>
     </>
+  );
+}
+
+/** The playbook backtest, per setup: how often the stock went its way, and the option trade on the
+ * signals the exits weren't chosen on. */
+export function BacktestCard({ c }: { c: Calibration }) {
+  const rows = Object.entries(c.setups);
+  if (!rows.length) {
+    return (
+      <Card title="Backtest by setup">
+        <Empty>
+          Not calibrated yet: run <code>tp-recs calibrate</code> (the scheduler does on Saturdays).
+        </Empty>
+      </Card>
+    );
+  }
+  return (
+    <Card title="Backtest by setup" hint={c.generated_at ? `${c.names} names, ${c.start} to ${c.end} · ${c.generated_at.slice(0, 10)}` : undefined}>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Setup</th>
+              <th className="num">Signals</th>
+              <th className="num" title="the stock went the setup's way over its horizon">Stock right way</th>
+              <th className="num" title="the stock's mean log return over the horizon, shrunk toward all names': what the live model assumes">Drift</th>
+              <th className="num" title="the option trade with the chosen exits, on the later 40% of the signals">Option trades</th>
+              <th className="num">Won</th>
+              <th className="num">Mean</th>
+              <th className="num" title="the same signals with the default exits">Default exits</th>
+              <th className="num" title="on real option prices, since February 2024">Real prices</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(([name, s]) => (
+              <tr key={name}>
+                <td>
+                  {s.title}
+                  {s.exits && (
+                    <div className="muted small">
+                      exits: {s.exits.take_profit != null ? `+${pct(s.exits.take_profit, 0)}` : "no target"} ·{" "}
+                      {s.exits.stop_loss != null ? pct(s.exits.stop_loss, 0, true) : "no stop"} · {s.exits.time_stop} sessions
+                      {s.exits.underlying ? ` · ${s.exits.underlying.replace("_", " ")}` : ""}
+                    </div>
+                  )}
+                </td>
+                <td className="num mono">{s.events}</td>
+                <td className="num mono">{pct(s.underlying?.hit_rate ?? null, 0)}</td>
+                <td className="num mono">
+                  {pct(s.drift, 1, true)} <span className="muted small">/ {s.horizon}d</span>
+                </td>
+                <td className="num mono">{s.option?.trades ?? 0}</td>
+                <td className="num mono">{pct(s.option?.win_rate ?? null, 0)}</td>
+                <td className="num mono">{pct(s.option?.mean ?? null, 0, true)}</td>
+                <td className="num mono">{pct(s.option?.detail?.default?.mean ?? null, 0, true)}</td>
+                <td className="num mono">
+                  {s.real?.trades ? (
+                    <>
+                      {pct(s.real.mean ?? null, 0, true)} <span className="muted small">of {s.real.trades}</span>
+                    </>
+                  ) : (
+                    "—"
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {c.model && <p className="muted small">Modeled option prices: {c.model}. Real prices replace them where fetched (tp-data options history).</p>}
+    </Card>
   );
 }
 
 function TrackRecordView() {
   const res = useApi<TrackRecord>("/api/research/track-record", 600_000);
+  const calibration = useApi<Calibration>("/api/research/calibration", 3_600_000);
   const [list, setList] = useState<IdeaList | "all">("all");
   const t = res.data;
   if (res.loading && !t) return <Loading />;
   if (!t) return <ErrorBanner error={res.error} />;
   if (!t.recommendations.length) {
     return (
-      <Card>
-        <Empty>No recommendations stored yet. The job scheduler stores every run from now on; their track record builds up here.</Empty>
-      </Card>
+      <div className="grid">
+        <Card>
+          <Empty>No recommendations stored yet. The job scheduler stores every run from now on; their track record builds up here.</Empty>
+        </Card>
+        {calibration.data && <BacktestCard c={calibration.data} />}
+      </div>
     );
   }
   const rows = t.recommendations.filter((r) => list === "all" || r.list === list);
@@ -291,6 +367,7 @@ function TrackRecordView() {
           </div>
         </Card>
       )}
+      {calibration.data && <BacktestCard c={calibration.data} />}
       <Card
         title="Each recommendation"
         hint={
@@ -606,7 +683,7 @@ function SymbolDepth({ symbol, live }: { symbol: string; live: LiveState }) {
     <div className="grid">
       <div className="grid tiles">
         <Stat label={`${symbol} price`} value={money(data.spot, true)} sub={<><Delta value={s.day_change_pct} /> today{data.held ? ` · you hold ${data.held}` : ""}</>} />
-        <Stat label="Trend" value={data.setup.direction} sub={data.setup.tags.join(" · ") || "no clear setup"} />
+        <Stat label="Trend" value={data.setup.direction} sub={data.setup.tags.join(" · ") || "between its averages"} />
         <Stat label="3-month return" value={<Delta value={r?.["3M"]} digits={1} />} sub={<>1 month <Delta value={r?.["1M"]} digits={1} /> · 1 year <Delta value={r?.["1Y"]} digits={1} /></>} />
         <Stat
           label="Options pricing"

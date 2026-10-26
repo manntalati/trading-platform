@@ -8,7 +8,8 @@ since the previous session, and can show how every past recommendation has done 
     clean/recommendations_log/part.parquet  one row per idea per run, kept for good
 
 A run is made whenever its inputs changed (new bars, a new option chain snapshot, a brokerage
-sync, new macro data): ``tp-recs run``, which the job scheduler starts on its own.
+sync, new macro data, a new playbook calibration): ``tp-recs run``, which the job scheduler
+starts on its own.
 
 The track record marks each recommended position at the latest quotes (the middle of the bid and
 ask; entries were at the ask for a purchase and the bid for a sale, as the picks were priced), or
@@ -139,6 +140,7 @@ def input_stamp(lake: Lake) -> dict[str, str | None]:
         "options": _newest(lake.reports_dir("options_snapshot"), "*.json"),
         "macro": _newest(lake.reports_dir("macro"), "*.json"),
         "fundamentals": _newest(lake.reports_dir("fundamentals"), "*.json"),
+        "calibration": _newest(lake.reports_dir("playbook"), "calibration.json"),
         "broker": _newest(newest_day, "*.parquet") if newest_day is not None else None,
     }
 
@@ -466,9 +468,9 @@ def track_record(lake: Lake, today: date, *, limit: int = 200) -> dict[str, Any]
     marks = _contract_marks(lake, [(s, leg["contract"]) for s, found in all_legs for leg in found])
     plans = [json.loads(p) if isinstance(p, str) else None for p in recs["plan"]]
     followed = [
-        (str(r["symbol"]), found, r["bars_session"])
+        (str(r["symbol"]), found, _run_day(r["run_at"]))
         for (_, r), (_, found), plan in zip(recs.iterrows(), all_legs, plans, strict=True)
-        if plan is not None and pd.notna(r["bars_session"])
+        if plan is not None
     ]
     history = _daily_marks(lake, followed)
     stock = _stock_indicators(bars)
@@ -501,12 +503,12 @@ def track_record(lake: Lake, today: date, *, limit: int = 200) -> dict[str, Any]
                 _float(r["entry"]),
                 history,
                 stock.get(str(r["symbol"])),
-                start.date(),
+                _run_day(r["run_at"]),  # the snapshot it was priced from is its entry
                 raw,
                 str(r["symbol"]),
                 today,
             )
-            if plan is not None and start is not None
+            if plan is not None
             else None
         )
         rows.append(row)
@@ -521,11 +523,15 @@ def track_record(lake: Lake, today: date, *, limit: int = 200) -> dict[str, Any]
 # -- following the exit plans ---------------------------------------------------------------------
 
 
+def _run_day(run_at: Any) -> date:
+    return pd.Timestamp(run_at).tz_convert(NEW_YORK).date()
+
+
 def _daily_marks(
     lake: Lake, followed: list[tuple[str, list[dict[str, Any]], Any]]
 ) -> dict[str, pd.Series]:
-    """Each contract's mid at the last snapshot of each session from its recommendation on
-    (index: snapshot dates)."""
+    """Each contract's mid at the last snapshot of each session after the day it was
+    recommended (index: snapshot dates)."""
     wanted: dict[str, set[str]] = {}
     since: dict[str, date] = {}
     for underlying, found, session in followed:

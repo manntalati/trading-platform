@@ -46,6 +46,8 @@ plan's phase table didn't survive the import, so the phases here follow the bran
 | ✓ | Rest of the options module: American (binomial) pricing, SVI smile fits, 25-delta skew, options backtesting | `tp_core.american`, `tp_core.smile`, Newton IV, rho/vanna/charm/vomma; cash-secured puts, credit spreads, iron condors, calendars and premium-selling ideas ([research.md](research.md)); [options-backtesting.md](options-backtesting.md) |
 | ✓ | Rate regime from FRED, VIX for the volatility regime | `tp-data macro` (Cboe and the Treasury, or FRED's API), the 3-month yield as the risk-free rate, [data.md](data.md#macro-series-vix-and-treasury-yields) |
 | ✓ | Experiment tracking | every backtest and validation run is saved with its git commit, data version and config; model experiments in MLflow (Phase 4) |
+| ✓ | Options ideas from setups that fire, priced by expected edge, with entry and exit plans | ~100 optionable names; pullback, breakout, trend leader (LEAPS), earnings drift, bounce and breakdown setups, plus expensive and cheap volatility; each contract chosen by its modeled return under the volatility forecast, with greeks, gamma against theta, an entry limit and an exit plan; the track record follows the plans ([research.md](research.md#the-playbook)) |
+| ✓ | Playbook backtest and calibration | `tp-recs calibrate`: every setup's signals over the bar history, the stock's drift after them, and the option trade under 72 exit combinations chosen on the earlier signals and judged on the later; real option prices from Alpaca for the trades since February 2024 (`tp-data options history`); weekly on the scheduler ([research.md](research.md#what-to-run)) |
 | ✓ | Recommendations kept up to date | a job scheduler in `tp-api` (or `tp-jobs`) runs every data job in its window on the exchange calendar, catching up after sleep, and remakes the options ideas whenever new data lands; each run is stored, new ideas are marked, and Research → Track record shows how past ones did ([setup.md](setup.md#6-schedules), [research.md](research.md#kept-refreshed-and-scored)); `make mac-agent` keeps it running on a Mac |
 
 ## Phase 3: the platform (`step3/…`)
@@ -97,7 +99,9 @@ specs, Faber's numbers for strategy 1, and your Phase 0 notes. The two ML experi
 puts last (sequence models, RL execution) wait on the tree models proving themselves on your data.
 
 1. **Keep it running**: `tp-api` (or `make mac-agent` on a Mac) so the scheduler keeps the data,
-   the recommendations and the model checks current.
+   the recommendations and the model checks current. After updating, run the options playbook's
+   first calibration by hand ([research.md](research.md#what-to-run)); the scheduler keeps it
+   weekly from then on.
 2. **Phase 4 on your data**: `tp-ml meta`, `rank` (try `--model lgbm-rank`), `vol` and
    `regime`; `tp-backtest search` (and `--families grammar`); `tp-backtest regime` on the
    strategies you paper trade. Fill in the tables in specs 12 to 14, and promote to paper only

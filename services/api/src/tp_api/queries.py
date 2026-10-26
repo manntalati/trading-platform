@@ -238,6 +238,13 @@ DATASETS: tuple[dict[str, str], ...] = (
      "writer": "tp-data options snapshot (weekdays 3:45 PM ET; your research list and holdings "
                "included)",
      "used_by": "Research (ideas, contract picks), Portfolio (rolls, covered calls)"},
+    {"name": "Past option prices", "path": "raw/alpaca/option_bars_1d",
+     "also": "clean/option_bars_1d",
+     "writer": "tp-data options history (Saturdays; the contracts the playbook backtest traded)",
+     "used_by": "The playbook calibration (tp-recs calibrate): its trades on real prices"},
+    {"name": "Playbook calibration", "path": "reports/playbook",
+     "writer": "tp-recs calibrate (Saturdays)",
+     "used_by": "Research ideas: each setup's drift and exits"},
     {"name": "VIX and Treasury yields", "path": "raw/fred/macro_1d", "also": "clean/macro_1d",
      "writer": "tp-data macro daily (weekdays before the open; Cboe and the Treasury, or FRED)",
      "used_by": "Home (market), strategy validation (regimes), option pricing (risk-free rate)"},
