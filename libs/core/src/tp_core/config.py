@@ -89,6 +89,18 @@ class Settings(BaseSettings):
     # T-bill yield is the usual choice; it moves a near-dated option's figures only slightly.
     risk_free_rate: float = Field(default=0.04, validation_alias="TP_RISK_FREE_RATE")
 
+    # Options ideas are fitted to what you can trade (tp_strategies.budget), from the latest
+    # brokerage sync: the account they're for (its name, or the last 4 digits of its number;
+    # unset: the one with the most buying power), the most one idea should risk as a share of
+    # that account's value (it sets the suggested number of contracts), and the options level
+    # the broker approved it for (1: covered calls; 2: also buying calls and puts, straddles and
+    # cash-secured puts; 3: also spreads and iron condors; unset: every structure).
+    options_account: str | None = Field(default=None, validation_alias="TP_OPTIONS_ACCOUNT")
+    options_risk_per_trade: float = Field(
+        default=0.02, gt=0, le=1, validation_alias="TP_OPTIONS_RISK"
+    )
+    options_level: int | None = Field(default=None, ge=1, le=5, validation_alias="TP_OPTIONS_LEVEL")
+
     # "Ask Claude" about a position (optional; billed to your Anthropic API account). Your
     # positions and the question are sent to Anthropic's API with each request. (Field names
     # differ from the variables so a stray CLAUDE_MODEL in the environment isn't picked up.)

@@ -133,7 +133,8 @@ def test_lists_take_one_idea_per_name_and_two_per_sector() -> None:
     assert len({i["symbol"] for i in swing}) == len(swing)
     held = next(i for i in swing if i["symbol"] == "S03")
     assert held["held"] == "40 shares"
-    assert set(lists) == {*playbook.LISTS, "watch"}
+    assert set(lists) == {*playbook.LISTS, "watch", "out_of_reach", "budget"}
+    assert lists["budget"] is None  # no account given: nothing filtered
 
 
 def test_a_leader_above_its_50_day_is_one_to_watch() -> None:

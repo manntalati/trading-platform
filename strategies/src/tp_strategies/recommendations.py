@@ -43,6 +43,7 @@ from tp_core.portfolio import CASH_KIND, Classifier, held_symbols, holdings_tabl
 from tp_core.schemas import RAW_OPTION_CHAIN_SCHEMA
 from tp_core.storage import Lake, new_run_id, read_parquet_dir, write_json, write_parquet
 from tp_core.volatility import latest_chains, snapshot_partitions
+from tp_strategies.budget import Budget
 from tp_strategies.ideas import ideas_from_lake
 from tp_strategies.options_research import CHAIN_MAX_AGE_DAYS, DISCLAIMER
 from tp_strategies.playbook import load_calibration, scan
@@ -171,8 +172,10 @@ def make_run(
     classifier: Classifier,
     now: datetime,
     default_rate: float = 0.04,
+    budget: Budget | None = None,
 ) -> dict[str, Any]:
-    """Scan for ideas and check the portfolio, as of ``now``."""
+    """Scan for ideas (fitted to ``budget``: the account's buying power) and check the
+    portfolio, as of ``now``."""
     today = now.astimezone(NEW_YORK).date()
     chains = latest_chains(lake, since=today - timedelta(days=CHAIN_MAX_AGE_DAYS))
     research = scan(
@@ -184,6 +187,7 @@ def make_run(
         rate=risk_free_rate(lake, default_rate),
         held=held_summary(lake, classifier),
         calibration=load_calibration(lake),
+        budget=budget,
     )
     portfolio = ideas_from_lake(lake, classifier).to_dict()
     bars = load_bars(lake, ["SPY"])
@@ -205,10 +209,16 @@ def run_recommendations(
     classifier: Classifier,
     now: datetime,
     default_rate: float = 0.04,
+    budget: Budget | None = None,
 ) -> RunResult:
     """Make a run, mark what's new, store it and add it to the log."""
     run = make_run(
-        lake, universes=universes, classifier=classifier, now=now, default_rate=default_rate
+        lake,
+        universes=universes,
+        classifier=classifier,
+        now=now,
+        default_rate=default_rate,
+        budget=budget,
     )
     return store_run(lake, run, now=now)
 

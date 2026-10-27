@@ -27,7 +27,7 @@ import {
   type TrackedRecommendation,
 } from "../types";
 import Ideas from "./Ideas";
-import { IdeaCard, PlayLine, WatchList } from "./Playbook";
+import { BudgetLine, IdeaCard, OutOfReachList, PlayLine, WatchList } from "./Playbook";
 import { PriceHistory } from "./Market";
 import { OptionPricing } from "./Options";
 import { AskPanel, Scenarios } from "./Positions";
@@ -126,6 +126,7 @@ function OptionsIdeas() {
         </button>
       </div>
       <div className="banner">
+        <BudgetLine budget={r.budget} />
         {r.calibration ? (
           <>
             Setups calibrated on {r.calibration.start ?? "the bars"} to {r.calibration.end ?? "now"} ({r.calibration.generated_at.slice(0, 10)}):
@@ -165,6 +166,7 @@ function OptionsIdeas() {
         </Card>
       )}
       {kind === "leaps" && <WatchList items={r.watch ?? []} />}
+      <OutOfReachList items={(r.out_of_reach ?? []).filter((m) => m.list === kind)} budget={r.budget} />
       {dropped.length > 0 && <p className="muted small">No longer listed since the previous session: {dropped.join(", ")}.</p>}
       {Object.keys(r.errors ?? {}).length > 0 && (
         <p className="muted small">
@@ -759,6 +761,11 @@ function SymbolDepth({ symbol, live }: { symbol: string; live: LiveState }) {
 function PlaybookCard({ symbol, view }: { symbol: string; view: NonNullable<SymbolResearch["playbook"]> }) {
   return (
     <Card title="The playbook" hint={view.calibrated ? "calibrated by the backtest" : "not calibrated yet: tp-recs calibrate"}>
+      {view.budget !== undefined && (
+        <p className="muted small" style={{ marginTop: 0 }}>
+          <BudgetLine budget={view.budget} />
+        </p>
+      )}
       {view.ideas.length ? (
         <div className="grid cols-2 top">
           {view.ideas.map((i) => (
@@ -771,6 +778,7 @@ function PlaybookCard({ symbol, view }: { symbol: string; view: NonNullable<Symb
           {view.watch ? " It's a trend leader: a LEAPS entry comes on a pullback to its 50-day average." : ""}
         </p>
       )}
+      <OutOfReachList items={view.out_of_reach ?? []} budget={view.budget} />
       <ul className="why">
         {view.levels.map((l) => (
           <li key={l}>{l}</li>
