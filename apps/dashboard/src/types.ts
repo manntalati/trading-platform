@@ -753,7 +753,7 @@ export interface OutOfReach {
   list: IdeaList;
   setup: string;
   structure: string;
-  needs: number; // per contract
+  needs: number; // per contract (shares: per share)
   reason: "buying power" | "options level";
   level: number;
   score: number;
@@ -804,6 +804,60 @@ export function isPlay(p: unknown): p is PlayPick {
   return typeof p === "object" && p !== null && "legs" in p && "model" in p;
 }
 
+// a stock idea: shares, with a stop, an optional target and a time stop (playbook.stock_view)
+export interface StockTest {
+  trades: number;
+  win_rate?: Num;
+  mean?: Num;
+  median?: Num;
+  excess?: Num; // over what the average stock made in the same sessions
+  mean_r?: Num; // in units of the risk to the stop
+  avg_sessions?: Num;
+}
+
+export interface StockPick {
+  kind: "shares";
+  structure: "shares";
+  price: number;
+  atr: number; // average true range, 14 sessions
+  risk_per_share: number; // to the stop
+  entry: { side: "debit"; limit: number; worst: number; valid_until: string | null; worth_it: boolean };
+  exit: {
+    stop: number;
+    target: Num;
+    sell_by: string | null;
+    stock: PlayExit["stock"];
+    rules: { stop_atr: number; target_atr: Num; time_stop: number; underlying: string | null };
+  };
+  model: { horizon: number; drift: number; drift_source: string; vol: number; expected_return: number; sharpe: number; stop_pct: number; target_pct: Num };
+  backtest: StockTest | null;
+  size?: { shares: number; capital: number; max_loss: number; share_of_account: Num; buying_power_left: number; over_guideline: boolean; limited_by: string };
+}
+
+export function isShares(p: unknown): p is StockPick {
+  return typeof p === "object" && p !== null && (p as { kind?: unknown }).kind === "shares";
+}
+
+export interface HoldingAlert {
+  symbol: string;
+  held: string;
+  setup: string;
+  title: string;
+  fired: string;
+  age: number;
+  spot: number;
+  text: string;
+}
+
+export interface ModelRankInfo {
+  day: string;
+  names: number;
+  version?: string;
+  rank_ic: Num;
+  counted: boolean;
+  percentile?: number;
+}
+
 export interface ResearchIdea {
   symbol: string;
   kind: IdeaList;
@@ -814,8 +868,9 @@ export interface ResearchIdea {
   stock: StockStats;
   vol: VolContext;
   play?: Play;
-  pick: PlayPick | Pick | null;
+  pick: PlayPick | StockPick | Pick | null;
   alternative: PlayPick | Pick | null;
+  model_rank?: ModelRankInfo | null; // stock ideas: where the ML ranker puts the name
   why: string[];
   risks: string[];
   held?: string | null;
@@ -835,7 +890,7 @@ export interface WatchItem {
   text: string;
 }
 
-export type IdeaList = "swing" | "leaps" | "bearish" | "income" | "volatility";
+export type IdeaList = "swing" | "leaps" | "bearish" | "income" | "volatility" | "stocks";
 
 // the stored run a /api/research answer comes from (tp_strategies/recommendations.py)
 export interface ResearchRun {
@@ -859,6 +914,9 @@ export interface Research {
   bearish: ResearchIdea[];
   income: ResearchIdea[];
   volatility: ResearchIdea[];
+  stocks?: ResearchIdea[]; // runs stored before stock ideas lack it
+  holding_alerts?: HoldingAlert[];
+  model_rank?: ModelRankInfo | null;
   watch?: WatchItem[];
   budget?: Budget | null;
   out_of_reach?: OutOfReach[];
@@ -1174,6 +1232,7 @@ export interface SetupCalibration {
   exits?: { take_profit: Num; stop_loss: Num; time_stop: number; underlying: string | null };
   option?: CalibrationStats & { detail?: { default?: CalibrationStats } };
   real?: CalibrationStats & { model_bias: Num };
+  stock?: { exits?: StockPick["exit"]["rules"]; test?: StockTest }; // the share trade (upward setups)
 }
 
 export interface Calibration {

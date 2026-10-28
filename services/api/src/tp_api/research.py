@@ -99,7 +99,10 @@ def symbol_view(ctx: queries.Context, symbol: str, now: datetime) -> dict[str, A
     )
     analysis = name.analysis
     analysis["playbook"] = playbook.for_symbol(
-        name, playbook.load_calibration(ctx.lake), budget_from_settings(ctx.lake, ctx.settings)
+        name,
+        playbook.load_calibration(ctx.lake),
+        budget_from_settings(ctx.lake, ctx.settings),
+        playbook.model_ranks(ctx.lake),
     )
     age = None
     if chain is not None and not chain.empty:

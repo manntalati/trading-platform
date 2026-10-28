@@ -1,11 +1,24 @@
 import type { ReactNode } from "react";
 import { money, num, pct, signedMoney } from "../format";
-import { isPlay, type Budget, type OutOfReach, type PlayPick, type ResearchIdea, type VolContext, type WatchItem } from "../types";
+import {
+  isPlay,
+  isShares,
+  type Budget,
+  type HoldingAlert,
+  type ModelRankInfo,
+  type OutOfReach,
+  type PlayPick,
+  type ResearchIdea,
+  type StockPick,
+  type VolContext,
+  type WatchItem,
+} from "../types";
 
 /** One playbook idea: the setup that fired, the position that expresses it best under the volatility
  * forecast, what the model expects of it, and how to get in and out. */
 export function IdeaCard({ idea }: { idea: ResearchIdea }) {
   const pick = isPlay(idea.pick) ? idea.pick : null;
+  const shares = isShares(idea.pick) ? idea.pick : null;
   const alternative = isPlay(idea.alternative) ? idea.alternative : null;
   const tone = idea.kind === "bearish" ? "attention" : idea.kind === "income" ? "consider" : "info";
   return (
@@ -22,6 +35,11 @@ export function IdeaCard({ idea }: { idea: ResearchIdea }) {
             {pct(pick.model.expected_return, 0, true)} expected
           </span>
         )}
+        {shares && (
+          <span className={`small ${shares.model.drift > 0 ? "up" : "down"}`} title="the setup's drift over its horizon">
+            {pct(shares.model.expected_return, 1, true)} drift
+          </span>
+        )}
       </div>
       <div className="tags">
         {idea.play && (
@@ -36,7 +54,7 @@ export function IdeaCard({ idea }: { idea: ResearchIdea }) {
         ))}
         <VolTag vol={idea.vol} />
       </div>
-      {pick ? <PlaySummary pick={pick} /> : <p className="muted small">No contract picked.</p>}
+      {pick ? <PlaySummary pick={pick} /> : shares ? <SharesSummary pick={shares} /> : <p className="muted small">No contract picked.</p>}
       <ul className="why">
         {idea.why.map((w) => (
           <li key={w}>{w}</li>
@@ -160,6 +178,99 @@ export function PlaySummary({ pick }: { pick: PlayPick }) {
   );
 }
 
+/** A stock idea: shares at a limit, a stop and an optional target some ATRs away, a time stop, and the backtest of
+ * the same trade on the setup's later signals. */
+export function SharesSummary({ pick }: { pick: StockPick }) {
+  const m = pick.model;
+  const x = pick.exit;
+  const e = pick.entry;
+  const t = pick.backtest;
+  return (
+    <div className="pick">
+      <div className="pick-title">
+        <strong>Shares</strong> <span className="muted">at {money(e.limit, true)} or less</span>
+      </div>
+      <div className="pick-facts">
+        <Fact
+          label={`Drift, ${m.horizon} sessions`}
+          value={<span className={m.drift > 0 ? "up" : "down"}>{pct(m.expected_return, 1, true)}</span>}
+          sub={`volatility ${pct(m.vol, 0)}`}
+        />
+        <Fact label="Stop" value={money(x.stop, true)} sub={`${pct(-m.stop_pct, 1, true)} · ${num(x.rules.stop_atr, 1)} ATR`} />
+        <Fact
+          label="Target"
+          value={x.target != null ? money(x.target, true) : "none"}
+          sub={m.target_pct != null ? pct(m.target_pct, 1, true) : x.stock ? "the stock rule sells" : null}
+        />
+        {t && t.trades > 0 && (
+          <Fact label="Backtest" value={`${pct(t.win_rate ?? null, 0)} won`} sub={`${pct(t.mean ?? null, 1, true)} in ${num(t.avg_sessions ?? null, 0)} sessions`} />
+        )}
+        {pick.size && (
+          <Fact
+            label="Size"
+            value={
+              <span className={pick.size.over_guideline ? "down" : undefined}>
+                {pick.size.shares} share{pick.size.shares === 1 ? "" : "s"}
+              </span>
+            }
+            sub={`${money(pick.size.capital)} · ${money(pick.size.max_loss)} to the stop`}
+          />
+        )}
+      </div>
+      <div className="plan">
+        <div>
+          <span className="plan-label">Entry</span> limit {money(e.limit, true)}; pay no more than <strong>{money(e.worst, true)}</strong>
+          {e.valid_until ? <>, until {e.valid_until}</> : null}
+        </div>
+        <div>
+          <span className="plan-label">Exit</span> stop at {money(x.stop, true)}
+          {x.target != null && <>; take profit at {money(x.target, true)}</>}
+          {x.stock && (
+            <>
+              ; or on {x.stock.text}
+              {x.stock.level != null ? ` (now ${money(x.stock.level, true)})` : ""}
+            </>
+          )}
+          ; sell by <strong>{x.sell_by ?? "—"}</strong>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Downward setups live on stocks you hold: reasons to look at selling or tightening a stop. */
+export function HoldingAlerts({ items }: { items: HoldingAlert[] }) {
+  if (!items.length) return null;
+  return (
+    <div className="watch">
+      <div className="small">
+        <strong>On what you hold</strong> <span className="muted">· a downward setup fired: worth a look at selling or a tighter stop</span>
+      </div>
+      {items.map((a) => (
+        <a key={`${a.symbol}-${a.setup}`} className="watch-row" href={`#/research/lookup/${encodeURIComponent(a.symbol)}`}>
+          <span className="mono">{a.symbol}</span>
+          <span className="muted small">{a.held}</span>
+          <span className="small">{a.text}</span>
+        </a>
+      ))}
+    </div>
+  );
+}
+
+/** Where the stock ideas' ML rank comes from, and whether it counts. */
+export function ModelRankLine({ rank }: { rank: ModelRankInfo | null | undefined }) {
+  if (!rank) {
+    return <>The ML ranker hasn't scored the names yet (the scheduler's models job, or <code>tp-models monitor</code>), so it doesn't move the order. </>;
+  }
+  return (
+    <>
+      The ML ranker scored {rank.names} names on {rank.day}
+      {rank.rank_ic != null ? ` (walk-forward rank IC ${num(rank.rank_ic, 3)})` : ""}:{" "}
+      {rank.counted ? "its rank moves the order." : "shown, not counted, since its ranking hasn't held up out of sample."}{" "}
+    </>
+  );
+}
+
 /** How to get in (a limit, a ceiling, a deadline) and out (target, stop, the stock-side rule, the time limits). */
 export function EntryExit({ pick }: { pick: PlayPick }) {
   const e = pick.entry;
@@ -233,7 +344,12 @@ export function OutOfReachList({ items, budget }: { items: OutOfReach[]; budget:
         <span key={`${m.symbol}-${m.setup}`}>
           {i > 0 && "; "}
           <a href={`#/research/lookup/${encodeURIComponent(m.symbol)}`}>{m.symbol}</a> {m.setup.toLowerCase()} (
-          {m.reason === "buying power" ? `the cheapest fit, a ${m.structure}, needs ${money(m.needs)}` : `needs options level ${m.level}`})
+          {m.structure === "shares"
+            ? `a share costs ${money(m.needs, true)}`
+            : m.reason === "buying power"
+              ? `the cheapest fit, a ${m.structure}, needs ${money(m.needs)}`
+              : `needs options level ${m.level}`}
+          )
         </span>
       ))}
       .

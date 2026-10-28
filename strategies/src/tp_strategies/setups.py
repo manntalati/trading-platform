@@ -21,8 +21,11 @@ instead of showing the same strongest names every day.
   on the decline going on; out on a close above the 10-day average.
 
 Premium selling and cheap volatility are judged on the option chain, not the bars
-(``tp_strategies.playbook``). The default exits are rules of thumb; ``tp-recs calibrate``
-replaces them with the ones that held up best in the backtest (``tp_strategies.playbook_backtest``).
+(``tp_strategies.playbook``). The upward setups also make stock ideas: shares, with a stop and an
+optional target some multiples of the stock's average true range away, a time stop and the
+setup's stock-side exit (``StockExits``). The default exits are rules of thumb; ``tp-recs
+calibrate`` replaces them, for options and shares, with the ones that held up best in the
+backtest (``tp_strategies.playbook_backtest``).
 Everything here only looks back: a setup on session t uses closes up to t.
 """
 
@@ -63,6 +66,26 @@ class Exits:
 
 
 @dataclass(frozen=True)
+class StockExits:
+    """When to sell shares bought on a setup: a stop and an optional target, each a multiple of
+    the stock's average true range (14 sessions) at entry away from the entry price; a number
+    of sessions; and the setup's stock-side rule (``UNDERLYING_EXITS``)."""
+
+    stop_atr: float
+    target_atr: float | None
+    time_stop: int  # sessions after entry
+    underlying: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "stop_atr": self.stop_atr,
+            "target_atr": self.target_atr,
+            "time_stop": self.time_stop,
+            "underlying": self.underlying,
+        }
+
+
+@dataclass(frozen=True)
 class Setup:
     name: str
     title: str
@@ -73,6 +96,7 @@ class Setup:
     structure: Structure
     exits: Exits
     rule: str  # the trigger in words
+    stock: StockExits | None = None  # shares too (the upward setups)
 
 
 SETUPS: dict[str, Setup] = {
@@ -88,6 +112,7 @@ SETUPS: dict[str, Setup] = {
             "long_call",
             Exits(0.5, -0.5, 10, 21, "above_ma5"),
             "RSI(2) under 10 in an uptrend (above the 200-day, the 50-day above the 200-day)",
+            StockExits(2.5, None, 10, "above_ma5"),
         ),
         Setup(
             "breakout",
@@ -100,6 +125,7 @@ SETUPS: dict[str, Setup] = {
             Exits(1.0, -0.5, 20, 21, "below_ma10"),
             "a new 50-day closing high above the 200-day, within 5 sessions of the tightest "
             "Bollinger bandwidth of the last 6 months",
+            StockExits(2.5, None, 40, "below_ma10"),
         ),
         Setup(
             "leader",
@@ -112,6 +138,7 @@ SETUPS: dict[str, Setup] = {
             Exits(None, -0.5, 189, 180, "below_ma200"),
             "12-1 month momentum of 10%+ (and in the top 40% of the names), within 15% of the "
             "52-week high and in an uptrend, back near its 50-day average",
+            StockExits(4.0, None, 189, "below_ma200"),
         ),
         Setup(
             "earnings_up",
@@ -124,6 +151,7 @@ SETUPS: dict[str, Setup] = {
             Exits(1.0, -0.5, 40, 21, "below_ma50"),
             "results with a surprise (SUE) of +1.5 or more, the stock up over the 10 sessions "
             "to their filing",
+            StockExits(3.0, None, 60, "below_ma50"),
         ),
         Setup(
             "earnings_down",
@@ -185,6 +213,7 @@ SETUPS: dict[str, Setup] = {
         ),
     )
 }
+STOCK_SETUPS = ("pullback", "breakout", "leader", "earnings_up")  # the ones with ``stock``
 BAR_SETUPS = (
     "pullback",
     "breakout",
@@ -210,12 +239,18 @@ LEADER_MOMENTUM = 0.10
 LEADER_RANK = 0.6
 
 
-def with_exits(setup: Setup, exits: Mapping[str, Any] | None) -> Setup:
-    """``setup`` with exit rules from a calibration (keys of ``Exits``), else as it is."""
-    if not exits:
-        return setup
-    known = {k: exits[k] for k in Exits.__dataclass_fields__ if k in exits}
-    return replace(setup, exits=replace(setup.exits, **known))
+def with_exits(
+    setup: Setup, exits: Mapping[str, Any] | None, stock: Mapping[str, Any] | None = None
+) -> Setup:
+    """``setup`` with exit rules from a calibration (keys of ``Exits``, and of ``StockExits``
+    for shares), else as it is."""
+    if exits:
+        known = {k: exits[k] for k in Exits.__dataclass_fields__ if k in exits}
+        setup = replace(setup, exits=replace(setup.exits, **known))
+    if stock and setup.stock is not None:
+        known = {k: stock[k] for k in StockExits.__dataclass_fields__ if k in stock}
+        setup = replace(setup, stock=replace(setup.stock, **known))
+    return setup
 
 
 # -- indicators -----------------------------------------------------------------------------------

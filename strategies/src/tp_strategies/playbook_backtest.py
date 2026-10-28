@@ -25,6 +25,16 @@
    it never saw, is what's reported: with 72 combinations tried, the in-sample best always
    flatters.
 
+5. **The share trade** (the upward setups, which are stock ideas too): bought at the signal's
+   close, a stop and an optional target some multiples of the stock's ATR away, checked each
+   session against the open (a gap through the level fills at the open), the low and the high
+   (the stop first when both are touched the same day), then the stock-side rule and the time
+   stop on the close; ``STOCK_COST`` of the price paid each way. The combination in
+   ``STOCK_GRID`` chosen is the one that would have grown an account fastest risking ``RISK``
+   of it to the stop on each trade, on its return over what the average stock made in the same
+   number of sessions (so holding longer doesn't win just by collecting the market's drift);
+   chosen on the earlier events and reported on the later ones, as for options.
+
 What this can't see: the modeled trades assume implied volatility moves with realized, so they
 can't show an IV crush or spike (the real-bar trades can); and the names are today's liquid
 ones, so the backtest misses companies that shrank or vanished (survivorship).
@@ -72,6 +82,14 @@ GRID: dict[str, tuple[Any, ...]] = {
     "underlying": (True, False),  # use the setup's stock-side exit
 }
 REAL_SINCE = date(2024, 2, 1)  # Alpaca's daily option bars start about here
+STOCK_GRID: dict[str, tuple[Any, ...]] = {
+    "stop_atr": (1.5, 2.5, 4.0, 6.0),
+    "target_atr": (2.0, 4.0, 8.0, None),
+    "time_stop": (0.5, 1.0, 2.0),  # times the horizon
+    "underlying": (True, False),
+}
+STOCK_COST = 0.0005  # of the price, each way: half the spread of a liquid stock
+RISK = 0.02  # the share of the account a stock trade risks to its stop, for judging exits
 
 
 @dataclass(frozen=True)
@@ -392,6 +410,180 @@ def choose_exits(
     return out
 
 
+# -- the share trades -----------------------------------------------------------------------------
+
+
+@dataclass
+class StockPaths:
+    """Every share trade of one setup, each session after entry (column 0 is the entry): the
+    open, high, low and close over the entry close (NaN where the bars end), whether the
+    stock-side rule said to exit at the close, and each trade's ATR over its entry close."""
+
+    open: np.ndarray[Any, np.dtype[np.float64]]
+    high: np.ndarray[Any, np.dtype[np.float64]]
+    low: np.ndarray[Any, np.dtype[np.float64]]
+    close: np.ndarray[Any, np.dtype[np.float64]]
+    stock_exit: np.ndarray[Any, np.dtype[np.bool_]]
+    atr: np.ndarray[Any, np.dtype[np.float64]]
+
+
+def stock_paths(
+    events: pd.DataFrame,
+    frames: Mapping[str, pd.DataFrame],
+    series: Series,
+    rule: str | None,
+    days: int,
+) -> StockPaths:
+    """The share trade of each event over ``days`` sessions."""
+    n = len(events)
+    shape = (n, days + 1)
+    out = StockPaths(
+        open=np.full(shape, np.nan),
+        high=np.full(shape, np.nan),
+        low=np.full(shape, np.nan),
+        close=np.full(shape, np.nan),
+        stock_exit=np.zeros(shape, dtype=bool),
+        atr=np.full(n, np.nan),
+    )
+    for row, (_, e) in enumerate(events.iterrows()):
+        symbol, i = str(e["symbol"]), int(e["i"])
+        ind = series.inds[symbol]
+        bars = frames[symbol].reindex(ind.index)
+        end = min(i + days, len(ind) - 1)
+        base = float(ind["close"].iloc[i])
+        atr = float(ind["atr14"].iloc[i])
+        if not (base > 0 and math.isfinite(atr)):
+            continue
+        width = end - i + 1
+        for name, target in (
+            ("open", out.open),
+            ("high", out.high),
+            ("low", out.low),
+            ("close", out.close),
+        ):
+            target[row, :width] = bars[name].to_numpy(dtype=float)[i : end + 1] / base
+        out.stock_exit[row, :width] = series.exits(symbol, rule)[i : end + 1]
+        out.atr[row] = atr / base
+    return out
+
+
+def apply_stock_exits(
+    paths: StockPaths,
+    *,
+    stop_atr: float,
+    target_atr: float | None,
+    time_stop: int,
+    underlying: bool,
+) -> tuple[np.ndarray[Any, np.dtype[np.float64]], np.ndarray[Any, np.dtype[np.int64]]]:
+    """Each trade's return (costs paid) and sessions held: the first session after entry where
+    the open gaps through the stop or the target (filled at the open), the low reaches the stop
+    or the high the target (filled there; the stop first when both), or, on the close, the
+    stock-side rule (if ``underlying``) or the time stop says to sell; else the last close."""
+    n, width = paths.close.shape
+    stop = (1 - stop_atr * paths.atr)[:, None]
+    target = (1 + target_atr * paths.atr)[:, None] if target_atr is not None else None
+    sessions = np.arange(width)[None, :]
+    marked = np.isfinite(paths.close)
+    price = np.full((n, width), np.nan)  # the fill on each session it would sell
+    on_close = sessions >= time_stop
+    if underlying:
+        on_close = on_close | paths.stock_exit
+    price = np.where(on_close & marked, paths.close, price)
+    if target is not None:
+        price = np.where(paths.high >= target, target, price)
+    price = np.where(paths.low <= stop, stop, price)
+    if target is not None:
+        price = np.where(paths.open >= target, paths.open, price)
+    price = np.where(paths.open <= stop, paths.open, price)
+    price[:, 0] = np.nan  # no exit on the entry bar
+    hit = np.isfinite(price)
+    first = np.where(hit.any(axis=1), hit.argmax(axis=1), -1)
+    last = np.where(marked.any(axis=1), width - 1 - marked[:, ::-1].argmax(axis=1), -1)
+    exit_at = np.where(first >= 0, first, last)
+    rows = np.arange(n)
+    fill = np.where(first >= 0, price[rows, np.maximum(exit_at, 0)], paths.close[rows, exit_at])
+    ret = fill * (1 - STOCK_COST) / (1 + STOCK_COST) - 1
+    ret = np.where((exit_at > 0) & np.isfinite(paths.atr), ret, np.nan)
+    return ret, exit_at
+
+
+def _stock_stats(
+    ret: np.ndarray[Any, np.dtype[np.float64]],
+    held: np.ndarray[Any, np.dtype[np.int64]],
+    risk: np.ndarray[Any, np.dtype[np.float64]],
+    daily: float,
+) -> dict[str, Any]:
+    """``risk``: each trade's distance to its stop over the entry; ``daily``: the average
+    stock's mean daily log return, what the same sessions would have made anyway."""
+    ok = np.isfinite(ret) & np.isfinite(risk) & (risk > 0)
+    if not ok.any():
+        return {"trades": 0}
+    r, h, k = ret[ok], held[ok].astype(float), risk[ok]
+    excess = r - np.expm1(daily * h)
+    multiple = np.maximum(excess / k, -40.0)  # in units of the risk to the stop
+    return {
+        "trades": int(ok.sum()),
+        "mean": float(r.mean()),
+        "median": float(np.median(r)),
+        "win_rate": float((r > 0).mean()),
+        "q10": float(np.quantile(r, 0.1)),
+        "excess": float(excess.mean()),
+        "mean_r": float((r / k).mean()),
+        "avg_sessions": float(h.mean()),
+        "growth": float(np.log1p(RISK * multiple).mean()),
+    }
+
+
+def choose_stock_exits(
+    paths: StockPaths, setup: Setup, train: np.ndarray[Any, np.dtype[np.bool_]], daily: float
+) -> dict[str, Any]:
+    """Try every combination in ``STOCK_GRID``; pick the fastest growth on the training events
+    and report it (and the setup's default share exits) on the rest."""
+    x = setup.stock
+    assert x is not None
+    tried = []
+    for stop_atr, target_atr, ts, rule in itertools.product(*STOCK_GRID.values()):
+        if rule and x.underlying is None:
+            continue
+        stop = max(round(ts * setup.horizon), 1)
+        ret, held = apply_stock_exits(
+            paths, stop_atr=stop_atr, target_atr=target_atr, time_stop=stop, underlying=rule
+        )
+        risk = stop_atr * paths.atr
+        tried.append(((stop_atr, target_atr, stop, rule), ret, held, risk))
+    test = ~train
+    d_ret, d_held = apply_stock_exits(
+        paths,
+        stop_atr=x.stop_atr,
+        target_atr=x.target_atr,
+        time_stop=x.time_stop,
+        underlying=x.underlying is not None,
+    )
+    d_risk = x.stop_atr * paths.atr
+    out: dict[str, Any] = {
+        "combinations": len(tried),
+        "default": _stock_stats(d_ret[test], d_held[test], d_risk[test], daily),
+    }
+    fits = [(t, _stock_stats(t[1][train], t[2][train], t[3][train], daily)) for t in tried]
+    usable = [(t, fit) for t, fit in fits if fit.get("trades", 0) >= MIN_TRADES]
+    if not usable:
+        out["exits"] = None
+        out["test"] = out["default"]
+        return out
+    ((stop_atr, target_atr, stop, rule), ret, held, risk), fit = max(
+        usable, key=lambda tf: tf[1]["growth"]
+    )
+    out["exits"] = {
+        "stop_atr": stop_atr,
+        "target_atr": target_atr,
+        "time_stop": stop,
+        "underlying": x.underlying if rule else None,
+    }
+    out["train"] = fit
+    out["test"] = _stock_stats(ret[test], held[test], risk[test], daily)
+    return out
+
+
 # -- real option bars -----------------------------------------------------------------------------
 
 
@@ -480,6 +672,7 @@ def calibrate(
     events = stock_outcomes(events, inds, bench)
     bars, matches = option_history.load_bars(lake), option_history.load_matches(lake)
     series = Series(inds, model)
+    daily = baseline(frames, 1)
     report: dict[str, Any] = {
         "generated_at": now.isoformat(),
         "start": min(f.index[0] for f in frames.values()).date().isoformat(),
@@ -494,6 +687,10 @@ def calibrate(
         setup = SETUPS[name]
         mine = events[events["setup"] == name].reset_index(drop=True)
         report["setups"][name] = _calibrate_one(mine, series, setup, frames, bars, matches)
+        if setup.stock is not None:
+            stock = _calibrate_stock(mine, series, setup, frames, daily)
+            if stock is not None:
+                report["setups"][name]["stock"] = stock
         wanted += requests_for(mine, series, setup)
     path = calibration_path(lake)
     write_json(report, path)
@@ -571,6 +768,29 @@ def _calibrate_one(
     return out
 
 
+def _calibrate_stock(
+    events: pd.DataFrame,
+    series: Series,
+    setup: Setup,
+    frames: Mapping[str, pd.DataFrame],
+    daily: float,
+) -> dict[str, Any] | None:
+    """The share trade's exits and how they did, for an upward setup with events."""
+    if events.empty or setup.stock is None:
+        return None
+    days = int(max(STOCK_GRID["time_stop"]) * setup.horizon)
+    paths = stock_paths(events, frames, series, setup.stock.underlying, days)
+    order = np.argsort(pd.to_datetime(events["session"]).to_numpy())
+    train = np.zeros(len(events), dtype=bool)
+    train[order[: int(len(events) * TRAIN)]] = True
+    chosen = choose_stock_exits(paths, setup, train, daily)
+    exits = chosen.pop("exits")
+    out = {"test": chosen.pop("test"), "detail": chosen}
+    if exits is not None:
+        out["exits"] = exits
+    return out
+
+
 def report_lines(report: Mapping[str, Any]) -> list[str]:
     """The calibration in words, one setup per paragraph."""
     lines = [
@@ -603,6 +823,21 @@ def report_lines(report: Mapping[str, Any]) -> list[str]:
                 f"  option trades, later {o['trades']} (out of sample): won {o['win_rate']:.0%}, "
                 f"mean {o['mean']:+.0%}, median {o['median']:+.0%} with {chosen}"
                 + (f"; the default exits: mean {d['mean']:+.0%}" if d.get("trades") else "")
+            )
+        st = (s.get("stock") or {}).get("test") or {}
+        if st.get("trades"):
+            x = (s.get("stock") or {}).get("exits")
+            chosen = (
+                f"stop {x['stop_atr']} ATR, target "
+                f"{x['target_atr'] if x['target_atr'] is not None else 'none'}, "
+                f"{x['time_stop']} sessions, stock rule {x['underlying'] or 'off'}"
+                if x
+                else "the default exits"
+            )
+            lines.append(
+                f"  shares, later {st['trades']} (out of sample): won {st['win_rate']:.0%}, "
+                f"mean {st['mean']:+.1%} in {st['avg_sessions']:.0f} sessions "
+                f"({st['excess']:+.1%} over the average stock) with {chosen}"
             )
         r = s.get("real")
         if r and r.get("trades"):

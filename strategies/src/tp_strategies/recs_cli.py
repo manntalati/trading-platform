@@ -68,7 +68,7 @@ def _pct(v: float | None, signed: bool = True) -> str:
 def show(
     only: Annotated[
         str | None,
-        typer.Option(help="One list: swing, leaps, bearish, income, volatility, watch."),
+        typer.Option(help="One list: swing, leaps, bearish, income, volatility, stocks, watch."),
     ] = None,
 ) -> None:
     """The latest run, each list best first, with the setup, the contract, the modeled edge, the
@@ -112,10 +112,17 @@ def show(
                 if m["reason"] == "buying power"
                 else f"needs options level {m['level']}"
             )
+            unit = "a share" if m["structure"] == "shares" else "a contract"
             typer.echo(
                 f"    {m['symbol']:<6} {m['setup']}: {m['structure']} at "
-                f"${m['needs']:,.0f} a contract, {why}"
+                f"${m['needs']:,.0f} {unit}, {why}"
             )
+        typer.echo("")
+    alerts = latest["research"].get("holding_alerts") or []
+    if alerts and only in (None, "stocks"):
+        typer.echo(f"On what you hold ({len(alerts)})")
+        for a in alerts:
+            typer.echo(f"    {a['symbol']:<6} {a['text']} (held: {a['held']})")
         typer.echo("")
     watch = latest["research"].get("watch") or []
     if watch and only in (None, "watch"):
@@ -129,6 +136,18 @@ def show(
 def _line(idea: dict[str, Any]) -> str:
     pick = idea.get("pick") or {}
     play = idea.get("play") or {}
+    if pick.get("kind") == "shares":
+        model = pick.get("model") or {}
+        test = pick.get("backtest") or {}
+        record = (
+            f", backtest won {_pct(test.get('win_rate'), False)} of {test['trades']}"
+            if test.get("trades")
+            else ""
+        )
+        return (
+            f"{play.get('title', '')}: shares at {pick['entry']['limit']:,.2f}, drift"
+            f" {_pct(model.get('drift'))} over {model.get('horizon')} sessions{record}"
+        )
     legs = pick.get("legs") or []
     label = legs[0]["label"] if legs else pick.get("label") or pick.get("kind") or ""
     model = pick.get("model") or {}
@@ -143,6 +162,21 @@ def _line(idea: dict[str, Any]) -> str:
 
 def _plan_line(pick: dict[str, Any]) -> str:
     entry, plan = pick.get("entry") or {}, pick["exit"]
+    if pick.get("kind") == "shares":
+        parts = [f"limit {entry.get('limit')}, no more than {entry.get('worst')}"
+                 f" (valid to {entry.get('valid_until')})", f"stop {plan.get('stop')}"]  # fmt: skip
+        if plan.get("target") is not None:
+            parts.append(f"target {plan['target']}")
+        if (plan.get("stock") or {}).get("text"):
+            parts.append(f"or {plan['stock']['text']}")
+        parts.append(f"sell by {plan.get('sell_by')}")
+        size = pick.get("size")
+        if size:
+            parts.append(
+                f"{size['shares']} shares (${size['capital']:,.0f}, ${size['max_loss']:,.0f} to"
+                " the stop" + (", over your risk guideline" if size["over_guideline"] else "") + ")"
+            )
+        return "; ".join(parts)
     side = "credit" if entry.get("side") == "credit" else "limit"
     parts = [f"{side} {entry.get('limit')} (valid to {entry.get('valid_until')})"]
     if plan.get("take_profit") is not None:

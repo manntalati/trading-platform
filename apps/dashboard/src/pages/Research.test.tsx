@@ -8,10 +8,11 @@ import type {
   PlayPick,
   ResearchIdea,
   SpreadPick,
+  StockPick,
   TrackedRecommendation,
 } from "../types";
 import { fitLabel, skewLine } from "./Options";
-import { BudgetLine, OutOfReachList } from "./Playbook";
+import { BudgetLine, HoldingAlerts, OutOfReachList } from "./Playbook";
 import { BacktestCard, EarningsCard, IdeaCard, PickLine, PickSummary, TrackedIdeas } from "./Research";
 
 const call: ContractPick = {
@@ -375,5 +376,56 @@ describe("TrackedIdeas", () => {
     fireEvent.change(screen.getByLabelText("State"), { target: { value: "closed" } });
     expect(screen.getAllByRole("row")).toHaveLength(11);
     expect(screen.queryByRole("button", { name: /more/ })).not.toBeInTheDocument();
+  });
+});
+
+const shares: StockPick = {
+  kind: "shares",
+  structure: "shares",
+  price: 50,
+  atr: 1.2,
+  risk_per_share: 3,
+  entry: { side: "debit", limit: 50, worst: 50.6, valid_until: "2026-10-30", worth_it: true },
+  exit: {
+    stop: 47,
+    target: null,
+    sell_by: "2026-11-11",
+    stock: { rule: "above_ma5", text: "a close above the 5-day average", level: 51.2, side: "above" },
+    rules: { stop_atr: 2.5, target_atr: null, time_stop: 10, underlying: "above_ma5" },
+  },
+  model: { horizon: 10, drift: 0.006, drift_source: "backtest", vol: 0.3, expected_return: 0.006, sharpe: 0.09, stop_pct: 0.06, target_pct: null },
+  backtest: { trades: 140, win_rate: 0.58, mean: 0.011, avg_sessions: 4.2, excess: 0.008, mean_r: 0.31 },
+  size: { shares: 40, capital: 2000, max_loss: 120, share_of_account: 0.006, buying_power_left: 1000, over_guideline: false, limited_by: "buying power" },
+};
+
+describe("stock ideas", () => {
+  it("shows the shares, the stop, the time stop and the size", () => {
+    render(<IdeaCard idea={{ ...idea, kind: "stocks", list: "stocks", pick: shares, alternative: null }} />);
+    expect(screen.getByText("Shares")).toBeInTheDocument();
+    expect(screen.getByText("+0.6% drift")).toBeInTheDocument();
+    expect(screen.getByText("40 shares")).toBeInTheDocument();
+    expect(screen.getByText("$2,000 · $120.00 to the stop")).toBeInTheDocument();
+    expect(screen.getByText("58% won")).toBeInTheDocument();
+    expect(screen.getByText(/or on a close above the 5-day average \(now \$51\.20\)/)).toBeInTheDocument();
+    expect(screen.getByText("2026-11-11")).toBeInTheDocument();
+    render(<PickLine pick={shares} />);
+    expect(screen.getByText(/shares at \$50\.00, stop \$47\.00 \(40 shares\)/)).toBeInTheDocument();
+  });
+
+  it("lists downward setups on what you hold, and shares out of reach", () => {
+    render(
+      <HoldingAlerts
+        items={[{ symbol: "XYZ", held: "40 shares", setup: "breakdown", title: "Breakdown to a new low", fired: "2026-10-27", age: 0, spot: 40, text: "Breakdown to a new low (today)." }]}
+      />,
+    );
+    expect(screen.getByText("On what you hold")).toBeInTheDocument();
+    expect(screen.getByText("40 shares")).toBeInTheDocument();
+    render(
+      <OutOfReachList
+        items={[{ symbol: "ABC", list: "stocks", setup: "Breakout from a squeeze", structure: "shares", needs: 812.5, reason: "buying power", level: 0, score: 1 }]}
+        budget={null}
+      />,
+    );
+    expect(screen.getByText(/a share costs \$812\.50/)).toBeInTheDocument();
   });
 });

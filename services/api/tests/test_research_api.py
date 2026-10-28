@@ -77,6 +77,12 @@ def test_research_ranks_ideas_with_contracts(client: tuple[TestClient, Any]) -> 
     assert budget["account"] == "Individual …1234"
     for idea in priced:
         assert idea["pick"]["size"]["capital"] <= budget["buying_power"]
+    for idea in body["stocks"]:  # shares: a stop under the price, sized the same way
+        pick = idea["pick"]
+        assert pick["exit"]["stop"] < pick["entry"]["limit"]
+        assert pick["size"]["shares"] >= 1
+        assert pick["size"]["capital"] <= budget["buying_power"]
+    assert "holding_alerts" in body
     assert body["iv_history_days"] == 1
     assert "Not investment advice" in body["disclaimer"]
     assert c.get("/api/research").json() == body  # cached
@@ -96,20 +102,13 @@ def test_ideas_are_stored_runs_with_a_track_record(client: tuple[TestClient, Any
     assert again["run"]["previous_run"] is None  # both runs were made the same day
     record = c.get("/api/research/track-record").json()
     listed = {(r["list"], r["symbol"]) for r in record["recommendations"]}
-    ideas = {
-        (k, i["symbol"])
-        for k in ("swing", "leaps", "bearish", "income", "volatility")
-        for i in body[k]
-    }
+    lists = ("swing", "leaps", "bearish", "income", "volatility", "stocks")
+    ideas = {(k, i["symbol"]) for k in lists for i in body[k]}
     assert listed == ideas  # the same ideas twice are one recommendation each
     assert all(r["runs"] == 2 for r in record["recommendations"])
-    assert {s["list"] for s in record["summary"]} <= {
-        "swing",
-        "leaps",
-        "bearish",
-        "income",
-        "volatility",
-    }
+    assert {s["list"] for s in record["summary"]} <= set(lists)
+    shares = [r for r in record["recommendations"] if r["list"] == "stocks"]
+    assert all(r["structure"] == "shares" for r in shares)
 
 
 def test_calibration_before_and_after_a_run(client: tuple[TestClient, Any]) -> None:

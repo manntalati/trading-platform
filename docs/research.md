@@ -1,7 +1,9 @@
-# Options research: swings, LEAPS and selling premium
+# Research: options, stocks, swings, LEAPS and selling premium
 
-**Research → Options ideas** lists the options trades the playbook's setups call for today, each
-with the contract that expresses it best, an entry limit and an exit plan. **Research → Look up a
+**Research → Ideas** lists the options trades the playbook's setups call for today, each with
+the contract that expresses it best, an entry limit and an exit plan, and on its **Stocks** tab
+the same upward setups as shares, with a stop, a time stop and a size ([Stock
+ideas](#stock-ideas)). **Research → Look up a
 symbol** shows any ticker in depth, and **Portfolio → Positions** says what you could do with the
 options and shares you already hold. Every idea comes from fixed rules (`tp_strategies.setups`,
 `tp_strategies.playbook`, `tp_strategies.option_edge`) and shows the numbers behind it. They're
@@ -132,6 +134,36 @@ gets the drift its signal actually had and the exits that held up best out of sa
 [What to run](#what-to-run)). One idea per name per list, at most two names per sector or fund
 class, best first.
 
+### Stock ideas
+
+The upward setups (a pullback in an uptrend, a breakout from a squeeze, a trend leader at its
+50-day, an earnings beat) are also stock ideas, on every name with daily bars, an option chain or
+not (`playbook.stock_ideas_for`):
+
+- **Entry**: a limit at the price, good while the signal is (`valid_for` sessions); pay no more
+  than half an ATR (the stock's average true range over 14 sessions) over it.
+- **Exit**: a stop some multiple of the ATR under the entry, an optional profit target some
+  multiple above, a time stop, and the setup's stock-side rule (for a pullback, the first close
+  above the 5-day average). Defaults per setup (`setups.StockExits`); once `tp-recs calibrate`
+  has run, the combination that held up best on the earlier signals, tried on the later ones:
+  the backtest buys at the signal's close, fills a stop or target where an order would (at the
+  open on a gap through it, the stop first when a session touches both), pays half a typical
+  spread each way, and judges exits by how fast they'd have grown an account risking 2% of it to
+  the stop each time, on the return over what the average stock made in the same sessions.
+- **Size**: as many shares as the buying power pays for, the most lost at the stop kept within
+  `TP_OPTIONS_RISK` of the account. A stock whose one share costs more than the buying power is
+  listed as out of reach.
+- **Order**: the setup's drift over the stock's volatility for the horizon (a Sharpe ratio), the
+  signal's strength and age, and where the cross-sectional ML ranker (strategy 13, kept current
+  by the models job) puts the name today, if its walk-forward ranking held up; otherwise its rank
+  is shown and not counted.
+- **On what you hold**: a downward setup (a failing bounce, a breakdown, an earnings miss) on a
+  stock you hold shares of is listed under the Stocks tab, with how the stock did after that
+  signal in the backtest: a reason to look at selling or a tighter stop.
+
+The track record follows stock ideas too, on the daily bars, the same way an order would have
+filled.
+
 ## What to run
 
 Nothing needs training by hand; the backtest calibrates itself. Once, after updating:
@@ -153,7 +185,8 @@ is what the earnings setups read.
 `tp-recs calibrate` prints, per setup: how many times it fired, how often the stock went its way
 over the horizon and by how much (against all names over the same horizon), the drift the live
 model will use, and the option trade's result on the later 40% of the signals (the ones the
-exits weren't chosen on) with the chosen exits and with the defaults. With real prices it also
+exits weren't chosen on) with the chosen exits and with the defaults; for the upward setups, the
+share trade's too. With real prices it also
 says how the same trades did on them and how far the model was off. What the backtest can't
 see: the modeled trades assume implied volatility moves with realized volatility, so they miss
 IV crushes and spikes (the real-price trades don't); and the names are today's liquid ones, so

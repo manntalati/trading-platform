@@ -8,6 +8,7 @@ import {
   isCondor,
   isCreditSpread,
   isPlay,
+  isShares,
   isSpread,
   type CalendarPick,
   type ChatTurn,
@@ -21,13 +22,14 @@ import {
   type PlayPick,
   type Research as ResearchData,
   type SpreadPick,
+  type StockPick,
   type SymbolResearch,
   type Calibration,
   type TrackRecord,
   type TrackedRecommendation,
 } from "../types";
 import Ideas from "./Ideas";
-import { BudgetLine, IdeaCard, OutOfReachList, PlayLine, WatchList } from "./Playbook";
+import { BudgetLine, HoldingAlerts, IdeaCard, ModelRankLine, OutOfReachList, PlayLine, WatchList } from "./Playbook";
 import { PriceHistory } from "./Market";
 import { OptionPricing } from "./Options";
 import { AskPanel, Scenarios } from "./Positions";
@@ -35,7 +37,7 @@ import { AskPanel, Scenarios } from "./Positions";
 export { IdeaCard } from "./Playbook";
 
 const VIEWS = [
-  { key: "ideas", label: "Options ideas" },
+  { key: "ideas", label: "Ideas" },
   { key: "track-record", label: "Track record" },
   { key: "lookup", label: "Look up a symbol" },
   { key: "checks", label: "Portfolio checks" },
@@ -83,6 +85,11 @@ const KINDS = [
     key: "volatility",
     label: "Cheap volatility",
     rule: "Options at most 0.9x the volatility forecast, the term structure not inverted and no event priced in: a straddle that profits from movement either way.",
+  },
+  {
+    key: "stocks",
+    label: "Stocks",
+    rule: "Shares on the upward setups (a pullback in an uptrend, a breakout from a squeeze, a trend leader at its 50-day, an earnings beat), any name with daily bars: a limit near the price, a stop and an optional target a few ATRs away, a time stop and the setup's stock-side exit, all chosen by the backtest, and as many shares as your buying power and risk guideline allow. Ranked by the setup's drift over the stock's volatility, and the ML ranker where it has held up.",
   },
 ] as const;
 type Kind = (typeof KINDS)[number]["key"];
@@ -166,6 +173,12 @@ function OptionsIdeas() {
         </Card>
       )}
       {kind === "leaps" && <WatchList items={r.watch ?? []} />}
+      {kind === "stocks" && <HoldingAlerts items={r.holding_alerts ?? []} />}
+      {kind === "stocks" && (
+        <p className="muted small" style={{ margin: 0 }}>
+          <ModelRankLine rank={r.model_rank} />
+        </p>
+      )}
       <OutOfReachList items={(r.out_of_reach ?? []).filter((m) => m.list === kind)} budget={r.budget} />
       {dropped.length > 0 && <p className="muted small">No longer listed since the previous session: {dropped.join(", ")}.</p>}
       {Object.keys(r.errors ?? {}).length > 0 && (
@@ -191,7 +204,14 @@ export function newCount(r: ResearchData): number {
 
 const PAGE = 15; // ideas a page in the track record
 
-const LIST_LABEL: Record<IdeaList, string> = { swing: "Swing", leaps: "LEAPS", bearish: "Bearish", income: "Premium", volatility: "Volatility" };
+const LIST_LABEL: Record<IdeaList, string> = {
+  swing: "Swing",
+  leaps: "LEAPS",
+  bearish: "Bearish",
+  income: "Premium",
+  volatility: "Volatility",
+  stocks: "Stocks",
+};
 
 function Followed({ r }: { r: TrackedRecommendation }) {
   const f = r.followed;
@@ -232,6 +252,9 @@ export function BacktestCard({ c }: { c: Calibration }) {
               <th className="num">Mean</th>
               <th className="num" title="the same signals with the default exits">Default exits</th>
               <th className="num" title="on real option prices, since February 2024">Real prices</th>
+              <th className="num" title="shares with the chosen stop, target and time stop, on the later 40% of the signals: won, and the mean">
+                Shares
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -260,6 +283,21 @@ export function BacktestCard({ c }: { c: Calibration }) {
                   {s.real?.trades ? (
                     <>
                       {pct(s.real.mean ?? null, 0, true)} <span className="muted small">of {s.real.trades}</span>
+                    </>
+                  ) : (
+                    "—"
+                  )}
+                </td>
+                <td className="num mono">
+                  {s.stock?.test?.trades ? (
+                    <>
+                      {pct(s.stock.test.win_rate ?? null, 0)} · {pct(s.stock.test.mean ?? null, 1, true)}
+                      {s.stock.exits && (
+                        <div className="muted small">
+                          stop {num(s.stock.exits.stop_atr, 1)} ATR
+                          {s.stock.exits.target_atr != null ? ` · target ${num(s.stock.exits.target_atr, 0)} ATR` : ""}
+                        </div>
+                      )}
                     </>
                   ) : (
                     "—"
@@ -486,7 +524,16 @@ function strike(k: number): string {
 }
 
 /** One line: what you'd buy (or the spread) and what it costs. */
-export function PickLine({ pick }: { pick: Pick | PlayPick }) {
+export function PickLine({ pick }: { pick: Pick | PlayPick | StockPick }) {
+  if (isShares(pick)) {
+    return (
+      <>
+        shares at {money(pick.entry.limit, true)}, stop {money(pick.exit.stop, true)}
+        {pick.exit.target != null ? `, target ${money(pick.exit.target, true)}` : ""}
+        {pick.size ? ` (${pick.size.shares} shares)` : ""}
+      </>
+    );
+  }
   if (isPlay(pick)) return <PlayLine pick={pick} />;
   if (isCreditSpread(pick)) {
     return (
