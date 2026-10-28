@@ -1117,7 +1117,8 @@ export interface TrackedRecommendation {
   structure: string;
   recommended_at: string;
   last_seen: string;
-  runs: number;
+  runs: number; // the runs that listed it, as one idea
+  contracts?: number; // the different contracts it was shown with (tracked: the first)
   rank: number;
   spot: Num;
   legs: TrackLeg[];
@@ -1133,6 +1134,7 @@ export interface TrackedRecommendation {
   status?: "open" | "expired";
   marked: string | null;
   followed?: FollowedPlan | null; // the exit plan, followed through the daily snapshots
+  state?: "open" | "closed"; // closed once the plan closed it or it expired
 }
 
 export interface TrackSummary {
@@ -1185,6 +1187,7 @@ export interface Calibration {
 
 export interface TrackRecord {
   as_of: string;
+  total?: number; // ideas tracked (recommendations holds the newest of them)
   recommendations: TrackedRecommendation[];
   summary: TrackSummary[];
   by_setup?: { setup: string; recommendations: number; plan_closed: number; plan_win_rate: Num; plan_median: Num }[];

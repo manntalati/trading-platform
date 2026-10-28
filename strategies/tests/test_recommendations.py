@@ -261,3 +261,36 @@ def test_the_plan_is_followed_from_the_session_after_the_recommendation(lake: La
     assert followed["status"] == "open"
     assert followed["sessions"] == 1  # only the session after; not the entry's own snapshot
     assert followed["exit"] == nxt.isoformat()
+
+
+def test_an_idea_listed_run_after_run_is_tracked_once(lake: Lake) -> None:
+    closes = close_matrix(load_bars(lake))
+    start = closes.index[-30].date()
+    at = datetime.combine(start, datetime.min.time(), tzinfo=UTC) + timedelta(hours=15)
+    first = leg(CALL, "buy", 2.0, "2024-01-19", 100.0, "call")
+    other = leg(format_occ("XYZ", date(2024, 1, 19), "C", 105.0), "buy", 1.1, "2024-01-19",
+                105.0, "call")  # fmt: skip
+
+    def listed(when: datetime, pick: dict[str, Any], setup: str = "pullback") -> None:
+        ideas = [idea("XYZ", "swing", pick) | {"play": {"name": setup}}]
+        recs.store_run(lake, run(when, start, swing=ideas), now=when)
+
+    for hours, pick in ((0, first), (1, other), (2, first), (26, other), (50, other)):
+        listed(at + timedelta(hours=hours), pick)  # hourly runs; the contract picked shifts
+    listed(at + timedelta(hours=27), first, setup="breakout")  # another setup: another idea
+    listed(at + timedelta(days=12), other)  # back after more than a week: a new idea
+
+    rows = recs.track_record(lake, closes.index[-1].date())["recommendations"]
+    pullbacks = [r for r in rows if r["setup"] == "pullback"]
+    assert len(pullbacks) == 2
+    later, earlier = pullbacks  # newest first
+    assert (earlier["runs"], earlier["contracts"]) == (5, 2)
+    assert [x["contract"] for x in earlier["legs"]] == [CALL]  # tracked as the first run picked
+    assert earlier["entry"] == pytest.approx(2.0)
+    assert earlier["last_seen"] == (at + timedelta(hours=50)).isoformat()
+    assert later["runs"] == 1
+    assert [r["setup"] for r in rows].count("breakout") == 1
+    assert {r["state"] for r in rows} <= {"open", "closed"}
+    record = recs.track_record(lake, closes.index[-1].date())
+    assert record["total"] == 3
+    assert {s["list"]: s["recommendations"] for s in record["summary"]} == {"swing": 3}
