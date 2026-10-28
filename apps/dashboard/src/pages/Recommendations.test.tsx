@@ -84,7 +84,7 @@ describe("Options ideas from the stored runs", () => {
     const row = (await screen.findByRole("cell", { name: "Swing calls" })).closest("tr")!;
     expect(row).toHaveTextContent("50% of 2");
     expect(screen.getByText(/bought XYZ Jan 16 '26 \$100 Call/)).toBeInTheDocument();
-    expect(screen.getByText(/listed 3 times/)).toBeInTheDocument();
+    expect(screen.getByTitle("listed in 3 runs until 2025-12-03")).toHaveTextContent("3 runs to 12-03");
     expect(screen.getByText("+$110.00")).toBeInTheDocument();
   });
 });

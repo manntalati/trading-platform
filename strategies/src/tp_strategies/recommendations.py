@@ -11,13 +11,14 @@ A run is made whenever its inputs changed (new bars, a new option chain snapshot
 sync, new macro data, a new playbook calibration): ``tp-recs run``, which the job scheduler
 starts on its own.
 
-The track record marks each recommended position at the latest quotes (the middle of the bid and
-ask; entries were at the ask for a purchase and the bid for a sale, as the picks were priced), or
-at its value at expiry once it has expired. It also follows each idea's exit plan through the
-daily chain snapshots: the first session its profit target, stop, stock-side exit, time stop or
-days-to-expiry limit was reached, and what the position was worth then, which is what following
-the plan would have made. It is the record of rules applied to past data, not of trades anyone
-made.
+The track record counts each idea once (a name on a list for one setup; listed again within a
+week, it's the same idea), with the contracts the first run that listed it picked. It marks each
+position at the latest quotes (the middle of the bid and ask; entries were at the ask for a
+purchase and the bid for a sale, as the picks were priced), or at its value at expiry once it
+has expired. It also follows each idea's exit plan through the daily chain snapshots: the first
+session its profit target, stop, stock-side exit, time stop or days-to-expiry limit was
+reached, and what the position was worth then, which is what following the plan would have
+made. It is the record of rules applied to past data, not of trades anyone made.
 """
 
 from __future__ import annotations
@@ -63,6 +64,7 @@ LIST_NAMES = {
     "volatility": "Volatility",
 }
 HORIZONS = (5, 21)  # sessions after the recommendation, for the underlying's move
+EPISODE_GAP = timedelta(days=7)  # listed again within a week: the same idea
 LOG_SCHEMA = pa.schema(
     [
         ("run_id", pa.string()),
@@ -427,17 +429,27 @@ def _prune(lake: Lake, now: datetime) -> None:
 
 
 def recommended(log_df: pd.DataFrame) -> pd.DataFrame:
-    """Each distinct recommendation (list, symbol and the same contracts) once, at the first run
-    it appeared in, with when it was last seen and in how many runs."""
+    """Each idea once: a name on a list for one setup, from the first run that listed it until it
+    went ``EPISODE_GAP`` without being listed (listed after that, it's a new idea). Runs come
+    many times a day and the contract picked shifts with the prices, so an idea is tracked with
+    the contracts the first run picked, at its prices, as if entered then; with when it was last
+    seen, in how many runs, and how many different contracts it was shown with."""
+    extra = {"last_seen": object, "runs": int, "contracts": int}
     if log_df.empty:
-        return log_df.assign(last_seen=pd.Series(dtype=object), runs=pd.Series(dtype=int))
-    df = log_df.sort_values("run_at")
-    keys = ["list", "symbol", "legs"]
-    first = df.groupby(keys, sort=False).head(1).set_index(keys)
+        return log_df.assign(**{k: pd.Series(dtype=t) for k, t in extra.items()})
+    df = log_df.sort_values("run_at").reset_index(drop=True)
+    df["_setup"] = df["setup"].fillna("")
+    keys = ["list", "symbol", "_setup"]
+    gap = df.groupby(keys)["run_at"].diff()
+    df["_episode"] = (gap.isna() | (gap > EPISODE_GAP)).groupby([df[k] for k in keys]).cumsum()
+    keys.append("_episode")
     grouped = df.groupby(keys, sort=False)
+    first = grouped.head(1).set_index(keys)
     first["last_seen"] = grouped["run_at"].max()
     first["runs"] = grouped["run_id"].nunique()
-    return first.reset_index().sort_values("run_at", ascending=False).reset_index(drop=True)
+    first["contracts"] = grouped["legs"].nunique()
+    out = first.reset_index().drop(columns=["_setup", "_episode"])
+    return out.sort_values("run_at", ascending=False).reset_index(drop=True)
 
 
 def _contract_marks(
@@ -464,8 +476,9 @@ def _intrinsic(right: str, strike: float, spot: float) -> float:
 
 
 def track_record(lake: Lake, today: date, *, limit: int = 200) -> dict[str, Any]:
-    """How each recommendation has done: the underlying's move since (in the recommended
-    direction, and against the S&P 500), and the position marked now or at expiry."""
+    """How each idea (``recommended``) has done, newest first: the underlying's move since (in
+    the recommended direction, and against the S&P 500), the position marked now or at expiry,
+    and its exit plan followed; ``state`` is closed once the plan closed it or it expired."""
     recs = recommended(load_log(lake))
     if recs.empty:
         return {"recommendations": [], "summary": [], "as_of": today.isoformat()}
@@ -495,6 +508,7 @@ def track_record(lake: Lake, today: date, *, limit: int = 200) -> dict[str, Any]
             "recommended_at": pd.Timestamp(r["run_at"]).isoformat(),
             "last_seen": pd.Timestamp(r["last_seen"]).isoformat(),
             "runs": int(r["runs"]),
+            "contracts": int(r["contracts"]),
             "rank": int(r["rank"]),
             "spot": _float(r["spot"]),
             "legs": [
@@ -521,9 +535,12 @@ def track_record(lake: Lake, today: date, *, limit: int = 200) -> dict[str, Any]
             if plan is not None
             else None
         )
+        closed = (row["followed"] or {}).get("status") == "closed" or row.get("status") == "expired"
+        row["state"] = "closed" if closed else "open"
         rows.append(row)
     return {
         "as_of": today.isoformat(),
+        "total": len(rows),
         "recommendations": rows[:limit],
         "summary": _summary(rows),
         "by_setup": _by_setup(rows),

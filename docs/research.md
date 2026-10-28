@@ -251,14 +251,18 @@ Each run is stored (`reports/recommendations/<run>.json` for 30 days, and one li
 
 - **New** marks an idea that wasn't on the same list at the previous session's last run, and each
   list says which names dropped off since.
-- **Research → Track record** shows how every idea has done since it was first listed: the
-  stock's move in the recommended direction (a fall counts for a bearish idea) after 5 and 21
-  sessions and to date, against the S&P 500 over the same time, and the position itself marked at
-  the middle of the latest bid and ask, or at its value at expiry. Entries are the prices the
-  pick was made at (the ask to buy, the bid to sell), so the record is no kinder than a real fill.
-  For premium selling it's the share of the premium kept. Per list: how many ideas, how many are
-  profitable, the median result, how often the stock went the right way, how often it beat the
-  S&P 500.
+- **Research → Track record** counts each idea once. Runs come many times a day (each brokerage
+  sync and chain snapshot makes one) and the contract picked shifts with the prices, so a name on
+  a list for one setup that's listed again within a week is the same idea, tracked with the
+  contract the first run picked, at that run's prices; "14 runs" says how often it was listed.
+  Ideas are shown 15 at a time, newest first, and can be narrowed to the open or the closed
+  ones. For each: the stock's move in the recommended direction (a fall counts for a bearish
+  idea) after 5 and 21 sessions and to date, against the S&P 500 over the same time, and the
+  position itself marked at the middle of the latest bid and ask, or at its value at expiry.
+  Entries are the prices the pick was made at (the ask to buy, the bid to sell), so the record is
+  no kinder than a real fill. For premium selling it's the share of the premium kept. Per list:
+  how many ideas, how many are profitable, the median result, how often the stock went the right
+  way, how often it beat the S&P 500.
 - **Following the plan**: each idea's exit plan is followed through the daily chain snapshots, and
   the position closed at the first session its target, stop, stock-side rule, time stop or
   days-to-expiry limit was reached (or valued at expiry). That's what following the plans would

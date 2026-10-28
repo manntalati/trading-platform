@@ -166,10 +166,11 @@ def _plan_line(pick: dict[str, Any]) -> str:
 
 @app.command()
 def scorecard(
-    limit: Annotated[int, typer.Option(help="How many recent recommendations to list.")] = 20,
+    limit: Annotated[int, typer.Option(help="How many recent ideas to list.")] = 20,
 ) -> None:
-    """How past recommendations have done: the stock's move since in the recommended direction,
-    and the position marked at the latest quotes (or at expiry)."""
+    """How past ideas have done (each once, however many runs listed it): the stock's move since
+    in the recommended direction, and the position marked at the latest quotes (or at
+    expiry)."""
     _, lake = _setup()
     record = recs.track_record(lake, datetime.now(UTC).astimezone(NEW_YORK).date())
     if not record["recommendations"]:
@@ -204,10 +205,11 @@ def scorecard(
             if followed
             else ""
         )
+        runs = f"  ({r['runs']} runs)" if r.get("runs", 1) > 1 else ""
         typer.echo(
             f"{r['recommended_at'][:10]}  {r['list']:<8} {r['symbol']:<6} {r['structure']:<18}"
             f" stock {_pct(r['move'])}  position {_pct(r['result'])}"
-            f"{'  (expired)' if r.get('status') == 'expired' else ''}{plan}"
+            f"{'  (expired)' if r.get('status') == 'expired' else ''}{plan}{runs}"
         )
 
 

@@ -189,6 +189,8 @@ export function newCount(r: ResearchData): number {
 
 // -- how past recommendations did -----------------------------------------------------------------
 
+const PAGE = 15; // ideas a page in the track record
+
 const LIST_LABEL: Record<IdeaList, string> = { swing: "Swing", leaps: "LEAPS", bearish: "Bearish", income: "Premium", volatility: "Volatility" };
 
 function Followed({ r }: { r: TrackedRecommendation }) {
@@ -276,7 +278,6 @@ export function BacktestCard({ c }: { c: Calibration }) {
 function TrackRecordView() {
   const res = useApi<TrackRecord>("/api/research/track-record", 600_000);
   const calibration = useApi<Calibration>("/api/research/calibration", 3_600_000);
-  const [list, setList] = useState<IdeaList | "all">("all");
   const t = res.data;
   if (res.loading && !t) return <Loading />;
   if (!t) return <ErrorBanner error={res.error} />;
@@ -290,16 +291,14 @@ function TrackRecordView() {
       </div>
     );
   }
-  const rows = t.recommendations.filter((r) => list === "all" || r.list === list);
   return (
     <div className="grid">
       <ErrorBanner error={res.error} />
       <p className="muted small" style={{ margin: 0 }}>
-        Every idea the platform listed, from the first run it appeared in. <strong>Stock</strong> is the move since then in the direction recommended (a fall
-        counts as a gain for a bearish idea); <strong>Position</strong> marks the contracts at the middle of the latest bid and ask (entered at the ask for a
-        purchase and the bid for a sale), or at their value at expiry. For premium selling it is the share of the premium kept. <strong>Following the plan</strong>{" "}
-        closes each idea at the first session its exit plan said to (target, stop, the stock-side rule, the time stop or days to expiry), from the daily chain
-        snapshots. Rules applied to data, not trades anyone made.
+        Each idea once: a name on a list for one setup, tracked with the contract the first run picked, as if bought then. Runs come many times a day and the
+        contract shifts with prices; listed again within a week, it's still the same idea. <strong>Stock</strong> is the move since in the direction
+        recommended; <strong>Position</strong> marks the contracts at the middle of the latest bid and ask, or at expiry (premium selling: the share of the
+        premium kept). <strong>Following the plan</strong> closes each at the first session its exit plan said to. Rules applied to data, not trades anyone made.
       </p>
       <Card title="By list">
         <div className="table-wrap">
@@ -341,6 +340,7 @@ function TrackRecordView() {
           </table>
         </div>
       </Card>
+      <TrackedIdeas t={t} />
       {t.by_setup && t.by_setup.length > 0 && (
         <Card title="By setup, following the exit plans">
           <div className="table-wrap">
@@ -370,10 +370,41 @@ function TrackRecordView() {
         </Card>
       )}
       {calibration.data && <BacktestCard c={calibration.data} />}
-      <Card
-        title="Each recommendation"
-        hint={
-          <select aria-label="List" value={list} onChange={(e) => setList(e.target.value as IdeaList | "all")}>
+    </div>
+  );
+}
+
+type State = "all" | "open" | "closed";
+
+function runsTitle(r: TrackedRecommendation): string {
+  const contracts = (r.contracts ?? 1) > 1 ? `, with ${r.contracts} different contracts; tracked with the first` : "";
+  return `listed in ${r.runs} runs until ${r.last_seen.slice(0, 10)}${contracts}`;
+}
+
+/** Each tracked idea, newest first, a page at a time, by list and by whether it's still open. */
+export function TrackedIdeas({ t }: { t: TrackRecord }) {
+  const [list, setList] = useState<IdeaList | "all">("all");
+  const [state, setState] = useState<State>("all");
+  const [shown, setShown] = useState(PAGE);
+  const matching = t.recommendations.filter((r) => (list === "all" || r.list === list) && (state === "all" || (r.state ?? "open") === state));
+  const rows = matching.slice(0, shown);
+  const open = t.recommendations.filter((r) => (r.state ?? "open") === "open").length;
+  function pick<T>(set: (value: T) => void, value: T) {
+    set(value);
+    setShown(PAGE);
+  }
+  return (
+    <Card
+      title="Each idea"
+      hint={
+        <span className="row-gap">
+          <span className="muted small">{`${t.total ?? t.recommendations.length} ideas, ${open} open`}</span>
+          <select aria-label="State" value={state} onChange={(e) => pick(setState, e.target.value as State)}>
+            <option value="all">Open and closed</option>
+            <option value="open">Open</option>
+            <option value="closed">Closed</option>
+          </select>
+          <select aria-label="List" value={list} onChange={(e) => pick(setList, e.target.value as IdeaList | "all")}>
             <option value="all">All lists</option>
             {t.summary.map((s) => (
               <option key={s.list} value={s.list}>
@@ -381,61 +412,72 @@ function TrackRecordView() {
               </option>
             ))}
           </select>
-        }
-      >
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>First listed</th>
-                <th>Idea</th>
-                <th>Position</th>
-                <th className="num">Stock since</th>
-                <th className="num">vs S&amp;P 500</th>
-                <th className="num">Position</th>
-                <th className="num">P&amp;L (1 lot)</th>
-                <th className="num" title="what following the exit plan made, and why it closed">Following the plan</th>
+        </span>
+      }
+    >
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>First listed</th>
+              <th>Idea</th>
+              <th>Position</th>
+              <th className="num">Stock since</th>
+              <th className="num">vs S&amp;P 500</th>
+              <th className="num">Position</th>
+              <th className="num">P&amp;L (1 lot)</th>
+              <th className="num" title="what following the exit plan made, and why it closed">Following the plan</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={`${r.list}${r.symbol}${r.recommended_at}${r.legs.map((l) => l.contract).join()}`}>
+                <td className="mono small">{r.recommended_at.slice(0, 10)}</td>
+                <td>
+                  <a href={`#/research/lookup/${encodeURIComponent(r.symbol)}`}>{r.symbol}</a> <span className="muted small">{LIST_LABEL[r.list]}</span>
+                  {r.setup && <div className="muted small">{r.setup.replace("_", " ")}</div>}
+                  {r.runs > 1 && (
+                    <span className="muted small" title={runsTitle(r)}>
+                      {" "}
+                      · {r.runs} runs{r.last_seen.slice(0, 10) !== r.recommended_at.slice(0, 10) ? ` to ${r.last_seen.slice(5, 10)}` : ""}
+                    </span>
+                  )}
+                </td>
+                <td className="small">
+                  {r.structure}
+                  {r.legs.map((l) => (
+                    <div key={l.contract} className="muted leg">
+                      {l.side === "sell" ? "sold " : "bought "}
+                      {l.label}
+                    </div>
+                  ))}
+                </td>
+                <td className="num mono">
+                  <Delta value={r.move} digits={1} />
+                </td>
+                <td className="num mono">
+                  <Delta value={r.move_vs_spy} digits={1} />
+                </td>
+                <td className="num mono">
+                  {r.result != null ? <Delta value={r.result} digits={0} /> : <span className="muted">—</span>}
+                  {r.status === "expired" && <div className="muted small">expired</div>}
+                </td>
+                <td className="num mono">{r.pnl != null ? <span className={r.pnl >= 0 ? "up" : "down"}>{signedMoney(r.pnl)}</span> : "—"}</td>
+                <td className="num mono">
+                  <Followed r={r} />
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={`${r.list}${r.symbol}${r.recommended_at}${r.legs.map((l) => l.contract).join()}`}>
-                  <td className="mono small">{r.recommended_at.slice(0, 10)}</td>
-                  <td>
-                    <a href={`#/research/lookup/${encodeURIComponent(r.symbol)}`}>{r.symbol}</a> <span className="muted small">{LIST_LABEL[r.list]}</span>
-                    {r.setup && <div className="muted small">{r.setup.replace("_", " ")}</div>}
-                    {r.runs > 1 && <span className="muted small"> · listed {r.runs} times</span>}
-                  </td>
-                  <td className="small">
-                    {r.structure}
-                    {r.legs.map((l) => (
-                      <div key={l.contract} className="muted leg">
-                        {l.side === "sell" ? "sold " : "bought "}
-                        {l.label}
-                      </div>
-                    ))}
-                  </td>
-                  <td className="num mono">
-                    <Delta value={r.move} digits={1} />
-                  </td>
-                  <td className="num mono">
-                    <Delta value={r.move_vs_spy} digits={1} />
-                  </td>
-                  <td className="num mono">
-                    {r.result != null ? <Delta value={r.result} digits={0} /> : <span className="muted">—</span>}
-                    {r.status === "expired" && <div className="muted small">expired</div>}
-                  </td>
-                  <td className="num mono">{r.pnl != null ? <span className={r.pnl >= 0 ? "up" : "down"}>{signedMoney(r.pnl)}</span> : "—"}</td>
-                  <td className="num mono">
-                    <Followed r={r} />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Card>
-    </div>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {!matching.length && <Empty>No {state === "all" ? "" : `${state} `}ideas on this list.</Empty>}
+      {matching.length > rows.length && (
+        <button className="more" onClick={() => setShown(shown + PAGE)}>
+          Show {Math.min(PAGE, matching.length - rows.length)} more of {matching.length - rows.length}
+        </button>
+      )}
+    </Card>
   );
 }
 

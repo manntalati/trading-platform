@@ -1439,3 +1439,16 @@ a.quote:hover .sym {
 .pick-title .leg {
   white-space: normal; /* a leg with its quotes is long on a phone */
 }
+
+/* -- the track record: filters in the card title, a page at a time -------------------------- */
+
+.row-gap {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+button.more {
+  margin-top: 10px;
+}

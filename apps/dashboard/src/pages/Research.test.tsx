@@ -1,8 +1,18 @@
-import { render, screen } from "@testing-library/react";
-import type { CalendarPick, ContractPick, CreditSpreadPick, IronCondorPick, OptionSummary, PlayPick, ResearchIdea, SpreadPick } from "../types";
+import { fireEvent, render, screen } from "@testing-library/react";
+import type {
+  CalendarPick,
+  ContractPick,
+  CreditSpreadPick,
+  IronCondorPick,
+  OptionSummary,
+  PlayPick,
+  ResearchIdea,
+  SpreadPick,
+  TrackedRecommendation,
+} from "../types";
 import { fitLabel, skewLine } from "./Options";
 import { BudgetLine, OutOfReachList } from "./Playbook";
-import { BacktestCard, EarningsCard, IdeaCard, PickLine, PickSummary } from "./Research";
+import { BacktestCard, EarningsCard, IdeaCard, PickLine, PickSummary, TrackedIdeas } from "./Research";
 
 const call: ContractPick = {
   contract: "XYZ260313C00100000",
@@ -318,5 +328,52 @@ describe("BacktestCard", () => {
     expect(screen.getByText("61%")).toBeInTheDocument();
     expect(screen.getByText(/exits: \+50% · −50% · 10 sessions · above ma5/)).toBeInTheDocument();
     expect(screen.getByText("of 41")).toBeInTheDocument();
+  });
+});
+
+function tracked(i: number, state: "open" | "closed"): TrackedRecommendation {
+  return {
+    list: i % 2 ? "leaps" : "swing",
+    symbol: `S${String(i).padStart(2, "0")}`,
+    setup: "pullback",
+    structure: "call",
+    recommended_at: "2026-10-01T15:00:00+00:00",
+    last_seen: i === 0 ? "2026-10-03T19:00:00+00:00" : "2026-10-01T15:00:00+00:00",
+    runs: i === 0 ? 14 : 1,
+    contracts: i === 0 ? 3 : 1,
+    rank: 1,
+    spot: 100,
+    legs: [],
+    entry: 2,
+    move: 0.01,
+    move_vs_spy: 0,
+    move_5d: null,
+    move_21d: null,
+    value: 2.2,
+    pnl: 20,
+    result: 0.1,
+    marked: null,
+    state,
+  };
+}
+
+describe("TrackedIdeas", () => {
+  const ideas = Array.from({ length: 40 }, (_, i) => tracked(i, i < 30 ? "open" : "closed"));
+  const record = { as_of: "2026-10-28", total: 40, recommendations: ideas, summary: [] };
+
+  it("shows each idea once, a page at a time", () => {
+    render(<TrackedIdeas t={record} />);
+    expect(screen.getByText("40 ideas, 30 open")).toBeInTheDocument();
+    expect(screen.getAllByRole("row")).toHaveLength(16); // the header and the first 15
+    expect(screen.getByTitle(/listed in 14 runs until 2026-10-03, with 3 different contracts; tracked with the first/)).toHaveTextContent("14 runs to 10-03");
+    fireEvent.click(screen.getByRole("button", { name: "Show 15 more of 25" }));
+    expect(screen.getAllByRole("row")).toHaveLength(31);
+  });
+
+  it("filters to the open or the closed ones", () => {
+    render(<TrackedIdeas t={record} />);
+    fireEvent.change(screen.getByLabelText("State"), { target: { value: "closed" } });
+    expect(screen.getAllByRole("row")).toHaveLength(11);
+    expect(screen.queryByRole("button", { name: /more/ })).not.toBeInTheDocument();
   });
 });
