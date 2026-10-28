@@ -103,6 +103,11 @@ def test_windows_follow_the_exchange_calendar() -> None:
     (c,) = calibrate.windows_around(ny(date(2024, 7, 13), 12))
     assert (h.start, c.start) == (ny(date(2024, 7, 13), 8), ny(date(2024, 7, 13), 9))
     assert calibrate.command == ("tp-recs", "calibrate")
+    # headlines before the open, midday and in the evening (a half day's midday ends at 13:00)
+    starts = [a for a, _ in sched._news(FRIDAY)]
+    assert starts == [ny(FRIDAY, 7, 30), ny(FRIDAY, 12, 15), ny(FRIDAY, 18, 45)]
+    assert sched._news(FRIDAY)[0][1] == ny(FRIDAY, 9, 15)  # 15 minutes before the open
+    assert sched._news(half_day)[1][1] == ny(half_day, 13)
 
 
 def test_a_missed_evening_is_caught_up_and_then_left_alone(tmp_path: Path) -> None:
@@ -184,9 +189,9 @@ def test_recommendations_follow_new_data(tmp_path: Path) -> None:
     s.step()
     assert runner.calls.count("tp-recs run") == 1
     runner.calls.clear()
-    clock.at = ny(FRIDAY, 13)  # the midday option snapshot lands
+    clock.at = ny(FRIDAY, 13)  # the midday option snapshot and headlines land
     s.step()
-    assert runner.calls == ["tp-data options snapshot", "tp-recs run"]
+    assert runner.calls == ["tp-data options snapshot", "tp-data news fetch", "tp-recs run"]
     runner.calls.clear()
     clock.at += timedelta(minutes=30)
     s.step()

@@ -164,6 +164,32 @@ not (`playbook.stock_ideas_for`):
 The track record follows stock ideas too, on the daily bars, the same way an order would have
 filled.
 
+### News in the ideas
+
+Every idea, options and stocks, carries its name's headlines from the last five sessions
+(Alpaca's news feed, fetched before the open, midday and in the evening) and their mean
+sentiment, -1 to +1 (`tp_core.news.recent_news`): Claude's score for each headline when
+`TP_NEWS_SCORING=on` (with `ANTHROPIC_API_KEY`), otherwise a rough keyword score. The card shows
+the sentiment, how many headlines and how many Claude scored, and links the latest ones.
+
+- **Score**: news the idea's way (good news for a call or shares, bad for a put) adds to it and
+  news against it takes off, up to 0.25 with four headlines or more (`NEWS_WEIGHT`): enough to
+  reorder close ideas, not to make a weak setup a strong one. Premium selling and straddles have
+  no direction, so the news doesn't move them.
+- **Said so**: news clearly the idea's way (a mean of 0.25 or more from two headlines) is one of
+  its reasons; clearly against, one of its risks, with the latest headline. A busy news flow (8+
+  headlines in five sessions) is a risk for selling premium and a reason for a straddle.
+- **On what you hold**: strongly negative news on a stock you hold (-0.4 or worse from three
+  headlines) is an alert under the Stocks tab even without a setup.
+- **Checked**: each idea keeps the news it was listed with, and the track record splits the
+  ideas by whether the news agreed, ran against them, was mixed or was quiet, with how each group
+  did following the plans. Whether the news is worth more (or less) weight is for that to show,
+  over months.
+
+Keyword scores read words, not meaning ("XYZ jumps as a rival misses" reads as mixed, and is
+scored for the rival too if the feed tags it); turn on Claude's scoring for the ideas you'd act
+on. Look up shows a name's last eight headlines with their scores.
+
 ## What to run
 
 Nothing needs training by hand; the backtest calibrates itself. Once, after updating:

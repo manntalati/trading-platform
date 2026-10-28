@@ -9,8 +9,8 @@ recommendation has done since:
     clean/recommendations_log/part.parquet  one row per idea per run, kept for good
 
 A run is made whenever its inputs changed (new bars, a new option chain snapshot, a brokerage
-sync, new macro data, a new playbook calibration): ``tp-recs run``, which the job scheduler
-starts on its own.
+sync, new macro data, new headlines or their scores, a new playbook calibration): ``tp-recs
+run``, which the job scheduler starts on its own.
 
 The track record counts each idea once (a name on a list for one setup; listed again within a
 week, it's the same idea), with the contracts the first run that listed it picked. It marks each
@@ -21,7 +21,9 @@ session its profit target, stop, stock-side exit, time stop or days-to-expiry li
 reached, and what the position was worth then, which is what following the plan would have
 made. A stock idea is followed the same way on the daily bars: its stop and target against each
 session's open, low and high, then its stock-side rule and time stop on the close. It is the
-record of rules applied to past data, not of trades anyone made.
+record of rules applied to past data, not of trades anyone made. Each idea keeps the news
+sentiment it was listed with, so the record can say whether ideas the news agreed with did
+better than the ones it ran against (``by_news``).
 """
 
 from __future__ import annotations
@@ -84,8 +86,11 @@ LOG_SCHEMA = pa.schema(
         ("entry", pa.float64()),  # per share: + paid (a debit), - received (a credit)
         ("setup", pa.string()),  # the playbook setup (tp_strategies.setups)
         ("plan", pa.string()),  # JSON: the exit plan (targets per share, dates, stock rule)
+        ("news", pa.float64()),  # the name's mean news sentiment when listed (tp_core.news)
+        ("headlines", pa.int32()),  # how many headlines that was from
     ]
 )
+DIRECTION = {"bearish": -1, "income": 0, "volatility": 0}  # the rest: +1
 
 
 # -- what to scan and what you hold ---------------------------------------------------------------
@@ -148,6 +153,8 @@ def input_stamp(lake: Lake) -> dict[str, str | None]:
         "macro": _newest(lake.reports_dir("macro"), "*.json"),
         "fundamentals": _newest(lake.reports_dir("fundamentals"), "*.json"),
         "calibration": _newest(lake.reports_dir("playbook"), "calibration.json"),
+        "news": _newest(lake.reports_dir("news"), "*.json"),
+        "news_scores": _newest(lake.reports_dir("news_scores"), "*.json"),
         "broker": _newest(newest_day, "*.parquet") if newest_day is not None else None,
     }
 
@@ -391,6 +398,11 @@ def log_rows(run: Mapping[str, Any]) -> pd.DataFrame:
                     "entry": entry,
                     "setup": (idea.get("play") or {}).get("name"),
                     "plan": _plan(idea.get("pick")),
+                    "news": (idea.get("news") or {}).get("sentiment"),
+                    # 0: no headlines; null: listed before the news was kept
+                    "headlines": (idea.get("news") or {}).get(
+                        "headlines", 0 if "news" in idea else None
+                    ),
                 }
             )
     return pd.DataFrame(rows, columns=[f.name for f in LOG_SCHEMA])
@@ -526,6 +538,11 @@ def track_record(lake: Lake, today: date, *, limit: int = 200) -> dict[str, Any]
                 leg | {"label": option_label(leg["contract"]) or leg["contract"]} for leg in found
             ],
             "entry": _float(r["entry"]),
+            "news": (
+                {"sentiment": _float(r["news"]), "headlines": int(r["headlines"])}
+                if pd.notna(r.get("headlines"))
+                else None
+            ),
         }
         sign = -1.0 if r["list"] == "bearish" else 1.0
         row |= _moves(closes, sessions, str(r["symbol"]), start, sign)
@@ -545,6 +562,7 @@ def track_record(lake: Lake, today: date, *, limit: int = 200) -> dict[str, Any]
                 else None
             )
             row["state"] = "closed" if (row["followed"] or {}).get("status") == "closed" else "open"
+            row["news_group"] = news_group(row)
             rows.append(row)
             continue
         row |= _mark(found, marks, raw, str(r["symbol"]), _float(r["entry"]), today)
@@ -566,6 +584,7 @@ def track_record(lake: Lake, today: date, *, limit: int = 200) -> dict[str, Any]
         )
         closed = (row["followed"] or {}).get("status") == "closed" or row.get("status") == "expired"
         row["state"] = "closed" if closed else "open"
+        row["news_group"] = news_group(row)
         rows.append(row)
     return {
         "as_of": today.isoformat(),
@@ -573,6 +592,7 @@ def track_record(lake: Lake, today: date, *, limit: int = 200) -> dict[str, Any]
         "recommendations": rows[:limit],
         "summary": _summary(rows),
         "by_setup": _by_setup(rows),
+        "by_news": _by_news(rows),
     }
 
 
@@ -881,6 +901,50 @@ def _by_setup(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for name in sorted({r["setup"] for r in rows if r.get("setup")}):
         mine = [r for r in rows if r.get("setup") == name]
         out.append({"setup": name, "recommendations": len(mine), **_plan_stats(mine)})
+    return out
+
+
+NEWS_GROUPS = (
+    ("agreed", "The news agreed"),
+    ("against", "The news ran against it"),
+    ("neutral", "Mixed or neutral news"),
+    ("quiet", "Little or no news"),
+)
+
+
+def news_group(row: Mapping[str, Any]) -> str | None:
+    """How the news stood toward an idea when it was listed: its mean sentiment times the idea's
+    direction, from two headlines or more (None for ideas with no direction, and for ideas
+    listed before the news was kept)."""
+    direction = DIRECTION.get(str(row["list"]), 1)
+    news = row.get("news")
+    if not direction or news is None:
+        return None
+    if news["headlines"] < 2 or news["sentiment"] is None:
+        return "quiet"
+    lean = direction * news["sentiment"]
+    return "agreed" if lean >= 0.15 else "against" if lean <= -0.15 else "neutral"
+
+
+def _by_news(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The directional ideas by how the news stood toward them when listed: did following the
+    news's lead help?"""
+    out = []
+    for key, name in NEWS_GROUPS:
+        mine = [r for r in rows if r.get("news_group") == key]
+        if not mine:
+            continue
+        moved = [r["move_21d"] for r in mine if r.get("move_21d") is not None]
+        out.append(
+            {
+                "group": key,
+                "name": name,
+                "recommendations": len(mine),
+                "right_way_21d": (sum(1 for x in moved if x > 0) / len(moved)) if moved else None,
+                "median_move_21d": _median(moved),
+                **_plan_stats(mine),
+            }
+        )
     return out
 
 

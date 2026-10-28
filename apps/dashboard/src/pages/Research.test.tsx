@@ -12,8 +12,8 @@ import type {
   TrackedRecommendation,
 } from "../types";
 import { fitLabel, skewLine } from "./Options";
-import { BudgetLine, HoldingAlerts, OutOfReachList } from "./Playbook";
-import { BacktestCard, EarningsCard, IdeaCard, PickLine, PickSummary, TrackedIdeas } from "./Research";
+import { BudgetLine, HoldingAlerts, NewsList, OutOfReachList } from "./Playbook";
+import { BacktestCard, ByNewsCard, EarningsCard, IdeaCard, NewsBanner, PickLine, PickSummary, TrackedIdeas } from "./Research";
 
 const call: ContractPick = {
   contract: "XYZ260313C00100000",
@@ -427,5 +427,49 @@ describe("stock ideas", () => {
       />,
     );
     expect(screen.getByText(/a share costs \$812\.50/)).toBeInTheDocument();
+  });
+});
+
+const news = {
+  sentiment: 0.42,
+  headlines: 4,
+  claude: 1,
+  sessions: 5,
+  since: "2026-10-21",
+  latest: [
+    { at: "2026-10-27T13:00:00+00:00", headline: "XYZ beats estimates", source: "benzinga", url: "https://example.com/1", score: 0.5, scored_by: "keywords" as const },
+    { at: "2026-10-24T13:00:00+00:00", headline: "XYZ downgraded", source: "benzinga", url: "", score: -0.6, scored_by: "claude" as const },
+  ],
+};
+
+describe("news in the ideas", () => {
+  it("shows the sentiment, how it was scored and the latest headline on an idea", () => {
+    render(<IdeaCard idea={{ ...idea, news }} />);
+    expect(screen.getByText("0.42")).toHaveClass("up");
+    expect(screen.getByText(/from 4 headlines in 5 sessions \(1 scored by Claude, the rest by keywords\)/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "XYZ beats estimates" })).toHaveAttribute("href", "https://example.com/1");
+  });
+
+  it("lists a name's headlines on Look up, or says there are none", () => {
+    const { rerender } = render(<NewsList news={news} />);
+    expect(screen.getByText("XYZ downgraded")).toBeInTheDocument();
+    expect(screen.getByText("-0.6")).toHaveClass("down");
+    rerender(<NewsList news={null} />);
+    expect(screen.getByText(/No headlines naming it/)).toBeInTheDocument();
+  });
+
+  it("says where the scores come from, and how ideas did by the news", () => {
+    const base = { as_of: "", chains_as_of: null, scanned: 1, with_chains: 1, without_chains: [], iv_history_days: 1, swing: [], leaps: [], bearish: [], income: [], volatility: [], disclaimer: "" };
+    const { rerender } = render(<NewsBanner r={{ ...base, news: { names: 30, headlines: 210, claude: 0 }, news_scoring: false }} />);
+    expect(screen.getByText(/210 headlines on 30 names/)).toHaveTextContent(/keyword scores; with TP_NEWS_SCORING=on/);
+    rerender(<NewsBanner r={{ ...base, news: { names: 30, headlines: 210, claude: 200 }, news_scoring: true }} />);
+    expect(screen.getByText(/scored by Claude as they come in/)).toBeInTheDocument();
+    render(
+      <ByNewsCard
+        rows={[{ group: "against", name: "The news ran against it", recommendations: 12, right_way_21d: 0.42, median_move_21d: -0.01, plan_closed: 9, plan_win_rate: 0.33, plan_median: -0.2 }]}
+      />,
+    );
+    expect(screen.getByText("The news ran against it")).toBeInTheDocument();
+    expect(screen.getByText("33%")).toBeInTheDocument();
   });
 });

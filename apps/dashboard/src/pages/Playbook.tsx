@@ -6,6 +6,7 @@ import {
   type Budget,
   type HoldingAlert,
   type ModelRankInfo,
+  type NewsContext,
   type OutOfReach,
   type PlayPick,
   type ResearchIdea,
@@ -67,6 +68,7 @@ export function IdeaCard({ idea }: { idea: ResearchIdea }) {
           ))}
         </ul>
       )}
+      {idea.news && <NewsLine news={idea.news} />}
       {alternative && (
         <p className="small muted">
           Alternative: <PlayLine pick={alternative} />
@@ -238,13 +240,85 @@ export function SharesSummary({ pick }: { pick: StockPick }) {
   );
 }
 
+function tone(score: number): string {
+  return score >= 0.15 ? "up" : score <= -0.15 ? "down" : "muted";
+}
+
+function scoredBy(news: NewsContext): string {
+  if (news.claude === news.headlines) return "scored by Claude";
+  if (!news.claude) return "keyword scores";
+  return `${news.claude} scored by Claude, the rest by keywords`;
+}
+
+/** A name's recent news on an idea: the mean sentiment, how many headlines, and the latest. */
+export function NewsLine({ news }: { news: NewsContext }) {
+  const latest = news.latest[0];
+  return (
+    <p className="small news-line">
+      <span className="plan-label">News</span>{" "}
+      <span className={tone(news.sentiment)}>{num(news.sentiment, 2)}</span>{" "}
+      <span className="muted">
+        from {news.headlines} headline{news.headlines === 1 ? "" : "s"} in {news.sessions} sessions ({scoredBy(news)})
+      </span>
+      {latest && (
+        <>
+          {" · "}
+          {latest.url ? (
+            <a href={latest.url} target="_blank" rel="noreferrer">
+              {latest.headline}
+            </a>
+          ) : (
+            latest.headline
+          )}{" "}
+          <span className="muted">
+            {latest.source ? `${latest.source}, ` : ""}
+            {new Date(latest.at).toLocaleDateString()}
+          </span>
+        </>
+      )}
+    </p>
+  );
+}
+
+/** A name's latest headlines with their scores (Look up). */
+export function NewsList({ news }: { news: NewsContext | null | undefined }) {
+  if (!news) return <p className="muted small">No headlines naming it in the last five sessions.</p>;
+  return (
+    <div className="watch">
+      <div className="small">
+        Mean sentiment <strong className={tone(news.sentiment)}>{num(news.sentiment, 2)}</strong> from {news.headlines} headline
+        {news.headlines === 1 ? "" : "s"} since {news.since} <span className="muted">({scoredBy(news)})</span>
+      </div>
+      {news.latest.map((h) => (
+        <div key={`${h.at}${h.headline}`} className="watch-row">
+          <span className={`mono ${tone(h.score)}`} title={h.scored_by === "claude" ? "Claude's score" : "keyword score"}>
+            {num(h.score, 1)}
+          </span>
+          {h.url ? (
+            <a href={h.url} target="_blank" rel="noreferrer" className="small">
+              {h.headline}
+            </a>
+          ) : (
+            <span className="small">{h.headline}</span>
+          )}
+          <span className="spacer" />
+          <span className="muted small">
+            {h.source ? `${h.source}, ` : ""}
+            {new Date(h.at).toLocaleString()}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** Downward setups live on stocks you hold: reasons to look at selling or tightening a stop. */
 export function HoldingAlerts({ items }: { items: HoldingAlert[] }) {
   if (!items.length) return null;
   return (
     <div className="watch">
       <div className="small">
-        <strong>On what you hold</strong> <span className="muted">· a downward setup fired: worth a look at selling or a tighter stop</span>
+        <strong>On what you hold</strong> <span className="muted">· a downward setup fired, or bad news: worth a look at selling or a tighter stop</span>
       </div>
       {items.map((a) => (
         <a key={`${a.symbol}-${a.setup}`} className="watch-row" href={`#/research/lookup/${encodeURIComponent(a.symbol)}`}>

@@ -277,9 +277,15 @@ time, or on a weekend or holiday, it belongs to the next session. The ML feature
 `news_sentiment_5d` and `news_count_5d` ([ml.md](ml.md#features)) are built from that, and
 `tp-ml rank --features all` / `tp-ml meta --features all` try them.
 
+The recommendations read each name's last five sessions of headlines
+([research.md](research.md#news-in-the-ideas)): Claude's score where it scored them, else a rough
+keyword score worked out on the spot ("beats", "raises guidance" count for, "misses",
+"downgrade", "probe" against), never stored, so the ML features only ever see Claude's.
+
 Scoring costs API tokens (a few hundred headlines a day: cents with the default model), so the
 scheduler only scores with `TP_NEWS_SCORING=on` in `.env`; `TP_NEWS_MODEL` picks the model
-(default: `TP_CLAUDE_MODEL`). Fetching runs either way. The history starts when you start
+(default: `TP_CLAUDE_MODEL`; a Haiku model is plenty for this). Fetching runs either way:
+before the open, midday and in the evening on trading days. The history starts when you start
 collecting: Alpaca's feed goes back years, so `tp-data news fetch --days 365` gets a year of
 headlines to score if you want a longer sample (and a bigger bill).
 

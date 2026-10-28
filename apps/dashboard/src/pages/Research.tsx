@@ -29,7 +29,7 @@ import {
   type TrackedRecommendation,
 } from "../types";
 import Ideas from "./Ideas";
-import { BudgetLine, HoldingAlerts, IdeaCard, ModelRankLine, OutOfReachList, PlayLine, WatchList } from "./Playbook";
+import { BudgetLine, HoldingAlerts, IdeaCard, ModelRankLine, NewsList, OutOfReachList, PlayLine, WatchList } from "./Playbook";
 import { PriceHistory } from "./Market";
 import { OptionPricing } from "./Options";
 import { AskPanel, Scenarios } from "./Positions";
@@ -145,6 +145,7 @@ function OptionsIdeas() {
             scheduler does weekly).{" "}
           </>
         )}
+        <NewsBanner r={r} />
         {r.scanned} names scanned, {r.with_chains} with option chains
         {r.chains_as_of ? ` (as of ${new Date(r.chains_as_of).toLocaleString()})` : ""}. IV rank needs 20 days of daily snapshots
         {r.iv_history_days < 20 ? `: ${r.iv_history_days} so far, so implied vs realized volatility stands in.` : "."}{" "}
@@ -193,6 +194,23 @@ function OptionsIdeas() {
       )}
       <p className="muted small">{r.disclaimer}</p>
     </div>
+  );
+}
+
+/** Where the ideas' news sentiment comes from. */
+export function NewsBanner({ r }: { r: ResearchData }) {
+  if (!r.news) return null; // a run stored before news was read
+  if (!r.news.headlines) {
+    return <>No headlines in the last five sessions yet (the scheduler fetches them before the open, midday and evening: tp-data news fetch). </>;
+  }
+  const how = r.news_scoring
+    ? "scored by Claude as they come in"
+    : "keyword scores; with TP_NEWS_SCORING=on and ANTHROPIC_API_KEY in .env, Claude scores them";
+  return (
+    <>
+      News: {r.news.headlines} headlines on {r.news.names} names in the last five sessions ({r.news.claude} scored by Claude so far; the rest {how}),
+      folded into each idea.{" "}
+    </>
   );
 }
 
@@ -407,8 +425,47 @@ function TrackRecordView() {
           </div>
         </Card>
       )}
+      {t.by_news && t.by_news.length > 0 && <ByNewsCard rows={t.by_news} />}
       {calibration.data && <BacktestCard c={calibration.data} />}
     </div>
+  );
+}
+
+/** The directional ideas by how the news stood toward them when listed. */
+export function ByNewsCard({ rows }: { rows: NonNullable<TrackRecord["by_news"]> }) {
+  return (
+    <Card title="By the news when listed" hint="calls, LEAPS, shares and puts: was the news their way?">
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th />
+              <th className="num">Ideas</th>
+              <th className="num" title="the stock moved the recommended way after 21 sessions">
+                Right way, 21d
+              </th>
+              <th className="num">Median stock, 21d</th>
+              <th className="num">Closed by the plan</th>
+              <th className="num">Won</th>
+              <th className="num">Median</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((g) => (
+              <tr key={g.group}>
+                <td>{g.name}</td>
+                <td className="num mono">{g.recommendations}</td>
+                <td className="num mono">{pct(g.right_way_21d, 0)}</td>
+                <td className="num mono">{pct(g.median_move_21d, 1, true)}</td>
+                <td className="num mono">{g.plan_closed}</td>
+                <td className="num mono">{pct(g.plan_win_rate, 0)}</td>
+                <td className="num mono">{pct(g.plan_median, 0, true)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
   );
 }
 
@@ -873,6 +930,7 @@ function PlaybookCard({ symbol, view }: { symbol: string; view: NonNullable<Symb
           <li key={l}>{l}</li>
         ))}
       </ul>
+      {view.news !== undefined && <NewsList news={view.news} />}
     </Card>
   );
 }

@@ -231,3 +231,36 @@ def test_a_downward_setup_on_a_stock_you_hold_is_an_alert() -> None:
     assert alert["text"].startswith("Breakdown to a new low (today)")
     options_only = build_lists([n], held={"S01": "2 x S01 call"}, groups={}, calibration=None)
     assert options_only["holding_alerts"] == []  # only for shares held
+
+
+def news(sentiment: float, headlines: int) -> dict[str, Any]:
+    return {"sentiment": sentiment, "headlines": headlines, "claude": 0, "sessions": 5,
+            "since": "2026-01-06", "latest": [{"headline": "S01 news", "score": sentiment,
+                                               "scored_by": "keywords"}]}  # fmt: skip
+
+
+def test_news_moves_an_idea_its_way_and_flags_it_when_against() -> None:
+    n = name(path(320, 0.002, seed=4, dip=0.03), iv=0.2)
+    base = only(ideas_for(n, None, playbook.calibrated_setups(None)), "pullback")
+    plain = playbook.with_news(dict(base, why=list(base["why"]), risks=list(base["risks"])), None)
+    assert plain["news"] is None
+    good = playbook.with_news(dict(base, why=list(base["why"]), risks=list(base["risks"])),
+                              news(0.5, 6))  # fmt: skip
+    assert good["score"] == pytest.approx(base["score"] + playbook.NEWS_WEIGHT * 0.5)
+    assert any(w.startswith("The news agrees: +0.50 mean sentiment from 6 headlines") for w in
+               good["why"])  # fmt: skip
+    bad = playbook.with_news(dict(base, why=list(base["why"]), risks=list(base["risks"])),
+                             news(-0.6, 2))  # fmt: skip
+    assert bad["score"] == pytest.approx(base["score"] - playbook.NEWS_WEIGHT * 0.6 * 2 / 4)
+    assert any("runs against it" in r and '"S01 news"' in r for r in bad["risks"])
+
+
+def test_bad_news_on_a_stock_you_hold_is_an_alert() -> None:
+    calm = name(path(320, 0.0005, seed=4), iv=0.2)
+    lists = build_lists([calm], held={"S01": "40 shares"}, groups={}, calibration=None,
+                        news={"S01": news(-0.55, 4)})  # fmt: skip
+    (alert,) = [a for a in lists["holding_alerts"] if a["setup"] == "news"]
+    assert alert["text"].startswith("Bad news: -0.55 mean sentiment from 4 headlines")
+    mild = build_lists([calm], held={"S01": "40 shares"}, groups={}, calibration=None,
+                       news={"S01": news(-0.2, 4)})  # fmt: skip
+    assert not [a for a in mild["holding_alerts"] if a["setup"] == "news"]

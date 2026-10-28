@@ -9,7 +9,7 @@ windows on the exchange calendar, in New York time, on trading days:
     options-midday   12:30 to 30 min before the close   option chains during the day
     options-close    15 minutes before the close  the plan's daily snapshot
     bars             18:30 to the next open      daily bars
-    news             18:45 to the next open      headlines; Claude scores them (TP_NEWS_SCORING)
+    news             07:30, 12:15 and 18:45      headlines; Claude scores them (TP_NEWS_SCORING)
     models           19:30 to the next open      the ML strategies' models: retrain, drift, accuracy
     fundamentals     20:00 to 20:00 the next trading day   SEC filings (with TP_SEC_USER_AGENT)
     validation       Saturday 10:00 to Sunday 23:00   the backtest gate, weekly
@@ -132,8 +132,15 @@ def _bars(day: date) -> list[tuple[datetime, datetime]]:
 
 
 def _news(day: date) -> list[tuple[datetime, datetime]]:
-    start = max(ny(day, 18, 45), session_close(day) + timedelta(hours=2))
-    return [(start, session_open(next_session(day)) - timedelta(minutes=30))]
+    """Before the open (the night's and the morning's headlines reach the day's first ideas),
+    midday, and the evening."""
+    evening = max(ny(day, 18, 45), session_close(day) + timedelta(hours=2))
+    midday = (ny(day, 12, 15), min(ny(day, 14), session_close(day)))
+    return [
+        (ny(day, 7, 30), session_open(day) - timedelta(minutes=15)),
+        *([midday] if midday[0] < midday[1] else []),  # none on a half day
+        (evening, session_open(next_session(day)) - timedelta(minutes=30)),
+    ]
 
 
 def _models(day: date) -> list[tuple[datetime, datetime]]:
@@ -279,7 +286,7 @@ JOBS: tuple[Job, ...] = (
     Job(
         "news",
         "News headlines",
-        "trading days from 18:45",
+        "trading days at 07:30, 12:15 and from 18:45",
         ("tp-data", "news", "fetch"),
         written_since(REPORTS / "news", "*.json"),
         _news,
@@ -289,7 +296,7 @@ JOBS: tuple[Job, ...] = (
     Job(
         "news-scores",
         "News sentiment (Claude)",
-        "trading days from 18:45, after the headlines",
+        "after each fetch of the headlines",
         ("tp-data", "news", "score"),
         written_since(REPORTS / "news_scores", "*.json"),
         _news,

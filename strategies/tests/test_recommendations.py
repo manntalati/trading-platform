@@ -357,3 +357,26 @@ def test_the_track_record_marks_and_follows_stock_ideas(lake: Lake) -> None:
     assert followed["exit"] == closes.index[-10].date().isoformat()
     assert row["state"] == "closed"
     assert {s["list"] for s in record["summary"]} == {"stocks"}
+
+
+def test_the_record_by_how_the_news_stood(lake: Lake) -> None:
+    closes = close_matrix(load_bars(lake))
+    start = closes.index[-30].date()
+    at = datetime.combine(start, datetime.min.time(), tzinfo=UTC) + timedelta(hours=21)
+    with_news = [
+        idea("XYZ", "swing", None) | {"news": {"sentiment": 0.4, "headlines": 3}},
+        idea("ABC", "swing", None) | {"news": None},  # no headlines that run
+    ]
+    against = [idea("XYZ", "bearish", None) | {"news": {"sentiment": 0.5, "headlines": 4}}]
+    recs.store_run(lake, run(at, start, swing=with_news, bearish=against), now=at)
+    before = at - timedelta(days=20)  # a run from before the news was kept
+    recs.store_run(lake, run(before, closes.index[-45].date(), leaps=[idea("ABC", "leaps", None)]),
+                   now=before)  # fmt: skip
+    log = recs.load_log(lake)
+    assert log.loc[log["symbol"].eq("ABC") & log["list"].eq("swing"), "headlines"].tolist() == [0]
+    record = recs.track_record(lake, closes.index[-1].date())
+    groups = {g["group"]: g["recommendations"] for g in record["by_news"]}
+    assert groups == {"agreed": 1, "against": 1, "quiet": 1}  # the old LEAPS idea isn't counted
+    row = next(r for r in record["recommendations"] if r["list"] == "bearish")
+    assert row["news"] == {"sentiment": 0.5, "headlines": 4}
+    assert row["news_group"] == "against"

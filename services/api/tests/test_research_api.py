@@ -19,6 +19,7 @@ from tp_core.bars import load_bars
 from tp_core.storage import Lake
 from tp_ingest.jobs.bars import run_backfill
 from tp_ingest.jobs.fundamentals import run_fundamentals
+from tp_ingest.jobs.news import run_news
 from tp_ingest.jobs.options import run_snapshot
 from tp_ingest.sources.fake import FakeSource
 from tp_ingest.sources.sec import FakeSecSource
@@ -41,6 +42,7 @@ def research_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
     source = FakeSource(as_of=date(2024, 7, 12))
     run_snapshot(lake, source, ["SPY", "AAPL", "MSFT", "NVDA", "JPM"], now=DAY, max_dte=800)
     run_fundamentals(lake, FakeSecSource(["AAPL"], last_year=2023), ["AAPL", "SPY"], now=DAY)
+    run_news(lake, FakeSource(), SYMBOLS, now=DAY, days=5)  # a headline a day a name
     return root
 
 
@@ -83,6 +85,10 @@ def test_research_ranks_ideas_with_contracts(client: tuple[TestClient, Any]) -> 
         assert pick["size"]["shares"] >= 1
         assert pick["size"]["capital"] <= budget["buying_power"]
     assert "holding_alerts" in body
+    assert body["news"]["headlines"] > 0
+    assert body["news_scoring"] is False  # keyword scores: no Claude scoring in the tests
+    for idea in [*ideas, *body["stocks"]]:  # every idea carries its name's recent headlines
+        assert idea["news"]["latest"][0]["scored_by"] == "keywords"
     assert body["iv_history_days"] == 1
     assert "Not investment advice" in body["disclaimer"]
     assert c.get("/api/research").json() == body  # cached
@@ -156,6 +162,9 @@ def test_one_symbol_in_depth(client: tuple[TestClient, Any]) -> None:
     assert isinstance(view["ideas"], list)
     assert any("RSI(2)" in line for line in view["levels"])
     assert view["calibrated"] is False
+    headlines = view["news"]["latest"]  # its last few sessions of (synthetic) headlines
+    assert headlines
+    assert all(h["headline"].startswith("AAPL ") for h in headlines)
     f = body["fundamentals"]  # from the (synthetic) SEC filings
     assert f["period_end"] == "2023-12-31"
     assert f["last_release"] == "2024-01-31"

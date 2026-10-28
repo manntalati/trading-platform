@@ -31,6 +31,12 @@ the risk guideline. They rank by the setup's drift over the stock's volatility f
 (a Sharpe ratio), the signal's strength and age, and, when the cross-sectional ML ranker's
 walk-forward ranking held up, where it puts the name today. Bearish setups live on stocks you
 hold are listed as reasons to look at selling (``holding_alerts``).
+
+**News**: every idea carries its name's last five sessions of headlines (``tp_core.news``) and
+their mean sentiment, Claude's scores where it scored them and keyword scores otherwise. News
+the idea's way adds to its score and news against it takes off, by up to ``NEWS_WEIGHT`` with
+four headlines or more; clear disagreement is listed as a risk, a busy news flow as one for
+selling premium. Strongly negative news on a stock you hold is an alert of its own.
 """
 
 from __future__ import annotations
@@ -47,6 +53,7 @@ import numpy as np
 import pandas as pd
 
 from tp_core.calendar import NEW_YORK, sessions
+from tp_core.news import recent_news
 from tp_core.portfolio import Classifier
 from tp_core.reference import LakeReference
 from tp_core.storage import Lake
@@ -93,6 +100,11 @@ RANK_TILT = (
     0.4  # added to a stock idea's score at the top of the ML ranking, taken off at the bottom
 )
 RANKER = "ml-rank"  # the cross-sectional ranker the model monitor keeps predictions of
+NEWS_WEIGHT = 0.25  # the most news moves an idea's score, with NEWS_FULL headlines or more
+NEWS_FULL = 4
+NEWS_LEAN = 0.25  # a mean sentiment this far the idea's way (or against it) is said so
+NEWS_BUSY = 8  # headlines in the five sessions: something is going on
+NEWS_ALERT = -0.4  # a held stock's news this bad, from 3+ headlines, is an alert
 
 
 # -- calibration ----------------------------------------------------------------------------------
@@ -1082,6 +1094,64 @@ def holding_alerts(
     return out
 
 
+# -- news ------------------------------------------------------------------------------------------
+
+
+def _headline(news: Mapping[str, Any]) -> str:
+    latest = (news.get("latest") or [{}])[0]
+    return f' (latest: "{latest["headline"]}")' if latest.get("headline") else ""
+
+
+def with_news(idea: dict[str, Any], news: Mapping[str, Any] | None) -> dict[str, Any]:
+    """``idea`` with its name's recent news (``tp_core.news.recent_news``): attached, its score
+    moved by how far the news goes the idea's way, and said so in its reasons and risks."""
+    idea["news"] = dict(news) if news else None
+    if not news:
+        return idea
+    direction = SETUPS[idea["play"]["name"]].direction if idea.get("play") else 0
+    sentiment, count = float(news["sentiment"]), int(news["headlines"])
+    lean = direction * sentiment
+    idea["score"] += NEWS_WEIGHT * lean * min(count / NEWS_FULL, 1.0)
+    words = (
+        f"{sentiment:+.2f} mean sentiment from {count} headline{'s' * (count != 1)} in "
+        f"{news['sessions']} sessions"
+    )
+    if direction and count >= 2 and lean >= NEWS_LEAN:
+        idea["why"].append(f"The news agrees: {words}{_headline(news)}.")
+    elif direction and count >= 2 and lean <= -NEWS_LEAN:
+        idea["risks"].append(f"The news runs against it: {words}{_headline(news)}.")
+    elif idea["list"] == "income" and count >= NEWS_BUSY:
+        idea["risks"].append(
+            f"A lot of news lately ({count} headlines in {news['sessions']} sessions): the "
+            "premium may be pricing something real."
+        )
+    elif idea["list"] == "volatility" and count >= NEWS_BUSY:
+        idea["why"].append(
+            f"A lot of news lately ({count} headlines in {news['sessions']} sessions): a bigger "
+            "move is likelier than a quiet one."
+        )
+    return idea
+
+
+def news_alert(symbol: str, held: str, news: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Strongly negative news on a stock you hold: worth reading before the next open."""
+    if not news or news["headlines"] < 3 or news["sentiment"] > NEWS_ALERT:
+        return None
+    return {
+        "symbol": symbol,
+        "held": held,
+        "setup": "news",
+        "title": "Bad news",
+        "fired": None,
+        "age": 0,
+        "spot": None,
+        "text": (
+            f"Bad news: {news['sentiment']:+.2f} mean sentiment from {news['headlines']} "
+            f"headlines in {news['sessions']} sessions{_headline(news)}."
+        ),
+    }
+
+
 # -- the lists ------------------------------------------------------------------------------------
 
 
@@ -1095,11 +1165,14 @@ def build_lists(
     per_group: int = 2,
     budget: Budget | None = None,
     ranks: ModelRank | None = None,
+    news: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """The playbook's ideas by list, best modeled edge first (at most ``per_group`` per sector),
-    fitted to ``budget`` when there is one, with the stock ideas (``ranks``: the ML ranker's
-    latest); the leaders to watch for an entry; the setups nothing the account can trade fits
-    (``out_of_reach``); and the downward setups live on stocks you hold."""
+    """The playbook's ideas by list, best first (at most ``per_group`` per sector), fitted to
+    ``budget`` when there is one, with the stock ideas (``ranks``: the ML ranker's latest) and
+    each name's recent ``news``; the leaders to watch for an entry; the setups nothing the
+    account can trade fits (``out_of_reach``); and the downward setups and bad news on stocks
+    you hold."""
+    news = news or {}
     setups = calibrated_setups(calibration)
     found: dict[str, list[dict[str, Any]]] = {k: [] for k in LISTS}
     watch: list[dict[str, Any]] = []
@@ -1109,12 +1182,15 @@ def build_lists(
         ideas = ideas_for(name, calibration, setups, budget, missed)
         ideas += stock_ideas_for(name, calibration, setups, budget, missed, ranks)
         for idea in ideas:
+            with_news(idea, news.get(name.symbol))
             if held.get(name.symbol):
                 idea["held"] = held[name.symbol]
                 idea["risks"].append(f"Already held: {held[name.symbol]}.")
             found[idea["list"]].append(idea)
         if "shares" in held.get(name.symbol, ""):
             alerts += holding_alerts(name, setups, held[name.symbol], calibration)
+            bad = news_alert(name.symbol, held[name.symbol], news.get(name.symbol))
+            alerts += [bad] if bad else []
         if name.priced is not None and not name.priced.empty and leader_watch(name.ind):
             ind = name.ind.iloc[-1]
             watch.append(
@@ -1258,6 +1334,7 @@ def scan(
     }
     earnings = earnings_by_symbol(lake)
     ranked = model_ranks(lake)
+    news = recent_news(lake, wanted, now)
     names: list[Name] = []
     errors: dict[str, str] = {}
     for symbol in wanted:
@@ -1292,6 +1369,7 @@ def scan(
         per_group=rules.per_group,
         budget=budget,
         ranks=ranked,
+        news=news,
     )
     with_chain = [n for n in names if n.analysis["picks"]]
     return {
@@ -1302,6 +1380,11 @@ def scan(
         "without_chains": sorted(n.symbol for n in names if not n.analysis["picks"]),
         "errors": errors,
         "iv_history_days": int(history["snapshot_date"].nunique()) if len(history) else 0,
+        "news": {
+            "names": len(news),
+            "headlines": sum(n["headlines"] for n in news.values()),
+            "claude": sum(n["claude"] for n in news.values()),
+        },
         "calibration": _calibration_brief(calibration),
         "live_setups": _live_counts(lists),
         **lists,
@@ -1328,14 +1411,16 @@ def for_symbol(
     calibration: Mapping[str, Any] | None,
     budget: Budget | None = None,
     ranks: ModelRank | None = None,
+    news: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The playbook on one name for Look up: the setups live on it with their contracts and
-    as shares (fitted to ``budget``), the ones nothing affordable fits, how close the others
-    are, and whether it's a leader to wait on."""
+    as shares (fitted to ``budget``, with its recent ``news``), the ones nothing affordable
+    fits, how close the others are, and whether it's a leader to wait on."""
     setups = calibrated_setups(calibration)
     missed: list[dict[str, Any]] = []
     ideas = ideas_for(name, calibration, setups, budget, missed)
     ideas += stock_ideas_for(name, calibration, setups, budget, missed, ranks)
+    ideas = [with_news(i, news) for i in ideas]
     ind = name.ind.iloc[-1]
     near: list[str] = []
     if pd.notna(ind["rsi2"]):
@@ -1354,6 +1439,7 @@ def for_symbol(
         near.append(f"50-day average {ind['ma50']:,.2f} ({ind['close'] / ind['ma50'] - 1:+.1%})")
     return {
         "ideas": ideas,
+        "news": dict(news) if news else None,
         "out_of_reach": missed,
         "budget": budget.to_dict() if budget is not None else None,
         "watch": leader_watch(name.ind),

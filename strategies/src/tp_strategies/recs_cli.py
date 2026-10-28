@@ -95,7 +95,9 @@ def show(
         ideas = latest["research"].get(k) or []
         typer.echo(f"{recs.LIST_NAMES[k]} ({len(ideas)})")
         for i in ideas:
-            typer.echo(f"  {'★' if i.get('new') else ' '} {i['symbol']:<6} {_line(i)}")
+            news = i.get("news")
+            heard = f"  · news {news['sentiment']:+.2f} ({news['headlines']})" if news else ""
+            typer.echo(f"  {'★' if i.get('new') else ' '} {i['symbol']:<6} {_line(i)}{heard}")
             plan = (i.get("pick") or {}).get("exit")
             if plan:
                 typer.echo(f"           {_plan_line(i['pick'])}")
@@ -219,6 +221,14 @@ def scorecard(
             f" · following the exit plans: {s['plan_closed']} closed, won"
             f" {_pct(s['plan_win_rate'], False)}, median {_pct(s['plan_median'])}"
         )
+    if record.get("by_news"):
+        typer.echo("\nBy the news when listed:")
+        for g in record["by_news"]:
+            typer.echo(
+                f"  {g['name']:<26} {g['recommendations']:>4} ideas · right way after 21 sessions"
+                f" {_pct(g['right_way_21d'], False)} · following the plans: {g['plan_closed']}"
+                f" closed, won {_pct(g['plan_win_rate'], False)}"
+            )
     if record.get("by_setup"):
         typer.echo("\nBy setup, following the exit plans:")
         for s in record["by_setup"]:
