@@ -8,11 +8,12 @@ import type {
   PlayPick,
   ResearchIdea,
   SpreadPick,
+  StockPick,
   TrackedRecommendation,
 } from "../types";
 import { fitLabel, skewLine } from "./Options";
-import { BudgetLine, OutOfReachList } from "./Playbook";
-import { BacktestCard, EarningsCard, IdeaCard, PickLine, PickSummary, TrackedIdeas } from "./Research";
+import { BudgetLine, HoldingAlerts, NewsList, OutOfReachList } from "./Playbook";
+import { BacktestCard, ByNewsCard, EarningsCard, IdeaCard, NewsBanner, PickLine, PickSummary, TrackedIdeas } from "./Research";
 
 const call: ContractPick = {
   contract: "XYZ260313C00100000",
@@ -375,5 +376,100 @@ describe("TrackedIdeas", () => {
     fireEvent.change(screen.getByLabelText("State"), { target: { value: "closed" } });
     expect(screen.getAllByRole("row")).toHaveLength(11);
     expect(screen.queryByRole("button", { name: /more/ })).not.toBeInTheDocument();
+  });
+});
+
+const shares: StockPick = {
+  kind: "shares",
+  structure: "shares",
+  price: 50,
+  atr: 1.2,
+  risk_per_share: 3,
+  entry: { side: "debit", limit: 50, worst: 50.6, valid_until: "2026-10-30", worth_it: true },
+  exit: {
+    stop: 47,
+    target: null,
+    sell_by: "2026-11-11",
+    stock: { rule: "above_ma5", text: "a close above the 5-day average", level: 51.2, side: "above" },
+    rules: { stop_atr: 2.5, target_atr: null, time_stop: 10, underlying: "above_ma5" },
+  },
+  model: { horizon: 10, drift: 0.006, drift_source: "backtest", vol: 0.3, expected_return: 0.006, sharpe: 0.09, stop_pct: 0.06, target_pct: null },
+  backtest: { trades: 140, win_rate: 0.58, mean: 0.011, avg_sessions: 4.2, excess: 0.008, mean_r: 0.31 },
+  size: { shares: 40, capital: 2000, max_loss: 120, share_of_account: 0.006, buying_power_left: 1000, over_guideline: false, limited_by: "buying power" },
+};
+
+describe("stock ideas", () => {
+  it("shows the shares, the stop, the time stop and the size", () => {
+    render(<IdeaCard idea={{ ...idea, kind: "stocks", list: "stocks", pick: shares, alternative: null }} />);
+    expect(screen.getByText("Shares")).toBeInTheDocument();
+    expect(screen.getByText("+0.6% drift")).toBeInTheDocument();
+    expect(screen.getByText("40 shares")).toBeInTheDocument();
+    expect(screen.getByText("$2,000 · $120.00 to the stop")).toBeInTheDocument();
+    expect(screen.getByText("58% won")).toBeInTheDocument();
+    expect(screen.getByText(/or on a close above the 5-day average \(now \$51\.20\)/)).toBeInTheDocument();
+    expect(screen.getByText("2026-11-11")).toBeInTheDocument();
+    render(<PickLine pick={shares} />);
+    expect(screen.getByText(/shares at \$50\.00, stop \$47\.00 \(40 shares\)/)).toBeInTheDocument();
+  });
+
+  it("lists downward setups on what you hold, and shares out of reach", () => {
+    render(
+      <HoldingAlerts
+        items={[{ symbol: "XYZ", held: "40 shares", setup: "breakdown", title: "Breakdown to a new low", fired: "2026-10-27", age: 0, spot: 40, text: "Breakdown to a new low (today)." }]}
+      />,
+    );
+    expect(screen.getByText("On what you hold")).toBeInTheDocument();
+    expect(screen.getByText("40 shares")).toBeInTheDocument();
+    render(
+      <OutOfReachList
+        items={[{ symbol: "ABC", list: "stocks", setup: "Breakout from a squeeze", structure: "shares", needs: 812.5, reason: "buying power", level: 0, score: 1 }]}
+        budget={null}
+      />,
+    );
+    expect(screen.getByText(/a share costs \$812\.50/)).toBeInTheDocument();
+  });
+});
+
+const news = {
+  sentiment: 0.42,
+  headlines: 4,
+  claude: 1,
+  sessions: 5,
+  since: "2026-10-21",
+  latest: [
+    { at: "2026-10-27T13:00:00+00:00", headline: "XYZ beats estimates", source: "benzinga", url: "https://example.com/1", score: 0.5, scored_by: "keywords" as const },
+    { at: "2026-10-24T13:00:00+00:00", headline: "XYZ downgraded", source: "benzinga", url: "", score: -0.6, scored_by: "claude" as const },
+  ],
+};
+
+describe("news in the ideas", () => {
+  it("shows the sentiment, how it was scored and the latest headline on an idea", () => {
+    render(<IdeaCard idea={{ ...idea, news }} />);
+    expect(screen.getByText("0.42")).toHaveClass("up");
+    expect(screen.getByText(/from 4 headlines in 5 sessions \(1 scored by Claude, the rest by keywords\)/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "XYZ beats estimates" })).toHaveAttribute("href", "https://example.com/1");
+  });
+
+  it("lists a name's headlines on Look up, or says there are none", () => {
+    const { rerender } = render(<NewsList news={news} />);
+    expect(screen.getByText("XYZ downgraded")).toBeInTheDocument();
+    expect(screen.getByText("-0.6")).toHaveClass("down");
+    rerender(<NewsList news={null} />);
+    expect(screen.getByText(/No headlines naming it/)).toBeInTheDocument();
+  });
+
+  it("says where the scores come from, and how ideas did by the news", () => {
+    const base = { as_of: "", chains_as_of: null, scanned: 1, with_chains: 1, without_chains: [], iv_history_days: 1, swing: [], leaps: [], bearish: [], income: [], volatility: [], disclaimer: "" };
+    const { rerender } = render(<NewsBanner r={{ ...base, news: { names: 30, headlines: 210, claude: 0 }, news_scoring: false }} />);
+    expect(screen.getByText(/210 headlines on 30 names/)).toHaveTextContent(/keyword scores; with TP_NEWS_SCORING=on/);
+    rerender(<NewsBanner r={{ ...base, news: { names: 30, headlines: 210, claude: 200 }, news_scoring: true }} />);
+    expect(screen.getByText(/scored by Claude as they come in/)).toBeInTheDocument();
+    render(
+      <ByNewsCard
+        rows={[{ group: "against", name: "The news ran against it", recommendations: 12, right_way_21d: 0.42, median_move_21d: -0.01, plan_closed: 9, plan_win_rate: 0.33, plan_median: -0.2 }]}
+      />,
+    );
+    expect(screen.getByText("The news ran against it")).toBeInTheDocument();
+    expect(screen.getByText("33%")).toBeInTheDocument();
   });
 });

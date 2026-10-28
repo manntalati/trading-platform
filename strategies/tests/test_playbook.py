@@ -13,6 +13,7 @@ from tp_core.portfolio import Classifier
 from tp_core.testing import synthetic_chain
 from tp_ml.testing import write_lake
 from tp_strategies import playbook
+from tp_strategies.budget import Budget
 from tp_strategies.playbook import build_lists, for_symbol, ideas_for, prepare
 
 NOW = datetime(2026, 1, 12, 20, 45, tzinfo=UTC)  # Monday, 3:45 PM New York
@@ -133,7 +134,8 @@ def test_lists_take_one_idea_per_name_and_two_per_sector() -> None:
     assert len({i["symbol"] for i in swing}) == len(swing)
     held = next(i for i in swing if i["symbol"] == "S03")
     assert held["held"] == "40 shares"
-    assert set(lists) == {*playbook.LISTS, "watch", "out_of_reach", "budget"}
+    assert set(lists) == {*playbook.LISTS, "watch", "out_of_reach", "budget", "holding_alerts",
+                          "model_rank"}  # fmt: skip
     assert lists["budget"] is None  # no account given: nothing filtered
 
 
@@ -162,4 +164,103 @@ def test_scan_a_lake(tmp_path: Path) -> None:
     assert set(out) >= {*playbook.LISTS, "watch", "live_setups", "disclaimer"}
     for k in playbook.LISTS:
         for idea in out[k]:
-            assert idea["pick"]["legs"]
+            assert (
+                idea["pick"]["legs"] if k != playbook.STOCKS else idea["pick"]["kind"] == "shares"
+            )
+
+
+def test_a_pullback_is_a_stock_idea_too_with_a_stop_and_a_size() -> None:
+    n = name(path(320, 0.002, seed=4, dip=0.03), iv=0.2)
+    setups = playbook.calibrated_setups(None)
+    idea = only(playbook.stock_ideas_for(n, None, setups), "pullback")
+    assert idea["list"] == playbook.STOCKS
+    pick = idea["pick"]
+    atr = float(n.ind["atr14"].iloc[-1])
+    assert pick["kind"] == "shares"
+    assert pick["entry"]["limit"] == pytest.approx(n.spot, abs=0.01)
+    assert pick["exit"]["stop"] == pytest.approx(n.spot - 2.5 * atr, abs=0.01)
+    assert pick["exit"]["target"] is None
+    assert pick["exit"]["stock"]["rule"] == "above_ma5"
+    assert pick["exit"]["sell_by"] > NOW.date().isoformat()
+    assert any("The stop is 2.5 ATR" in w for w in idea["why"])
+
+    budget = Budget(buying_power=5000.0, account_value=50_000.0, account="A", risk_per_trade=0.01)
+    sized = only(playbook.stock_ideas_for(n, None, setups, budget), "pullback")
+    size = sized["pick"]["size"]
+    risk = sized["pick"]["risk_per_share"]
+    assert size["shares"] == min(int(5000 // n.spot), int(500 // risk))
+    assert size["max_loss"] <= 500 + 1e-9
+
+    missed: list[dict[str, Any]] = []
+    broke = Budget(buying_power=10.0, account_value=1000.0, account="A", risk_per_trade=0.01)
+    assert not playbook.stock_ideas_for(n, None, setups, broke, missed)
+    assert {m["structure"] for m in missed} == {"shares"}
+
+
+def test_calibrated_share_exits_and_the_ml_rank_move_a_stock_idea() -> None:
+    n = name(path(320, 0.002, seed=4, dip=0.03), iv=0.2)
+    calibration = {"setups": {"pullback": {"drift": 0.02, "events": 400, "stock": {
+        "exits": {"stop_atr": 1.5, "target_atr": 4.0, "time_stop": 5, "underlying": None},
+        "test": {"trades": 120, "win_rate": 0.58, "mean": 0.011, "avg_sessions": 4.2,
+                 "excess": 0.008, "mean_r": 0.31}}}}}  # fmt: skip
+    setups = playbook.calibrated_setups(calibration)
+    rank = playbook.ModelRank({"S01": 0.95}, NOW.date(), 40, "v1", 0.04)
+    idea = only(playbook.stock_ideas_for(n, calibration, setups, ranks=rank), "pullback")
+    pick = idea["pick"]
+    atr = float(n.ind["atr14"].iloc[-1])
+    assert pick["exit"]["stop"] == pytest.approx(n.spot - 1.5 * atr, abs=0.01)
+    assert pick["exit"]["target"] == pytest.approx(n.spot + 4 * atr, abs=0.01)
+    assert pick["exit"]["stock"] is None
+    assert any("won 58%" in w for w in idea["why"])
+    assert any("top 5% of 40 names" in w for w in idea["why"])
+    untrusted = playbook.ModelRank({"S01": 0.95}, NOW.date(), 40, "v1", -0.01)
+    plain = only(playbook.stock_ideas_for(n, calibration, setups, ranks=untrusted), "pullback")
+    assert idea["score"] == pytest.approx(plain["score"] + playbook.RANK_TILT * 0.45)
+    assert idea["model_rank"]["counted"] is True
+    assert plain["model_rank"]["counted"] is False
+
+
+def test_a_downward_setup_on_a_stock_you_hold_is_an_alert() -> None:
+    rng = np.random.default_rng(3)
+    fall = 100 * np.exp(np.cumsum(-0.003 + 0.006 * rng.standard_normal(320)))
+    fall[-1] = fall[-2] * 0.9  # a new 50-day low in a downtrend
+    n = name(fall, iv=0.3)
+    lists = build_lists([n], held={"S01": "40 shares"}, groups={}, calibration=None)
+    (alert,) = [a for a in lists["holding_alerts"] if a["setup"] == "breakdown"]
+    assert alert["held"] == "40 shares"
+    assert alert["text"].startswith("Breakdown to a new low (today)")
+    options_only = build_lists([n], held={"S01": "2 x S01 call"}, groups={}, calibration=None)
+    assert options_only["holding_alerts"] == []  # only for shares held
+
+
+def news(sentiment: float, headlines: int) -> dict[str, Any]:
+    return {"sentiment": sentiment, "headlines": headlines, "claude": 0, "sessions": 5,
+            "since": "2026-01-06", "latest": [{"headline": "S01 news", "score": sentiment,
+                                               "scored_by": "keywords"}]}  # fmt: skip
+
+
+def test_news_moves_an_idea_its_way_and_flags_it_when_against() -> None:
+    n = name(path(320, 0.002, seed=4, dip=0.03), iv=0.2)
+    base = only(ideas_for(n, None, playbook.calibrated_setups(None)), "pullback")
+    plain = playbook.with_news(dict(base, why=list(base["why"]), risks=list(base["risks"])), None)
+    assert plain["news"] is None
+    good = playbook.with_news(dict(base, why=list(base["why"]), risks=list(base["risks"])),
+                              news(0.5, 6))  # fmt: skip
+    assert good["score"] == pytest.approx(base["score"] + playbook.NEWS_WEIGHT * 0.5)
+    assert any(w.startswith("The news agrees: +0.50 mean sentiment from 6 headlines") for w in
+               good["why"])  # fmt: skip
+    bad = playbook.with_news(dict(base, why=list(base["why"]), risks=list(base["risks"])),
+                             news(-0.6, 2))  # fmt: skip
+    assert bad["score"] == pytest.approx(base["score"] - playbook.NEWS_WEIGHT * 0.6 * 2 / 4)
+    assert any("runs against it" in r and '"S01 news"' in r for r in bad["risks"])
+
+
+def test_bad_news_on_a_stock_you_hold_is_an_alert() -> None:
+    calm = name(path(320, 0.0005, seed=4), iv=0.2)
+    lists = build_lists([calm], held={"S01": "40 shares"}, groups={}, calibration=None,
+                        news={"S01": news(-0.55, 4)})  # fmt: skip
+    (alert,) = [a for a in lists["holding_alerts"] if a["setup"] == "news"]
+    assert alert["text"].startswith("Bad news: -0.55 mean sentiment from 4 headlines")
+    mild = build_lists([calm], held={"S01": "40 shares"}, groups={}, calibration=None,
+                       news={"S01": news(-0.2, 4)})  # fmt: skip
+    assert not [a for a in mild["holding_alerts"] if a["setup"] == "news"]

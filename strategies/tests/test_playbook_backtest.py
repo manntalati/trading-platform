@@ -72,9 +72,55 @@ def test_the_walk_forward_choice_is_judged_on_events_it_never_saw() -> None:
     assert few["exits"] is None  # too few trades to choose: the defaults stand
 
 
+def stock(rows: list[list[tuple[float, float, float, float]]], atr: float = 0.02) -> pb.StockPaths:
+    """Hand-built share trades: per session (open, high, low, close) over the entry close."""
+    width = max(len(r) for r in rows) + 1
+    arr = np.full((4, len(rows), width), np.nan)
+    for i, r in enumerate(rows):
+        arr[:, i, 0] = 1.0
+        for k, bar in enumerate(r, start=1):
+            arr[:, i, k] = bar
+    return pb.StockPaths(*arr, stock_exit=np.zeros((len(rows), width), dtype=bool),
+                         atr=np.full(len(rows), atr))  # fmt: skip
+
+
+def test_share_exits_fill_where_a_stop_or_limit_order_would() -> None:
+    p = stock([
+        [(1.0, 1.01, 0.99, 1.0), (0.99, 1.0, 0.94, 0.96)],  # the low reaches the 2-ATR stop
+        [(0.93, 0.95, 0.92, 0.94)],  # gaps through it: filled at the open
+        [(1.02, 1.09, 1.01, 1.05)],  # the high reaches the 4-ATR target
+        [(1.0, 1.1, 0.9, 1.0)],  # both touched: the stop, to be safe
+        [(1.0, 1.01, 0.99, 1.01), (1.01, 1.02, 1.0, 1.02), (1.02, 1.03, 1.01, 1.03)],
+    ])  # fmt: skip
+    ret, held = pb.apply_stock_exits(p, stop_atr=2, target_atr=4, time_stop=2, underlying=False)
+    cost = (1 - pb.STOCK_COST) / (1 + pb.STOCK_COST)
+    assert ret == pytest.approx([0.96 * cost - 1, 0.93 * cost - 1, 1.08 * cost - 1,
+                                 0.96 * cost - 1, 1.02 * cost - 1])  # fmt: skip
+    assert list(held) == [2, 1, 1, 1, 2]  # the last one sold on its time stop
+    ridden, _ = pb.apply_stock_exits(p, stop_atr=6, target_atr=None, time_stop=99,
+                                     underlying=False)  # fmt: skip
+    assert ridden[4] == pytest.approx(1.03 * cost - 1)  # the last close
+
+
+def test_share_exits_are_chosen_on_earlier_events() -> None:
+    rng = np.random.default_rng(1)
+    closes = np.exp(rng.normal(0.001, 0.02, (200, 20)).cumsum(axis=1))
+    bars = [[(c, c * 1.01, c * 0.99, c) for c in row] for row in closes]
+    out = pb.choose_stock_exits(stock(bars), SETUPS["breakout"], np.arange(200) < 120, 0.0003)
+    assert out["combinations"] == 96
+    assert set(out["exits"]) == {"stop_atr", "target_atr", "time_stop", "underlying"}
+    assert out["test"]["trades"] == 80
+    assert {"mean_r", "excess", "avg_sessions", "win_rate"} <= set(out["test"])
+
+
 def test_calibrate_a_lake_and_the_live_playbook_reads_it(lake: Lake) -> None:
     report = pb.calibrate(lake, NAMES, now=NOW)
     assert report["names"] == 12
+    for name in ("pullback", "breakout", "leader"):
+        shares = report["setups"][name].get("stock")
+        assert shares is not None, name
+        assert "test" in shares
+    assert "stock" not in report["setups"]["breakdown"]  # no shares bought on the way down
     path = playbook.calibration_path(lake)
     assert json.loads(path.read_text())["generated_at"] == NOW.isoformat()
     assert path.with_name("calibration-20240106.json").exists()

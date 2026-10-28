@@ -294,3 +294,89 @@ def test_an_idea_listed_run_after_run_is_tracked_once(lake: Lake) -> None:
     record = recs.track_record(lake, closes.index[-1].date())
     assert record["total"] == 3
     assert {s["list"]: s["recommendations"] for s in record["summary"]} == {"swing": 3}
+
+
+def shares_pick(price: float, stop: float, target: float | None, sell_by: str) -> dict[str, Any]:
+    exit_plan = {"stop": stop, "target": target, "sell_by": sell_by, "stock": None}
+    return {"kind": "shares", "structure": "shares", "price": price,
+            "entry": {"side": "debit", "limit": price}, "exit": exit_plan}  # fmt: skip
+
+
+def test_a_stock_idea_is_logged_and_followed_on_the_bars() -> None:
+    at = datetime(2023, 12, 1, 21, 0, tzinfo=UTC)
+    ideas = [idea("XYZ", "stocks", shares_pick(100.0, 95.0, 110.0, "2023-12-15"))]
+    (row,) = recs.log_rows(run(at, date(2023, 12, 1), stocks=ideas)).to_dict("records")
+    assert (row["structure"], row["entry"], row["legs"]) == ("shares", 100.0, "[]")
+    assert json.loads(row["plan"]) == {"stop": 95.0, "target": 110.0, "sell_by": "2023-12-15",
+                                       "stock": None, "shares": True}  # fmt: skip
+
+    days = pd.DatetimeIndex(pd.bdate_range("2023-12-01", periods=6))
+    bars = pd.DataFrame(  # adjusted, half the price: the run saw 50 for the 100 it was sold at
+        {"open": [50, 50.5, 49.0, 47.0, 51, 52], "high": [50, 51, 49.5, 48.0, 56, 57],
+         "low": [50, 50, 47.4, 46.0, 50, 51], "close": [50, 50.6, 48.5, 47.5, 55, 56]},
+        index=days,
+    )  # fmt: skip
+    plan = json.loads(row["plan"])
+    stopped = recs.follow_shares(plan, 100.0, bars, None, days[0], date(2023, 12, 1))
+    assert stopped is not None
+    assert (stopped["reason"], stopped["exit"]) == ("stop", "2023-12-05")  # the low reached 95
+    assert stopped["value"] == pytest.approx(95.0)
+    assert stopped["pnl"] == pytest.approx(-500.0)  # 100 shares
+    gapped = recs.follow_shares(plan | {"stop": 98.5}, 100.0, bars, None, days[0],
+                                date(2023, 12, 1))  # fmt: skip
+    assert gapped is not None
+    assert (gapped["reason"], gapped["value"]) == (
+        "stop",
+        pytest.approx(98.0),
+    )  # filled at the open
+    won = recs.follow_shares(plan | {"stop": 80.0}, 100.0, bars, None, days[0], date(2023, 12, 1))
+    assert won is not None
+    assert (won["reason"], won["value"]) == ("target", pytest.approx(110.0))
+    still = recs.follow_shares(plan | {"stop": 80.0, "target": None, "sell_by": None}, 100.0,
+                               bars, None, days[0], date(2023, 12, 1))  # fmt: skip
+    assert still is not None
+    assert (still["status"], still["value"]) == ("open", pytest.approx(112.0))
+
+
+def test_the_track_record_marks_and_follows_stock_ideas(lake: Lake) -> None:
+    closes = close_matrix(load_bars(lake))
+    start = closes.index[-30]
+    at = datetime.combine(start.date(), datetime.min.time(), tzinfo=UTC) + timedelta(hours=21)
+    price = float(closes["XYZ"].loc[start])
+    pick = shares_pick(price, price * 0.5, None, closes.index[-10].date().isoformat())
+    recs.store_run(lake, run(at, start.date(), stocks=[idea("XYZ", "stocks", pick, spot=price)]),
+                   now=at)  # fmt: skip
+    record = recs.track_record(lake, closes.index[-1].date())
+    (row,) = [r for r in record["recommendations"] if r["list"] == "stocks"]
+    assert row["structure"] == "shares"
+    move = float(closes["XYZ"].iloc[-1]) / price - 1
+    assert row["result"] == pytest.approx(move)
+    assert row["pnl"] == pytest.approx(price * move * 100)
+    followed = row["followed"]
+    assert (followed["status"], followed["reason"]) == ("closed", "time")
+    assert followed["exit"] == closes.index[-10].date().isoformat()
+    assert row["state"] == "closed"
+    assert {s["list"] for s in record["summary"]} == {"stocks"}
+
+
+def test_the_record_by_how_the_news_stood(lake: Lake) -> None:
+    closes = close_matrix(load_bars(lake))
+    start = closes.index[-30].date()
+    at = datetime.combine(start, datetime.min.time(), tzinfo=UTC) + timedelta(hours=21)
+    with_news = [
+        idea("XYZ", "swing", None) | {"news": {"sentiment": 0.4, "headlines": 3}},
+        idea("ABC", "swing", None) | {"news": None},  # no headlines that run
+    ]
+    against = [idea("XYZ", "bearish", None) | {"news": {"sentiment": 0.5, "headlines": 4}}]
+    recs.store_run(lake, run(at, start, swing=with_news, bearish=against), now=at)
+    before = at - timedelta(days=20)  # a run from before the news was kept
+    recs.store_run(lake, run(before, closes.index[-45].date(), leaps=[idea("ABC", "leaps", None)]),
+                   now=before)  # fmt: skip
+    log = recs.load_log(lake)
+    assert log.loc[log["symbol"].eq("ABC") & log["list"].eq("swing"), "headlines"].tolist() == [0]
+    record = recs.track_record(lake, closes.index[-1].date())
+    groups = {g["group"]: g["recommendations"] for g in record["by_news"]}
+    assert groups == {"agreed": 1, "against": 1, "quiet": 1}  # the old LEAPS idea isn't counted
+    row = next(r for r in record["recommendations"] if r["list"] == "bearish")
+    assert row["news"] == {"sentiment": 0.5, "headlines": 4}
+    assert row["news_group"] == "against"

@@ -68,7 +68,7 @@ def _pct(v: float | None, signed: bool = True) -> str:
 def show(
     only: Annotated[
         str | None,
-        typer.Option(help="One list: swing, leaps, bearish, income, volatility, watch."),
+        typer.Option(help="One list: swing, leaps, bearish, income, volatility, stocks, watch."),
     ] = None,
 ) -> None:
     """The latest run, each list best first, with the setup, the contract, the modeled edge, the
@@ -95,7 +95,9 @@ def show(
         ideas = latest["research"].get(k) or []
         typer.echo(f"{recs.LIST_NAMES[k]} ({len(ideas)})")
         for i in ideas:
-            typer.echo(f"  {'★' if i.get('new') else ' '} {i['symbol']:<6} {_line(i)}")
+            news = i.get("news")
+            heard = f"  · news {news['sentiment']:+.2f} ({news['headlines']})" if news else ""
+            typer.echo(f"  {'★' if i.get('new') else ' '} {i['symbol']:<6} {_line(i)}{heard}")
             plan = (i.get("pick") or {}).get("exit")
             if plan:
                 typer.echo(f"           {_plan_line(i['pick'])}")
@@ -112,10 +114,17 @@ def show(
                 if m["reason"] == "buying power"
                 else f"needs options level {m['level']}"
             )
+            unit = "a share" if m["structure"] == "shares" else "a contract"
             typer.echo(
                 f"    {m['symbol']:<6} {m['setup']}: {m['structure']} at "
-                f"${m['needs']:,.0f} a contract, {why}"
+                f"${m['needs']:,.0f} {unit}, {why}"
             )
+        typer.echo("")
+    alerts = latest["research"].get("holding_alerts") or []
+    if alerts and only in (None, "stocks"):
+        typer.echo(f"On what you hold ({len(alerts)})")
+        for a in alerts:
+            typer.echo(f"    {a['symbol']:<6} {a['text']} (held: {a['held']})")
         typer.echo("")
     watch = latest["research"].get("watch") or []
     if watch and only in (None, "watch"):
@@ -129,6 +138,18 @@ def show(
 def _line(idea: dict[str, Any]) -> str:
     pick = idea.get("pick") or {}
     play = idea.get("play") or {}
+    if pick.get("kind") == "shares":
+        model = pick.get("model") or {}
+        test = pick.get("backtest") or {}
+        record = (
+            f", backtest won {_pct(test.get('win_rate'), False)} of {test['trades']}"
+            if test.get("trades")
+            else ""
+        )
+        return (
+            f"{play.get('title', '')}: shares at {pick['entry']['limit']:,.2f}, drift"
+            f" {_pct(model.get('drift'))} over {model.get('horizon')} sessions{record}"
+        )
     legs = pick.get("legs") or []
     label = legs[0]["label"] if legs else pick.get("label") or pick.get("kind") or ""
     model = pick.get("model") or {}
@@ -143,6 +164,21 @@ def _line(idea: dict[str, Any]) -> str:
 
 def _plan_line(pick: dict[str, Any]) -> str:
     entry, plan = pick.get("entry") or {}, pick["exit"]
+    if pick.get("kind") == "shares":
+        parts = [f"limit {entry.get('limit')}, no more than {entry.get('worst')}"
+                 f" (valid to {entry.get('valid_until')})", f"stop {plan.get('stop')}"]  # fmt: skip
+        if plan.get("target") is not None:
+            parts.append(f"target {plan['target']}")
+        if (plan.get("stock") or {}).get("text"):
+            parts.append(f"or {plan['stock']['text']}")
+        parts.append(f"sell by {plan.get('sell_by')}")
+        size = pick.get("size")
+        if size:
+            parts.append(
+                f"{size['shares']} shares (${size['capital']:,.0f}, ${size['max_loss']:,.0f} to"
+                " the stop" + (", over your risk guideline" if size["over_guideline"] else "") + ")"
+            )
+        return "; ".join(parts)
     side = "credit" if entry.get("side") == "credit" else "limit"
     parts = [f"{side} {entry.get('limit')} (valid to {entry.get('valid_until')})"]
     if plan.get("take_profit") is not None:
@@ -185,6 +221,14 @@ def scorecard(
             f" · following the exit plans: {s['plan_closed']} closed, won"
             f" {_pct(s['plan_win_rate'], False)}, median {_pct(s['plan_median'])}"
         )
+    if record.get("by_news"):
+        typer.echo("\nBy the news when listed:")
+        for g in record["by_news"]:
+            typer.echo(
+                f"  {g['name']:<26} {g['recommendations']:>4} ideas · right way after 21 sessions"
+                f" {_pct(g['right_way_21d'], False)} · following the plans: {g['plan_closed']}"
+                f" closed, won {_pct(g['plan_win_rate'], False)}"
+            )
     if record.get("by_setup"):
         typer.echo("\nBy setup, following the exit plans:")
         for s in record["by_setup"]:

@@ -1452,3 +1452,7 @@ a.quote:hover .sym {
 button.more {
   margin-top: 10px;
 }
+
+.news-line {
+  margin: 0;
+}

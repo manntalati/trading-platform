@@ -1,7 +1,9 @@
-# Options research: swings, LEAPS and selling premium
+# Research: options, stocks, swings, LEAPS and selling premium
 
-**Research → Options ideas** lists the options trades the playbook's setups call for today, each
-with the contract that expresses it best, an entry limit and an exit plan. **Research → Look up a
+**Research → Ideas** lists the options trades the playbook's setups call for today, each with
+the contract that expresses it best, an entry limit and an exit plan, and on its **Stocks** tab
+the same upward setups as shares, with a stop, a time stop and a size ([Stock
+ideas](#stock-ideas)). **Research → Look up a
 symbol** shows any ticker in depth, and **Portfolio → Positions** says what you could do with the
 options and shares you already hold. Every idea comes from fixed rules (`tp_strategies.setups`,
 `tp_strategies.playbook`, `tp_strategies.option_edge`) and shows the numbers behind it. They're
@@ -132,6 +134,62 @@ gets the drift its signal actually had and the exits that held up best out of sa
 [What to run](#what-to-run)). One idea per name per list, at most two names per sector or fund
 class, best first.
 
+### Stock ideas
+
+The upward setups (a pullback in an uptrend, a breakout from a squeeze, a trend leader at its
+50-day, an earnings beat) are also stock ideas, on every name with daily bars, an option chain or
+not (`playbook.stock_ideas_for`):
+
+- **Entry**: a limit at the price, good while the signal is (`valid_for` sessions); pay no more
+  than half an ATR (the stock's average true range over 14 sessions) over it.
+- **Exit**: a stop some multiple of the ATR under the entry, an optional profit target some
+  multiple above, a time stop, and the setup's stock-side rule (for a pullback, the first close
+  above the 5-day average). Defaults per setup (`setups.StockExits`); once `tp-recs calibrate`
+  has run, the combination that held up best on the earlier signals, tried on the later ones:
+  the backtest buys at the signal's close, fills a stop or target where an order would (at the
+  open on a gap through it, the stop first when a session touches both), pays half a typical
+  spread each way, and judges exits by how fast they'd have grown an account risking 2% of it to
+  the stop each time, on the return over what the average stock made in the same sessions.
+- **Size**: as many shares as the buying power pays for, the most lost at the stop kept within
+  `TP_OPTIONS_RISK` of the account. A stock whose one share costs more than the buying power is
+  listed as out of reach.
+- **Order**: the setup's drift over the stock's volatility for the horizon (a Sharpe ratio), the
+  signal's strength and age, and where the cross-sectional ML ranker (strategy 13, kept current
+  by the models job) puts the name today, if its walk-forward ranking held up; otherwise its rank
+  is shown and not counted.
+- **On what you hold**: a downward setup (a failing bounce, a breakdown, an earnings miss) on a
+  stock you hold shares of is listed under the Stocks tab, with how the stock did after that
+  signal in the backtest: a reason to look at selling or a tighter stop.
+
+The track record follows stock ideas too, on the daily bars, the same way an order would have
+filled.
+
+### News in the ideas
+
+Every idea, options and stocks, carries its name's headlines from the last five sessions
+(Alpaca's news feed, fetched before the open, midday and in the evening) and their mean
+sentiment, -1 to +1 (`tp_core.news.recent_news`): Claude's score for each headline when
+`TP_NEWS_SCORING=on` (with `ANTHROPIC_API_KEY`), otherwise a rough keyword score. The card shows
+the sentiment, how many headlines and how many Claude scored, and links the latest ones.
+
+- **Score**: news the idea's way (good news for a call or shares, bad for a put) adds to it and
+  news against it takes off, up to 0.25 with four headlines or more (`NEWS_WEIGHT`): enough to
+  reorder close ideas, not to make a weak setup a strong one. Premium selling and straddles have
+  no direction, so the news doesn't move them.
+- **Said so**: news clearly the idea's way (a mean of 0.25 or more from two headlines) is one of
+  its reasons; clearly against, one of its risks, with the latest headline. A busy news flow (8+
+  headlines in five sessions) is a risk for selling premium and a reason for a straddle.
+- **On what you hold**: strongly negative news on a stock you hold (-0.4 or worse from three
+  headlines) is an alert under the Stocks tab even without a setup.
+- **Checked**: each idea keeps the news it was listed with, and the track record splits the
+  ideas by whether the news agreed, ran against them, was mixed or was quiet, with how each group
+  did following the plans. Whether the news is worth more (or less) weight is for that to show,
+  over months.
+
+Keyword scores read words, not meaning ("XYZ jumps as a rival misses" reads as mixed, and is
+scored for the rival too if the feed tags it); turn on Claude's scoring for the ideas you'd act
+on. Look up shows a name's last eight headlines with their scores.
+
 ## What to run
 
 Nothing needs training by hand; the backtest calibrates itself. Once, after updating:
@@ -153,7 +211,8 @@ is what the earnings setups read.
 `tp-recs calibrate` prints, per setup: how many times it fired, how often the stock went its way
 over the horizon and by how much (against all names over the same horizon), the drift the live
 model will use, and the option trade's result on the later 40% of the signals (the ones the
-exits weren't chosen on) with the chosen exits and with the defaults. With real prices it also
+exits weren't chosen on) with the chosen exits and with the defaults; for the upward setups, the
+share trade's too. With real prices it also
 says how the same trades did on them and how far the model was off. What the backtest can't
 see: the modeled trades assume implied volatility moves with realized volatility, so they miss
 IV crushes and spikes (the real-price trades don't); and the names are today's liquid ones, so

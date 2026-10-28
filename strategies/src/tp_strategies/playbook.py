@@ -21,6 +21,22 @@ For each name with daily bars and a recent option chain:
 Lists rotate because setups fire and expire; the score is the modeled edge, so a strong stock
 with overpriced options ranks below a decent one with cheap options. At most two names per
 sector per list.
+
+**Stock ideas** come from the same upward setups (pullback, breakout, trend leader, earnings
+beat), on every name with daily bars, chain or not: shares bought at a limit near the price, a
+stop and an optional target some multiples of the stock's average true range (ATR) away, a
+time stop and the setup's stock-side exit (``setups.StockExits``, calibrated like the options
+exits), and as many shares as the buying power pays for with the most lost at the stop within
+the risk guideline. They rank by the setup's drift over the stock's volatility for the horizon
+(a Sharpe ratio), the signal's strength and age, and, when the cross-sectional ML ranker's
+walk-forward ranking held up, where it puts the name today. Bearish setups live on stocks you
+hold are listed as reasons to look at selling (``holding_alerts``).
+
+**News**: every idea carries its name's last five sessions of headlines (``tp_core.news``) and
+their mean sentiment, Claude's scores where it scored them and keyword scores otherwise. News
+the idea's way adds to its score and news against it takes off, by up to ``NEWS_WEIGHT`` with
+four headlines or more; clear disagreement is listed as a risk, a busy news flow as one for
+selling premium. Strongly negative news on a stock you hold is an alert of its own.
 """
 
 from __future__ import annotations
@@ -37,10 +53,12 @@ import numpy as np
 import pandas as pd
 
 from tp_core.calendar import NEW_YORK, sessions
+from tp_core.news import recent_news
 from tp_core.portfolio import Classifier
 from tp_core.reference import LakeReference
 from tp_core.storage import Lake
 from tp_core.volatility import chain_spot, iv_history
+from tp_ml import monitor
 from tp_strategies import option_edge as edge
 from tp_strategies.budget import LEVELS, Budget
 from tp_strategies.option_edge import Leg, Outlook, Surface
@@ -70,12 +88,23 @@ from tp_strategies.setups import (
 log = logging.getLogger(__name__)
 
 CALIBRATION = "playbook"  # reports/playbook/calibration.json
-LISTS = ("swing", "leaps", "bearish", "income", "volatility")
+STOCKS = "stocks"
+LISTS = ("swing", "leaps", "bearish", "income", "volatility", STOCKS)
 RICH_RATIO = 1.25
 CHEAP_RATIO = 0.9
 MIN_OPEN_INTEREST = 50
 WATCH_SIZE = 8
 OUT_OF_REACH_SIZE = 10
+CHASE_ATR = 0.5  # shares: pay up to this much of the ATR over the limit
+RANK_TILT = (
+    0.4  # added to a stock idea's score at the top of the ML ranking, taken off at the bottom
+)
+RANKER = "ml-rank"  # the cross-sectional ranker the model monitor keeps predictions of
+NEWS_WEIGHT = 0.25  # the most news moves an idea's score, with NEWS_FULL headlines or more
+NEWS_FULL = 4
+NEWS_LEAN = 0.25  # a mean sentiment this far the idea's way (or against it) is said so
+NEWS_BUSY = 8  # headlines in the five sessions: something is going on
+NEWS_ALERT = -0.4  # a held stock's news this bad, from 3+ headlines, is an alert
 
 
 # -- calibration ----------------------------------------------------------------------------------
@@ -95,9 +124,17 @@ def load_calibration(lake: Lake) -> dict[str, Any] | None:
 
 
 def calibrated_setups(calibration: Mapping[str, Any] | None) -> dict[str, Setup]:
-    """``SETUPS`` with the calibrated exits where the backtest chose them."""
+    """``SETUPS`` with the calibrated exits (options and shares) where the backtest chose
+    them."""
     found = (calibration or {}).get("setups") or {}
-    return {k: with_exits(s, (found.get(k) or {}).get("exits")) for k, s in SETUPS.items()}
+    return {
+        k: with_exits(
+            s,
+            (found.get(k) or {}).get("exits"),
+            ((found.get(k) or {}).get("stock") or {}).get("exits"),
+        )
+        for k, s in SETUPS.items()
+    }
 
 
 def setup_drift(setup: Setup, calibration: Mapping[str, Any] | None) -> tuple[float, str]:
@@ -661,15 +698,9 @@ def _pct(v: Any, digits: int = 1, *, signed: bool = False) -> str:
     return f"{x * 100:+.{digits}f}%" if signed else f"{x * 100:.{digits}f}%"
 
 
-def _why(
-    name: Name,
-    act: Active,
-    view: Mapping[str, Any],
-    drift: float,
-    source: str,
-    stats: Mapping[str, Any],
-) -> list[str]:
-    setup, model, ind = act.setup, view["model"], name.ind.iloc[-1]
+def _setup_lines(name: Name, act: Active) -> list[str]:
+    """What fired and when, and the levels it read."""
+    setup, ind = act.setup, name.ind.iloc[-1]
     when = "today" if act.age == 0 else f"{act.age} session{'s' * (act.age > 1)} ago"
     lines = [f"{setup.title} ({when}): {setup.rule}."]
     if setup.name in ("pullback", "rally_fade"):
@@ -683,6 +714,19 @@ def _why(
             f"{_pct(ind['from_high'], 1, signed=True)} from the 52-week high, "
             f"{_pct(ind['close'] / ind['ma50'] - 1, 1, signed=True)} vs the 50-day."
         )
+    return lines
+
+
+def _why(
+    name: Name,
+    act: Active,
+    view: Mapping[str, Any],
+    drift: float,
+    source: str,
+    stats: Mapping[str, Any],
+) -> list[str]:
+    setup, model = act.setup, view["model"]
+    lines = _setup_lines(name, act)
     vol = name.analysis["vol"]
     iv, rv = _f(vol.get("iv30")), name.forecast
     if iv and rv:
@@ -762,6 +806,352 @@ def _risks(name: Name, setup: Setup, view: Mapping[str, Any]) -> list[str]:
     return out
 
 
+# -- stock ideas ----------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ModelRank:
+    """The cross-sectional ML ranker's latest scores (``tp-models monitor``), as each name's
+    percentile among the names it scored that day."""
+
+    percentile: Mapping[str, float]
+    day: date
+    names: int
+    version: str
+    rank_ic: float | None  # the walk-forward rank correlation of the version in use
+
+    @property
+    def counted(self) -> bool:
+        """It moves the score only if its walk-forward ranking held up."""
+        return self.rank_ic is not None and self.rank_ic > 0
+
+
+def model_ranks(lake: Lake, name: str = RANKER) -> ModelRank | None:
+    """The ranker's scores from its latest prediction day, or None before it has made any."""
+    preds = monitor.load_predictions(lake, name)
+    if preds.empty:
+        return None
+    day = max(preds["date"])
+    latest = preds[preds["date"] == day].drop_duplicates("symbol", keep="last")
+    if len(latest) < 5:
+        return None
+    scores = latest.set_index("symbol")["score"].astype(float)
+    meta = monitor.latest(lake, name) or {}
+    return ModelRank(
+        percentile={str(k): float(v) for k, v in scores.rank(pct=True).items()},
+        day=day,
+        names=len(scores),
+        version=str(latest["version"].iloc[-1]),
+        rank_ic=_f((meta.get("validation") or {}).get("rank_ic")),
+    )
+
+
+def stock_view(
+    name: Name, act: Active, calibration: Mapping[str, Any] | None
+) -> dict[str, Any] | None:
+    """The share trade on a live upward setup: the entry, the stop, target and time stop, and
+    what the setup's drift says over its horizon. None without an ATR to set the stop by."""
+    setup, x = act.setup, act.setup.stock
+    ind = name.ind.iloc[-1]
+    atr, price = _f(ind["atr14"]), name.spot
+    if x is None or not atr or price <= 0 or price - x.stop_atr * atr <= 0:
+        return None
+    stop = price - x.stop_atr * atr
+    target = price + x.target_atr * atr if x.target_atr is not None else None
+    drift, source = setup_drift(setup, calibration)
+    vol = edge.horizon_vol(
+        name.forecast, _f(name.analysis["stock"].get("vol_20d")), name.year_vol, setup.horizon
+    )
+    sd = (vol or 0.3) * math.sqrt(setup.horizon / 252)
+    until = session_after(name.ind.index, act.fired.date(), setup.valid_for)
+    sell_by = session_after(name.ind.index, name.today, x.time_stop)
+    stats = (((calibration or {}).get("setups") or {}).get(setup.name) or {}).get("stock") or {}
+    return {
+        "kind": "shares",
+        "structure": "shares",
+        "price": price,
+        "atr": atr,
+        "risk_per_share": price - stop,
+        "entry": {
+            "side": "debit",
+            "limit": round(price, 2),
+            "worst": round(price + CHASE_ATR * atr, 2),
+            "valid_until": until.isoformat() if until else None,
+            "worth_it": True,
+        },
+        "exit": {
+            "stop": round(stop, 2),
+            "target": round(target, 2) if target is not None else None,
+            "sell_by": sell_by.isoformat() if sell_by else None,
+            "stock": rule_level(name.ind, x.underlying),
+            "rules": x.to_dict(),
+        },
+        "model": {
+            "horizon": setup.horizon,
+            "drift": drift,
+            "drift_source": source,
+            "vol": vol or 0.3,
+            "expected_return": math.expm1(drift),
+            "sharpe": drift / sd,
+            "stop_pct": (price - stop) / price,
+            "target_pct": (target - price) / price if target is not None else None,
+        },
+        "backtest": stats.get("test"),
+    }
+
+
+def stock_ideas_for(
+    name: Name,
+    calibration: Mapping[str, Any] | None,
+    setups: Mapping[str, Setup],
+    budget: Budget | None = None,
+    missed: list[dict[str, Any]] | None = None,
+    ranks: ModelRank | None = None,
+) -> list[dict[str, Any]]:
+    """A share idea per live upward setup on this name, sized to ``budget`` (as many shares as
+    the buying power pays for, the most lost at the stop within the risk guideline); one the
+    account can't buy a share of goes in ``missed``."""
+    out = []
+    for act in active_setups(name.ind, name.earnings, setups):
+        view = stock_view(name, act, calibration) if act.setup.stock is not None else None
+        if view is None:
+            continue
+        idea = _stock_idea(name, act, view, budget, ranks)
+        if budget is not None:
+            size = budget.size(view["price"], view["risk_per_share"])
+            if size["contracts"] < 1:
+                if missed is not None:
+                    missed.append(
+                        {"symbol": name.symbol, "list": STOCKS, "setup": act.setup.title,
+                         "structure": "shares", "needs": view["price"],
+                         "reason": "buying power", "level": 0, "score": idea["score"]}
+                    )  # fmt: skip
+                continue
+            size["shares"] = size.pop("contracts")
+            view["size"] = size
+            idea["risks"] += _stock_size_risks(view, budget)
+        out.append(idea)
+    return out
+
+
+def _stock_idea(
+    name: Name, act: Active, view: dict[str, Any], budget: Budget | None, ranks: ModelRank | None
+) -> dict[str, Any]:
+    setup, model = act.setup, view["model"]
+    rank = ranks.percentile.get(name.symbol) if ranks is not None else None
+    tilt = RANK_TILT * (rank - 0.5) if rank is not None and ranks and ranks.counted else 0.0
+    return {
+        "symbol": name.symbol,
+        "kind": STOCKS,
+        "list": STOCKS,
+        "setup": name.analysis["setup"],
+        "play": {
+            "name": setup.name,
+            "title": setup.title,
+            "rule": setup.rule,
+            "fired": act.fired.date().isoformat(),
+            "age": act.age,
+            "strength": act.strength,
+            "horizon": setup.horizon,
+            "drift": model["drift"],
+            "drift_source": model["drift_source"],
+            "backtest": view["backtest"],
+        },
+        "score": model["sharpe"] + 0.2 * act.strength - 0.02 * act.age + tilt,
+        "spot": name.spot,
+        "stock": name.analysis["stock"],
+        "vol": name.analysis["vol"],
+        "pick": view,
+        "alternative": None,
+        "model_rank": (
+            {
+                "percentile": rank,
+                "names": ranks.names,
+                "day": ranks.day.isoformat(),
+                "rank_ic": ranks.rank_ic,
+                "counted": ranks.counted,
+            }
+            if rank is not None and ranks is not None
+            else None
+        ),
+        "why": _stock_why(name, act, view, ranks),
+        "risks": _stock_risks(name, act, view),
+    }
+
+
+def _stock_why(
+    name: Name, act: Active, view: Mapping[str, Any], ranks: ModelRank | None
+) -> list[str]:
+    setup, model, x = act.setup, view["model"], view["exit"]["rules"]
+    lines = _setup_lines(name, act)
+    basis = (
+        "what the stock did after this signal in the backtest"
+        if model["drift_source"] == "backtest"
+        else "an ordinary market drift, with no backtest yet: tp-recs calibrate"
+    )
+    lines.append(
+        f"Modeled over {setup.horizon} sessions: a {_pct(model['drift'], 1, signed=True)} drift "
+        f"({basis}) against {_pct(model['vol'], 0)} volatility. The stop is "
+        f"{x['stop_atr']:g} ATR (${view['atr'] * x['stop_atr']:,.2f} a share, "
+        f"{_pct(model['stop_pct'], 1)}) under the price."
+    )
+    test = view.get("backtest") or {}
+    if test.get("trades"):
+        lines.append(
+            f"Backtest, shares with these exits on the later {test['trades']:,} signals: won "
+            f"{_pct(test['win_rate'], 0)}, mean {_pct(test['mean'], 1, signed=True)} in "
+            f"{test['avg_sessions']:.0f} sessions ({_pct(test['excess'], 1, signed=True)} over "
+            f"the average stock), {test['mean_r']:+.2f} times the risk to the stop a trade."
+        )
+    rank = ranks.percentile.get(name.symbol) if ranks is not None else None
+    if ranks is not None and rank is not None:
+        top = max(1, round((1 - rank) * 100))
+        ic = f"walk-forward rank IC {ranks.rank_ic:+.3f}" if ranks.rank_ic is not None else ""
+        lines.append(
+            f"The ML ranker puts it in the top {top}% of {ranks.names} names "
+            f"({ranks.day.isoformat()}; {ic})"
+            + ("." if ranks.counted else ", not counted: its ranking hasn't held up out of sample.")
+        )
+    return lines
+
+
+def _stock_risks(name: Name, act: Active, view: Mapping[str, Any]) -> list[str]:
+    out = []
+    model, test = view["model"], view.get("backtest") or {}
+    if model["drift"] <= 0:
+        out.append(
+            "The setup's drift is negative: after this signal the stock fell on average in the "
+            "backtest. Pass, or wait for another setup."
+        )
+    elif test.get("trades") and (test.get("excess") or 0) <= 0:
+        out.append(
+            "In the backtest, shares bought on this setup did no better than the average stock "
+            "on the later signals."
+        )
+    sell_by = view["exit"]["sell_by"]
+    if (
+        name.next_earnings is not None
+        and sell_by
+        and name.today <= name.next_earnings <= (date.fromisoformat(sell_by))
+    ):
+        out.append(
+            f"Earnings expected about {name.next_earnings.isoformat()} (an estimate), before the "
+            "time stop: a gap can open past the stop."
+        )
+    if "extended" in name.analysis["setup"]["tags"]:
+        out.append("Extended above its 20-day average: entries after a run fail more often.")
+    if model["stop_pct"] > 0.15:
+        out.append(
+            f"The stop is {_pct(model['stop_pct'], 0)} away: a volatile stock, so few shares for "
+            "the risk."
+        )
+    return out
+
+
+def _stock_size_risks(view: Mapping[str, Any], budget: Budget) -> list[str]:
+    size = view["size"]
+    if not size["over_guideline"]:
+        return []
+    return [
+        f"One share risks ${view['risk_per_share']:,.2f} to the stop, over your "
+        f"{budget.risk_per_trade:.0%} of the account a trade (TP_OPTIONS_RISK)."
+    ]
+
+
+def holding_alerts(
+    name: Name, setups: Mapping[str, Setup], held: str, calibration: Mapping[str, Any] | None
+) -> list[dict[str, Any]]:
+    """Downward setups live on a stock you hold (``held``: what you hold of it, in words):
+    reasons to look at selling or tightening a stop, with how the stock did after the signal
+    in the backtest."""
+    out = []
+    found = (calibration or {}).get("setups") or {}
+    for act in active_setups(name.ind, name.earnings, setups):
+        setup = act.setup
+        if setup.direction >= 0:
+            continue
+        under = (found.get(setup.name) or {}).get("underlying") or {}
+        when = "today" if act.age == 0 else f"{act.age} session{'s' * (act.age > 1)} ago"
+        text = f"{setup.title} ({when}): {setup.rule}."
+        if under.get("hit_rate") is not None:
+            text += (
+                f" In the backtest the stock fell over the next {setup.horizon} sessions "
+                f"{_pct(under['hit_rate'], 0)} of the time (median "
+                f"{_pct(under.get('median'), 1, signed=True)})."
+            )
+        out.append(
+            {
+                "symbol": name.symbol,
+                "held": held,
+                "setup": setup.name,
+                "title": setup.title,
+                "fired": act.fired.date().isoformat(),
+                "age": act.age,
+                "spot": name.spot,
+                "text": text,
+            }
+        )
+    return out
+
+
+# -- news ------------------------------------------------------------------------------------------
+
+
+def _headline(news: Mapping[str, Any]) -> str:
+    latest = (news.get("latest") or [{}])[0]
+    return f' (latest: "{latest["headline"]}")' if latest.get("headline") else ""
+
+
+def with_news(idea: dict[str, Any], news: Mapping[str, Any] | None) -> dict[str, Any]:
+    """``idea`` with its name's recent news (``tp_core.news.recent_news``): attached, its score
+    moved by how far the news goes the idea's way, and said so in its reasons and risks."""
+    idea["news"] = dict(news) if news else None
+    if not news:
+        return idea
+    direction = SETUPS[idea["play"]["name"]].direction if idea.get("play") else 0
+    sentiment, count = float(news["sentiment"]), int(news["headlines"])
+    lean = direction * sentiment
+    idea["score"] += NEWS_WEIGHT * lean * min(count / NEWS_FULL, 1.0)
+    words = (
+        f"{sentiment:+.2f} mean sentiment from {count} headline{'s' * (count != 1)} in "
+        f"{news['sessions']} sessions"
+    )
+    if direction and count >= 2 and lean >= NEWS_LEAN:
+        idea["why"].append(f"The news agrees: {words}{_headline(news)}.")
+    elif direction and count >= 2 and lean <= -NEWS_LEAN:
+        idea["risks"].append(f"The news runs against it: {words}{_headline(news)}.")
+    elif idea["list"] == "income" and count >= NEWS_BUSY:
+        idea["risks"].append(
+            f"A lot of news lately ({count} headlines in {news['sessions']} sessions): the "
+            "premium may be pricing something real."
+        )
+    elif idea["list"] == "volatility" and count >= NEWS_BUSY:
+        idea["why"].append(
+            f"A lot of news lately ({count} headlines in {news['sessions']} sessions): a bigger "
+            "move is likelier than a quiet one."
+        )
+    return idea
+
+
+def news_alert(symbol: str, held: str, news: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Strongly negative news on a stock you hold: worth reading before the next open."""
+    if not news or news["headlines"] < 3 or news["sentiment"] > NEWS_ALERT:
+        return None
+    return {
+        "symbol": symbol,
+        "held": held,
+        "setup": "news",
+        "title": "Bad news",
+        "fired": None,
+        "age": 0,
+        "spot": None,
+        "text": (
+            f"Bad news: {news['sentiment']:+.2f} mean sentiment from {news['headlines']} "
+            f"headlines in {news['sessions']} sessions{_headline(news)}."
+        ),
+    }
+
+
 # -- the lists ------------------------------------------------------------------------------------
 
 
@@ -774,20 +1164,33 @@ def build_lists(
     per_list: int = 6,
     per_group: int = 2,
     budget: Budget | None = None,
+    ranks: ModelRank | None = None,
+    news: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """The playbook's ideas by list, best modeled edge first (at most ``per_group`` per sector),
-    fitted to ``budget`` when there is one; the leaders to watch for an entry; and the setups
-    nothing the account can trade fits (``out_of_reach``)."""
+    """The playbook's ideas by list, best first (at most ``per_group`` per sector), fitted to
+    ``budget`` when there is one, with the stock ideas (``ranks``: the ML ranker's latest) and
+    each name's recent ``news``; the leaders to watch for an entry; the setups nothing the
+    account can trade fits (``out_of_reach``); and the downward setups and bad news on stocks
+    you hold."""
+    news = news or {}
     setups = calibrated_setups(calibration)
     found: dict[str, list[dict[str, Any]]] = {k: [] for k in LISTS}
     watch: list[dict[str, Any]] = []
     missed: list[dict[str, Any]] = []
+    alerts: list[dict[str, Any]] = []
     for name in names:
-        for idea in ideas_for(name, calibration, setups, budget, missed):
+        ideas = ideas_for(name, calibration, setups, budget, missed)
+        ideas += stock_ideas_for(name, calibration, setups, budget, missed, ranks)
+        for idea in ideas:
+            with_news(idea, news.get(name.symbol))
             if held.get(name.symbol):
                 idea["held"] = held[name.symbol]
                 idea["risks"].append(f"Already held: {held[name.symbol]}.")
             found[idea["list"]].append(idea)
+        if "shares" in held.get(name.symbol, ""):
+            alerts += holding_alerts(name, setups, held[name.symbol], calibration)
+            bad = news_alert(name.symbol, held[name.symbol], news.get(name.symbol))
+            alerts += [bad] if bad else []
         if name.priced is not None and not name.priced.empty and leader_watch(name.ind):
             ind = name.ind.iloc[-1]
             watch.append(
@@ -817,6 +1220,13 @@ def build_lists(
     out["watch"] = sorted(watch, key=lambda w: -w["momentum"])[:WATCH_SIZE]
     out["out_of_reach"] = sorted(missed, key=lambda m: -m["score"])[:OUT_OF_REACH_SIZE]
     out["budget"] = budget.to_dict() if budget is not None else None
+    out["holding_alerts"] = sorted(alerts, key=lambda a: (a["age"], a["symbol"]))
+    out["model_rank"] = (
+        {"day": ranks.day.isoformat(), "names": ranks.names, "version": ranks.version,
+         "rank_ic": ranks.rank_ic, "counted": ranks.counted}
+        if ranks is not None
+        else None
+    )  # fmt: skip
     return out
 
 
@@ -923,6 +1333,8 @@ def scan(
         str(u): g.set_index("snapshot_date")["iv30"] for u, g in history.groupby("underlying")
     }
     earnings = earnings_by_symbol(lake)
+    ranked = model_ranks(lake)
+    news = recent_news(lake, wanted, now)
     names: list[Name] = []
     errors: dict[str, str] = {}
     for symbol in wanted:
@@ -956,6 +1368,8 @@ def scan(
         per_list=rules.ideas_per_list,
         per_group=rules.per_group,
         budget=budget,
+        ranks=ranked,
+        news=news,
     )
     with_chain = [n for n in names if n.analysis["picks"]]
     return {
@@ -966,6 +1380,11 @@ def scan(
         "without_chains": sorted(n.symbol for n in names if not n.analysis["picks"]),
         "errors": errors,
         "iv_history_days": int(history["snapshot_date"].nunique()) if len(history) else 0,
+        "news": {
+            "names": len(news),
+            "headlines": sum(n["headlines"] for n in news.values()),
+            "claude": sum(n["claude"] for n in news.values()),
+        },
         "calibration": _calibration_brief(calibration),
         "live_setups": _live_counts(lists),
         **lists,
@@ -988,14 +1407,20 @@ def _live_counts(lists: Mapping[str, Any]) -> dict[str, int]:
 
 
 def for_symbol(
-    name: Name, calibration: Mapping[str, Any] | None, budget: Budget | None = None
+    name: Name,
+    calibration: Mapping[str, Any] | None,
+    budget: Budget | None = None,
+    ranks: ModelRank | None = None,
+    news: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """The playbook on one name for Look up: the setups live on it with their contracts (fitted
-    to ``budget``), the ones nothing affordable fits, how close the others are, and whether
-    it's a leader to wait on."""
+    """The playbook on one name for Look up: the setups live on it with their contracts and
+    as shares (fitted to ``budget``, with its recent ``news``), the ones nothing affordable
+    fits, how close the others are, and whether it's a leader to wait on."""
     setups = calibrated_setups(calibration)
     missed: list[dict[str, Any]] = []
     ideas = ideas_for(name, calibration, setups, budget, missed)
+    ideas += stock_ideas_for(name, calibration, setups, budget, missed, ranks)
+    ideas = [with_news(i, news) for i in ideas]
     ind = name.ind.iloc[-1]
     near: list[str] = []
     if pd.notna(ind["rsi2"]):
@@ -1014,6 +1439,7 @@ def for_symbol(
         near.append(f"50-day average {ind['ma50']:,.2f} ({ind['close'] / ind['ma50'] - 1:+.1%})")
     return {
         "ideas": ideas,
+        "news": dict(news) if news else None,
         "out_of_reach": missed,
         "budget": budget.to_dict() if budget is not None else None,
         "watch": leader_watch(name.ind),

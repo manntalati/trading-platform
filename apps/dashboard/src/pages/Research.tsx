@@ -8,6 +8,7 @@ import {
   isCondor,
   isCreditSpread,
   isPlay,
+  isShares,
   isSpread,
   type CalendarPick,
   type ChatTurn,
@@ -21,13 +22,14 @@ import {
   type PlayPick,
   type Research as ResearchData,
   type SpreadPick,
+  type StockPick,
   type SymbolResearch,
   type Calibration,
   type TrackRecord,
   type TrackedRecommendation,
 } from "../types";
 import Ideas from "./Ideas";
-import { BudgetLine, IdeaCard, OutOfReachList, PlayLine, WatchList } from "./Playbook";
+import { BudgetLine, HoldingAlerts, IdeaCard, ModelRankLine, NewsList, OutOfReachList, PlayLine, WatchList } from "./Playbook";
 import { PriceHistory } from "./Market";
 import { OptionPricing } from "./Options";
 import { AskPanel, Scenarios } from "./Positions";
@@ -35,7 +37,7 @@ import { AskPanel, Scenarios } from "./Positions";
 export { IdeaCard } from "./Playbook";
 
 const VIEWS = [
-  { key: "ideas", label: "Options ideas" },
+  { key: "ideas", label: "Ideas" },
   { key: "track-record", label: "Track record" },
   { key: "lookup", label: "Look up a symbol" },
   { key: "checks", label: "Portfolio checks" },
@@ -83,6 +85,11 @@ const KINDS = [
     key: "volatility",
     label: "Cheap volatility",
     rule: "Options at most 0.9x the volatility forecast, the term structure not inverted and no event priced in: a straddle that profits from movement either way.",
+  },
+  {
+    key: "stocks",
+    label: "Stocks",
+    rule: "Shares on the upward setups (a pullback in an uptrend, a breakout from a squeeze, a trend leader at its 50-day, an earnings beat), any name with daily bars: a limit near the price, a stop and an optional target a few ATRs away, a time stop and the setup's stock-side exit, all chosen by the backtest, and as many shares as your buying power and risk guideline allow. Ranked by the setup's drift over the stock's volatility, and the ML ranker where it has held up.",
   },
 ] as const;
 type Kind = (typeof KINDS)[number]["key"];
@@ -138,6 +145,7 @@ function OptionsIdeas() {
             scheduler does weekly).{" "}
           </>
         )}
+        <NewsBanner r={r} />
         {r.scanned} names scanned, {r.with_chains} with option chains
         {r.chains_as_of ? ` (as of ${new Date(r.chains_as_of).toLocaleString()})` : ""}. IV rank needs 20 days of daily snapshots
         {r.iv_history_days < 20 ? `: ${r.iv_history_days} so far, so implied vs realized volatility stands in.` : "."}{" "}
@@ -166,6 +174,12 @@ function OptionsIdeas() {
         </Card>
       )}
       {kind === "leaps" && <WatchList items={r.watch ?? []} />}
+      {kind === "stocks" && <HoldingAlerts items={r.holding_alerts ?? []} />}
+      {kind === "stocks" && (
+        <p className="muted small" style={{ margin: 0 }}>
+          <ModelRankLine rank={r.model_rank} />
+        </p>
+      )}
       <OutOfReachList items={(r.out_of_reach ?? []).filter((m) => m.list === kind)} budget={r.budget} />
       {dropped.length > 0 && <p className="muted small">No longer listed since the previous session: {dropped.join(", ")}.</p>}
       {Object.keys(r.errors ?? {}).length > 0 && (
@@ -183,6 +197,23 @@ function OptionsIdeas() {
   );
 }
 
+/** Where the ideas' news sentiment comes from. */
+export function NewsBanner({ r }: { r: ResearchData }) {
+  if (!r.news) return null; // a run stored before news was read
+  if (!r.news.headlines) {
+    return <>No headlines in the last five sessions yet (the scheduler fetches them before the open, midday and evening: tp-data news fetch). </>;
+  }
+  const how = r.news_scoring
+    ? "scored by Claude as they come in"
+    : "keyword scores; with TP_NEWS_SCORING=on and ANTHROPIC_API_KEY in .env, Claude scores them";
+  return (
+    <>
+      News: {r.news.headlines} headlines on {r.news.names} names in the last five sessions ({r.news.claude} scored by Claude so far; the rest {how}),
+      folded into each idea.{" "}
+    </>
+  );
+}
+
 export function newCount(r: ResearchData): number {
   return KINDS.reduce((n, k) => n + (r[k.key] ?? []).filter((i) => i.new).length, 0);
 }
@@ -191,7 +222,14 @@ export function newCount(r: ResearchData): number {
 
 const PAGE = 15; // ideas a page in the track record
 
-const LIST_LABEL: Record<IdeaList, string> = { swing: "Swing", leaps: "LEAPS", bearish: "Bearish", income: "Premium", volatility: "Volatility" };
+const LIST_LABEL: Record<IdeaList, string> = {
+  swing: "Swing",
+  leaps: "LEAPS",
+  bearish: "Bearish",
+  income: "Premium",
+  volatility: "Volatility",
+  stocks: "Stocks",
+};
 
 function Followed({ r }: { r: TrackedRecommendation }) {
   const f = r.followed;
@@ -232,6 +270,9 @@ export function BacktestCard({ c }: { c: Calibration }) {
               <th className="num">Mean</th>
               <th className="num" title="the same signals with the default exits">Default exits</th>
               <th className="num" title="on real option prices, since February 2024">Real prices</th>
+              <th className="num" title="shares with the chosen stop, target and time stop, on the later 40% of the signals: won, and the mean">
+                Shares
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -260,6 +301,21 @@ export function BacktestCard({ c }: { c: Calibration }) {
                   {s.real?.trades ? (
                     <>
                       {pct(s.real.mean ?? null, 0, true)} <span className="muted small">of {s.real.trades}</span>
+                    </>
+                  ) : (
+                    "—"
+                  )}
+                </td>
+                <td className="num mono">
+                  {s.stock?.test?.trades ? (
+                    <>
+                      {pct(s.stock.test.win_rate ?? null, 0)} · {pct(s.stock.test.mean ?? null, 1, true)}
+                      {s.stock.exits && (
+                        <div className="muted small">
+                          stop {num(s.stock.exits.stop_atr, 1)} ATR
+                          {s.stock.exits.target_atr != null ? ` · target ${num(s.stock.exits.target_atr, 0)} ATR` : ""}
+                        </div>
+                      )}
                     </>
                   ) : (
                     "—"
@@ -369,8 +425,47 @@ function TrackRecordView() {
           </div>
         </Card>
       )}
+      {t.by_news && t.by_news.length > 0 && <ByNewsCard rows={t.by_news} />}
       {calibration.data && <BacktestCard c={calibration.data} />}
     </div>
+  );
+}
+
+/** The directional ideas by how the news stood toward them when listed. */
+export function ByNewsCard({ rows }: { rows: NonNullable<TrackRecord["by_news"]> }) {
+  return (
+    <Card title="By the news when listed" hint="calls, LEAPS, shares and puts: was the news their way?">
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th />
+              <th className="num">Ideas</th>
+              <th className="num" title="the stock moved the recommended way after 21 sessions">
+                Right way, 21d
+              </th>
+              <th className="num">Median stock, 21d</th>
+              <th className="num">Closed by the plan</th>
+              <th className="num">Won</th>
+              <th className="num">Median</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((g) => (
+              <tr key={g.group}>
+                <td>{g.name}</td>
+                <td className="num mono">{g.recommendations}</td>
+                <td className="num mono">{pct(g.right_way_21d, 0)}</td>
+                <td className="num mono">{pct(g.median_move_21d, 1, true)}</td>
+                <td className="num mono">{g.plan_closed}</td>
+                <td className="num mono">{pct(g.plan_win_rate, 0)}</td>
+                <td className="num mono">{pct(g.plan_median, 0, true)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
   );
 }
 
@@ -486,7 +581,16 @@ function strike(k: number): string {
 }
 
 /** One line: what you'd buy (or the spread) and what it costs. */
-export function PickLine({ pick }: { pick: Pick | PlayPick }) {
+export function PickLine({ pick }: { pick: Pick | PlayPick | StockPick }) {
+  if (isShares(pick)) {
+    return (
+      <>
+        shares at {money(pick.entry.limit, true)}, stop {money(pick.exit.stop, true)}
+        {pick.exit.target != null ? `, target ${money(pick.exit.target, true)}` : ""}
+        {pick.size ? ` (${pick.size.shares} shares)` : ""}
+      </>
+    );
+  }
   if (isPlay(pick)) return <PlayLine pick={pick} />;
   if (isCreditSpread(pick)) {
     return (
@@ -826,6 +930,7 @@ function PlaybookCard({ symbol, view }: { symbol: string; view: NonNullable<Symb
           <li key={l}>{l}</li>
         ))}
       </ul>
+      {view.news !== undefined && <NewsList news={view.news} />}
     </Card>
   );
 }

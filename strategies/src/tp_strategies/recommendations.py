@@ -1,15 +1,16 @@
 """Recommendations made on a schedule and kept, with a track record.
 
-Each run stores the options research (swing calls, LEAPS, bearish puts, premium selling) and the
-portfolio checks as they stood, so the dashboard opens on the latest at once, can say what is new
-since the previous session, and can show how every past recommendation has done since:
+Each run stores the options research (swing calls, LEAPS, bearish puts, premium selling), the
+stock ideas and the portfolio checks as they stood, so the dashboard opens on the latest at
+once, can say what is new since the previous session, and can show how every past
+recommendation has done since:
 
     reports/recommendations/<run id>.json   the full run (kept KEEP_DAYS days)
     clean/recommendations_log/part.parquet  one row per idea per run, kept for good
 
 A run is made whenever its inputs changed (new bars, a new option chain snapshot, a brokerage
-sync, new macro data, a new playbook calibration): ``tp-recs run``, which the job scheduler
-starts on its own.
+sync, new macro data, new headlines or their scores, a new playbook calibration): ``tp-recs
+run``, which the job scheduler starts on its own.
 
 The track record counts each idea once (a name on a list for one setup; listed again within a
 week, it's the same idea), with the contracts the first run that listed it picked. It marks each
@@ -18,7 +19,11 @@ purchase and the bid for a sale, as the picks were priced), or at its value at e
 has expired. It also follows each idea's exit plan through the daily chain snapshots: the first
 session its profit target, stop, stock-side exit, time stop or days-to-expiry limit was
 reached, and what the position was worth then, which is what following the plan would have
-made. It is the record of rules applied to past data, not of trades anyone made.
+made. A stock idea is followed the same way on the daily bars: its stop and target against each
+session's open, low and high, then its stock-side rule and time stop on the close. It is the
+record of rules applied to past data, not of trades anyone made. Each idea keeps the news
+sentiment it was listed with, so the record can say whether ideas the news agreed with did
+better than the ones it ran against (``by_news``).
 """
 
 from __future__ import annotations
@@ -55,13 +60,14 @@ log = logging.getLogger(__name__)
 RUNS = "recommendations"
 LOG = "recommendations_log"
 KEEP_DAYS = 30
-LISTS = ("swing", "leaps", "bearish", "income", "volatility")
+LISTS = ("swing", "leaps", "bearish", "income", "volatility", "stocks")
 LIST_NAMES = {
     "swing": "Swing calls",
     "leaps": "LEAPS",
     "bearish": "Bearish",
     "income": "Premium selling",
     "volatility": "Volatility",
+    "stocks": "Stocks",
 }
 HORIZONS = (5, 21)  # sessions after the recommendation, for the underlying's move
 EPISODE_GAP = timedelta(days=7)  # listed again within a week: the same idea
@@ -80,8 +86,11 @@ LOG_SCHEMA = pa.schema(
         ("entry", pa.float64()),  # per share: + paid (a debit), - received (a credit)
         ("setup", pa.string()),  # the playbook setup (tp_strategies.setups)
         ("plan", pa.string()),  # JSON: the exit plan (targets per share, dates, stock rule)
+        ("news", pa.float64()),  # the name's mean news sentiment when listed (tp_core.news)
+        ("headlines", pa.int32()),  # how many headlines that was from
     ]
 )
+DIRECTION = {"bearish": -1, "income": 0, "volatility": 0}  # the rest: +1
 
 
 # -- what to scan and what you hold ---------------------------------------------------------------
@@ -144,6 +153,8 @@ def input_stamp(lake: Lake) -> dict[str, str | None]:
         "macro": _newest(lake.reports_dir("macro"), "*.json"),
         "fundamentals": _newest(lake.reports_dir("fundamentals"), "*.json"),
         "calibration": _newest(lake.reports_dir("playbook"), "calibration.json"),
+        "news": _newest(lake.reports_dir("news"), "*.json"),
+        "news_scores": _newest(lake.reports_dir("news_scores"), "*.json"),
         "broker": _newest(newest_day, "*.parquet") if newest_day is not None else None,
     }
 
@@ -370,6 +381,8 @@ def log_rows(run: Mapping[str, Any]) -> pd.DataFrame:
     for k in LISTS:
         for rank, idea in enumerate(research.get(k) or [], start=1):
             found = legs(idea.get("pick"))
+            shares = (idea.get("pick") or {}).get("kind") == "shares"
+            entry = _float(idea["pick"]["entry"].get("limit")) if shares else _entry(found)
             rows.append(
                 {
                     "run_id": run["run_id"],
@@ -382,9 +395,14 @@ def log_rows(run: Mapping[str, Any]) -> pd.DataFrame:
                     "spot": idea.get("spot"),
                     "structure": _structure(idea.get("pick"), k),
                     "legs": json.dumps(found),
-                    "entry": _entry(found),
+                    "entry": entry,
                     "setup": (idea.get("play") or {}).get("name"),
                     "plan": _plan(idea.get("pick")),
+                    "news": (idea.get("news") or {}).get("sentiment"),
+                    # 0: no headlines; null: listed before the news was kept
+                    "headlines": (idea.get("news") or {}).get(
+                        "headlines", 0 if "news" in idea else None
+                    ),
                 }
             )
     return pd.DataFrame(rows, columns=[f.name for f in LOG_SCHEMA])
@@ -393,6 +411,9 @@ def log_rows(run: Mapping[str, Any]) -> pd.DataFrame:
 def _plan(pick: Mapping[str, Any] | None) -> str | None:
     if not pick or not pick.get("exit"):
         return None
+    if pick.get("kind") == "shares":
+        held = ("stop", "target", "sell_by", "stock")
+        return json.dumps({k: pick["exit"].get(k) for k in held} | {"shares": True})
     keep = ("take_profit", "stop", "sell_by", "out_by", "stock")
     plan = {k: pick["exit"].get(k) for k in keep}
     return json.dumps(plan | {"credit": pick.get("credit") is not None})
@@ -493,13 +514,15 @@ def track_record(lake: Lake, today: date, *, limit: int = 200) -> dict[str, Any]
     followed = [
         (str(r["symbol"]), found, _run_day(r["run_at"]))
         for (_, r), (_, found), plan in zip(recs.iterrows(), all_legs, plans, strict=True)
-        if plan is not None
+        if plan is not None and found
     ]
     history = _daily_marks(lake, followed)
     stock = _stock_indicators(bars)
+    ohlc = _ohlc(bars)
     rows = []
     for (_, r), (_, found), plan in zip(recs.iterrows(), all_legs, plans, strict=True):
         start = pd.Timestamp(r["bars_session"]) if pd.notna(r["bars_session"]) else None
+        shares = r["structure"] == "shares"
         row: dict[str, Any] = {
             "list": r["list"],
             "symbol": r["symbol"],
@@ -515,9 +538,33 @@ def track_record(lake: Lake, today: date, *, limit: int = 200) -> dict[str, Any]
                 leg | {"label": option_label(leg["contract"]) or leg["contract"]} for leg in found
             ],
             "entry": _float(r["entry"]),
+            "news": (
+                {"sentiment": _float(r["news"]), "headlines": int(r["headlines"])}
+                if pd.notna(r.get("headlines"))
+                else None
+            ),
         }
         sign = -1.0 if r["list"] == "bearish" else 1.0
         row |= _moves(closes, sessions, str(r["symbol"]), start, sign)
+        if shares:
+            row |= _mark_shares(row, closes, str(r["symbol"]))
+            row["plan"] = plan
+            row["followed"] = (
+                follow_shares(
+                    plan,
+                    _float(r["entry"]),
+                    ohlc.get(str(r["symbol"])),
+                    stock.get(str(r["symbol"])),
+                    start,
+                    _run_day(r["run_at"]),
+                )
+                if plan is not None
+                else None
+            )
+            row["state"] = "closed" if (row["followed"] or {}).get("status") == "closed" else "open"
+            row["news_group"] = news_group(row)
+            rows.append(row)
+            continue
         row |= _mark(found, marks, raw, str(r["symbol"]), _float(r["entry"]), today)
         row["plan"] = plan
         row["followed"] = (
@@ -537,6 +584,7 @@ def track_record(lake: Lake, today: date, *, limit: int = 200) -> dict[str, Any]
         )
         closed = (row["followed"] or {}).get("status") == "closed" or row.get("status") == "expired"
         row["state"] = "closed" if closed else "open"
+        row["news_group"] = news_group(row)
         rows.append(row)
     return {
         "as_of": today.isoformat(),
@@ -544,6 +592,7 @@ def track_record(lake: Lake, today: date, *, limit: int = 200) -> dict[str, Any]
         "recommendations": rows[:limit],
         "summary": _summary(rows),
         "by_setup": _by_setup(rows),
+        "by_news": _by_news(rows),
     }
 
 
@@ -578,6 +627,79 @@ def _daily_marks(
             if pd.notna(bid) and pd.notna(ask) and ask > 0:
                 points.setdefault(str(contract), {})[day] = (float(bid) + float(ask)) / 2
     return {c: pd.Series(v).sort_index() for c, v in points.items()}
+
+
+def _ohlc(bars: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """Each symbol's adjusted daily open, high, low and close (index: sessions)."""
+    out = {}
+    for symbol, g in bars.groupby("symbol"):
+        frame = g[["adj_open", "adj_high", "adj_low", "adj_close"]].astype(float)
+        frame.columns = ["open", "high", "low", "close"]
+        frame.index = pd.DatetimeIndex(g["session"])
+        out[str(symbol)] = frame.sort_index()
+    return out
+
+
+def _mark_shares(row: Mapping[str, Any], closes: pd.DataFrame, symbol: str) -> dict[str, Any]:
+    """Shares marked at the latest close: the entry grown by the stock's adjusted move since the
+    session the run saw (so a split or a dividend since doesn't count as a move)."""
+    out: dict[str, Any] = {"value": None, "pnl": None, "result": None, "marked": None}
+    entry, move = _float(row.get("entry")), row.get("move")
+    if entry is None or move is None or symbol not in closes:
+        return out
+    value = entry * (1 + float(move))
+    marked = closes[symbol].dropna().index[-1].date().isoformat()
+    return out | {
+        "value": value,
+        "pnl": (value - entry) * 100,
+        "result": float(move),
+        "marked": marked,
+        "status": "open",
+    }
+
+
+def follow_shares(
+    plan: Mapping[str, Any],
+    entry: float | None,
+    bars: pd.DataFrame | None,
+    ind: pd.DataFrame | None,
+    session: pd.Timestamp | None,
+    start: date,
+) -> dict[str, Any] | None:
+    """Walk the sessions after the recommendation and sell where the plan says: the stop or the
+    target (an open past it fills at the open; the stop first when a session touches both),
+    then the stock-side rule or the time stop on the close. Prices are the entry grown by the
+    adjusted bars from the session the run saw (``session``); P&L is for 100 shares."""
+    if entry is None or bars is None or session is None or session not in bars.index:
+        return None
+    base = float(bars["close"].loc[session])
+    stop, target = _float(plan.get("stop")), _float(plan.get("target"))
+    sell_by = date.fromisoformat(str(plan["sell_by"])) if plan.get("sell_by") else None
+    rule = (plan.get("stock") or {}).get("rule")
+    stock_exit = exit_signal(ind, rule) if ind is not None and rule else None
+    last: dict[str, Any] | None = None
+    days = [d for d in pd.DatetimeIndex(bars.index) if d.date() > start]
+    for n, day in enumerate(days, start=1):
+        o, h, lo, c = (
+            entry * float(bars[k].loc[day]) / base for k in ("open", "high", "low", "close")
+        )
+        fill, reason = None, None
+        if stop is not None and o <= stop:
+            fill, reason = o, "stop"
+        elif target is not None and o >= target:
+            fill, reason = o, "target"
+        elif stop is not None and lo <= stop:
+            fill, reason = stop, "stop"
+        elif target is not None and h >= target:
+            fill, reason = target, "target"
+        elif stock_exit is not None and bool(stock_exit.get(day)):
+            fill, reason = c, "stock"
+        elif sell_by is not None and day.date() >= sell_by:
+            fill, reason = c, "time"
+        last = _closed(fill if fill is not None else c, entry, day.date(), n, reason)
+        if reason is not None:
+            return last
+    return last
 
 
 def _stock_indicators(bars: pd.DataFrame) -> dict[str, pd.DataFrame]:
@@ -779,6 +901,50 @@ def _by_setup(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for name in sorted({r["setup"] for r in rows if r.get("setup")}):
         mine = [r for r in rows if r.get("setup") == name]
         out.append({"setup": name, "recommendations": len(mine), **_plan_stats(mine)})
+    return out
+
+
+NEWS_GROUPS = (
+    ("agreed", "The news agreed"),
+    ("against", "The news ran against it"),
+    ("neutral", "Mixed or neutral news"),
+    ("quiet", "Little or no news"),
+)
+
+
+def news_group(row: Mapping[str, Any]) -> str | None:
+    """How the news stood toward an idea when it was listed: its mean sentiment times the idea's
+    direction, from two headlines or more (None for ideas with no direction, and for ideas
+    listed before the news was kept)."""
+    direction = DIRECTION.get(str(row["list"]), 1)
+    news = row.get("news")
+    if not direction or news is None:
+        return None
+    if news["headlines"] < 2 or news["sentiment"] is None:
+        return "quiet"
+    lean = direction * news["sentiment"]
+    return "agreed" if lean >= 0.15 else "against" if lean <= -0.15 else "neutral"
+
+
+def _by_news(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The directional ideas by how the news stood toward them when listed: did following the
+    news's lead help?"""
+    out = []
+    for key, name in NEWS_GROUPS:
+        mine = [r for r in rows if r.get("news_group") == key]
+        if not mine:
+            continue
+        moved = [r["move_21d"] for r in mine if r.get("move_21d") is not None]
+        out.append(
+            {
+                "group": key,
+                "name": name,
+                "recommendations": len(mine),
+                "right_way_21d": (sum(1 for x in moved if x > 0) / len(moved)) if moved else None,
+                "median_move_21d": _median(moved),
+                **_plan_stats(mine),
+            }
+        )
     return out
 
 

@@ -29,6 +29,7 @@ from tp_core.calendar import NEW_YORK
 from tp_core.config import MissingCredentialsError, Settings, load_universes
 from tp_core.fundamentals import load_events, load_facts
 from tp_core.fundamentals import summary as fundamentals_summary
+from tp_core.news import recent_news
 from tp_core.portfolio import holdings_table, latest_snapshot
 from tp_core.storage import Lake
 from tp_core.volatility import iv_history, latest_chains
@@ -72,7 +73,8 @@ def research_view(ctx: queries.Context, now: datetime, *, fresh: bool = False) -
     if run is None or run.get("inputs") != recs.input_stamp(ctx.lake):
         run = new_run(ctx, now)
     meta = {k: run.get(k) for k in ("run_id", "as_of", "bars_session", "previous_run", "dropped")}
-    out: dict[str, Any] = queries.clean({**run["research"], "run": meta})
+    scoring = ctx.settings.news_scoring and ctx.settings.anthropic_api_key is not None
+    out: dict[str, Any] = queries.clean({**run["research"], "run": meta, "news_scoring": scoring})
     return out
 
 
@@ -99,7 +101,11 @@ def symbol_view(ctx: queries.Context, symbol: str, now: datetime) -> dict[str, A
     )
     analysis = name.analysis
     analysis["playbook"] = playbook.for_symbol(
-        name, playbook.load_calibration(ctx.lake), budget_from_settings(ctx.lake, ctx.settings)
+        name,
+        playbook.load_calibration(ctx.lake),
+        budget_from_settings(ctx.lake, ctx.settings),
+        playbook.model_ranks(ctx.lake),
+        recent_news(ctx.lake, [symbol], now, latest=8).get(symbol),
     )
     age = None
     if chain is not None and not chain.empty:

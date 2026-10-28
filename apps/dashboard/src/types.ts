@@ -753,7 +753,7 @@ export interface OutOfReach {
   list: IdeaList;
   setup: string;
   structure: string;
-  needs: number; // per contract
+  needs: number; // per contract (shares: per share)
   reason: "buying power" | "options level";
   level: number;
   score: number;
@@ -804,6 +804,79 @@ export function isPlay(p: unknown): p is PlayPick {
   return typeof p === "object" && p !== null && "legs" in p && "model" in p;
 }
 
+// a stock idea: shares, with a stop, an optional target and a time stop (playbook.stock_view)
+export interface StockTest {
+  trades: number;
+  win_rate?: Num;
+  mean?: Num;
+  median?: Num;
+  excess?: Num; // over what the average stock made in the same sessions
+  mean_r?: Num; // in units of the risk to the stop
+  avg_sessions?: Num;
+}
+
+export interface StockPick {
+  kind: "shares";
+  structure: "shares";
+  price: number;
+  atr: number; // average true range, 14 sessions
+  risk_per_share: number; // to the stop
+  entry: { side: "debit"; limit: number; worst: number; valid_until: string | null; worth_it: boolean };
+  exit: {
+    stop: number;
+    target: Num;
+    sell_by: string | null;
+    stock: PlayExit["stock"];
+    rules: { stop_atr: number; target_atr: Num; time_stop: number; underlying: string | null };
+  };
+  model: { horizon: number; drift: number; drift_source: string; vol: number; expected_return: number; sharpe: number; stop_pct: number; target_pct: Num };
+  backtest: StockTest | null;
+  size?: { shares: number; capital: number; max_loss: number; share_of_account: Num; buying_power_left: number; over_guideline: boolean; limited_by: string };
+}
+
+export function isShares(p: unknown): p is StockPick {
+  return typeof p === "object" && p !== null && (p as { kind?: unknown }).kind === "shares";
+}
+
+export interface HoldingAlert {
+  symbol: string;
+  held: string;
+  setup: string; // "news": bad news, no setup
+  title: string;
+  fired: string | null;
+  age: number;
+  spot: Num;
+  text: string;
+}
+
+// a name's recent headlines and their sentiment (libs/core/src/tp_core/news.py: recent_news)
+export interface NewsItem {
+  at: string;
+  headline: string;
+  source: string;
+  url: string;
+  score: number; // -1 bad for the stock .. +1 good
+  scored_by: "claude" | "keywords";
+}
+
+export interface NewsContext {
+  sentiment: number; // the mean of the scores
+  headlines: number;
+  claude: number; // how many Claude scored (the rest: keyword scores)
+  sessions: number;
+  since: string;
+  latest: NewsItem[];
+}
+
+export interface ModelRankInfo {
+  day: string;
+  names: number;
+  version?: string;
+  rank_ic: Num;
+  counted: boolean;
+  percentile?: number;
+}
+
 export interface ResearchIdea {
   symbol: string;
   kind: IdeaList;
@@ -814,8 +887,10 @@ export interface ResearchIdea {
   stock: StockStats;
   vol: VolContext;
   play?: Play;
-  pick: PlayPick | Pick | null;
+  pick: PlayPick | StockPick | Pick | null;
   alternative: PlayPick | Pick | null;
+  model_rank?: ModelRankInfo | null; // stock ideas: where the ML ranker puts the name
+  news?: NewsContext | null; // the last few sessions' headlines
   why: string[];
   risks: string[];
   held?: string | null;
@@ -835,7 +910,7 @@ export interface WatchItem {
   text: string;
 }
 
-export type IdeaList = "swing" | "leaps" | "bearish" | "income" | "volatility";
+export type IdeaList = "swing" | "leaps" | "bearish" | "income" | "volatility" | "stocks";
 
 // the stored run a /api/research answer comes from (tp_strategies/recommendations.py)
 export interface ResearchRun {
@@ -859,6 +934,11 @@ export interface Research {
   bearish: ResearchIdea[];
   income: ResearchIdea[];
   volatility: ResearchIdea[];
+  stocks?: ResearchIdea[]; // runs stored before stock ideas lack it
+  holding_alerts?: HoldingAlert[];
+  model_rank?: ModelRankInfo | null;
+  news?: { names: number; headlines: number; claude: number };
+  news_scoring?: boolean; // Claude scores the headlines (TP_NEWS_SCORING)
   watch?: WatchItem[];
   budget?: Budget | null;
   out_of_reach?: OutOfReach[];
@@ -885,6 +965,7 @@ export interface SymbolResearch {
   held: string | null;
   playbook?: {
     ideas: ResearchIdea[];
+    news?: NewsContext | null;
     out_of_reach?: OutOfReach[];
     budget?: Budget | null;
     watch: boolean;
@@ -1135,6 +1216,8 @@ export interface TrackedRecommendation {
   marked: string | null;
   followed?: FollowedPlan | null; // the exit plan, followed through the daily snapshots
   state?: "open" | "closed"; // closed once the plan closed it or it expired
+  news?: { sentiment: Num; headlines: number } | null; // when it was listed
+  news_group?: "agreed" | "against" | "neutral" | "quiet" | null;
 }
 
 export interface TrackSummary {
@@ -1174,6 +1257,7 @@ export interface SetupCalibration {
   exits?: { take_profit: Num; stop_loss: Num; time_stop: number; underlying: string | null };
   option?: CalibrationStats & { detail?: { default?: CalibrationStats } };
   real?: CalibrationStats & { model_bias: Num };
+  stock?: { exits?: StockPick["exit"]["rules"]; test?: StockTest }; // the share trade (upward setups)
 }
 
 export interface Calibration {
@@ -1191,6 +1275,16 @@ export interface TrackRecord {
   recommendations: TrackedRecommendation[];
   summary: TrackSummary[];
   by_setup?: { setup: string; recommendations: number; plan_closed: number; plan_win_rate: Num; plan_median: Num }[];
+  by_news?: {
+    group: string;
+    name: string;
+    recommendations: number;
+    right_way_21d: Num;
+    median_move_21d: Num;
+    plan_closed: number;
+    plan_win_rate: Num;
+    plan_median: Num;
+  }[];
 }
 
 // /api/jobs (services/api/src/tp_api/scheduler.py)
