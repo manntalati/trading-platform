@@ -445,16 +445,49 @@ def fundamentals(
         raise typer.Exit(code=1)
 
 
+class IntradayUniverse(StrEnum):
+    options = "options"  # the options universe: ~100 liquid names and index funds
+    bars = "bars"  # the daily-bars universe
+    all = "all"  # both, and your research list
+
+
+def _intraday_symbols(settings: Settings, which: IntradayUniverse) -> list[str]:
+    try:
+        u = load_universes(settings.universes_file)
+    except (OSError, ValueError) as exc:
+        _config_error(exc)
+    picked = {
+        IntradayUniverse.options: [*u.options_underlyings],
+        IntradayUniverse.bars: [*u.bars],
+        IntradayUniverse.all: [*u.options_underlyings, *u.bars, *u.research],
+    }[which]
+    return list(dict.fromkeys(picked))
+
+
 @bars_app.command("intraday")
 def bars_intraday(
     symbols: Annotated[str, typer.Option(help="Comma-separated symbols.")] = "SPY,QQQ",
+    universe: Annotated[
+        IntradayUniverse | None,
+        typer.Option(help="A whole universe instead of --symbols: options, bars or all."),
+    ] = None,
     days: Annotated[int, typer.Option(min=1, max=2500, help="Sessions back from today.")] = 60,
     minutes: Annotated[int, typer.Option(min=1, max=60, help="Bar length in minutes.")] = 5,
+    resume: Annotated[
+        bool, typer.Option(help="Skip what's already stored (to finish a long download).")
+    ] = False,
     source: SourceOpt = SourceName.alpaca,
 ) -> None:
-    """Intraday bars (regular hours) for intraday research, e.g. the opening-range breakout."""
+    """Intraday bars (regular hours) for intraday research: the opening-range breakout, the first
+    candle against the EMA. Years of a whole universe take a while (a few symbols and 60
+    sessions a request); --resume picks an interrupted download up."""
+    _setup_logging(False)
     settings = Settings()
-    names = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    names = (
+        _intraday_symbols(settings, universe)
+        if universe is not None
+        else [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    )
     result = intraday_jobs.run_intraday(
         Lake(settings.data_root),
         make_source(source, settings),
@@ -462,8 +495,11 @@ def bars_intraday(
         now=now_utc(),
         days=days,
         minutes=minutes,
+        resume=resume,
     )
     typer.echo(result.summary())
+    if result.errors:
+        raise typer.Exit(code=1)
 
 
 @bars_app.command("rebuild")

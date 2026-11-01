@@ -51,3 +51,32 @@ def test_cli(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     )
     assert out.exit_code == 0, out.output
     assert "156 bars" in out.output
+
+
+def test_a_long_download_goes_in_pieces_and_resumes(tmp_path: Path) -> None:
+    lake = Lake(tmp_path)
+    names = [f"S{i:02d}" for i in range(12)]  # two batches of symbols
+    source = FakeSource()
+    done = run_intraday(lake, source, names, now=NOW, days=130)  # three windows of sessions
+    asked = [c for c in source.calls if c[0] == "intraday_bars"]
+    assert len(asked) == 2 * 3
+    assert done.bars == 12 * 130 * 78
+    assert len(load_intraday(lake, ["S11"])) == 130 * 78
+
+    class Flaky(FakeSource):
+        def intraday_bars(self, symbols, start, end, minutes=5):  # type: ignore[no-untyped-def]
+            if "S12" in symbols:
+                raise RuntimeError("rate limited")
+            return super().intraday_bars(symbols, start, end, minutes)
+
+    more = [*names, "S12"]
+    flaky = Flaky()
+    partial = run_intraday(lake, flaky, more, now=NOW, days=130, resume=True)
+    assert partial.errors  # S12's requests failed
+    assert partial.skipped == 3  # the first batch was all stored already
+    assert load_intraday(lake, ["S12"]).empty
+    again = FakeSource()
+    finished = run_intraday(lake, again, more, now=NOW, days=130, resume=True)
+    assert not finished.errors
+    assert all(c[1] == ("S12",) for c in again.calls if c[0] == "intraday_bars")
+    assert len(load_intraday(lake, ["S12"])) == 130 * 78

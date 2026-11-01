@@ -182,12 +182,14 @@ process and rebuilt when the lake changes.
 ## Research backtests
 
 Some ideas don't fit the daily, shares-only engine yet. They run as vectorized research
-backtests that print a tear sheet against a benchmark and save nothing:
+backtests that print a tear sheet against a benchmark (`open-ema` prints a study and keeps it
+under `reports/research/`):
 
 ```bash
 uv run tp-backtest research pairs     # long/short pairs (strategy 7 with its hedge)
 uv run tp-backtest research vrp       # buy-write and put-write on SPY at the VIX (strategy 10)
 uv run tp-backtest research orb       # opening-range breakout on 5-minute bars (strategy 11)
+uv run tp-backtest research open-ema  # the first 5-minute candle against the 12 EMA (strategy 15)
 ```
 
 They follow the same rules (decide on information up to the bar, fill after it, pay costs) but
