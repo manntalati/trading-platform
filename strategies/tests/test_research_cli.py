@@ -60,3 +60,15 @@ def test_missing_data_says_what_to_run(monkeypatch: pytest.MonkeyPatch, tmp_path
     out = runner.invoke(app, ["research", "orb"])
     assert out.exit_code == 2
     assert "tp-data bars intraday" in out.output
+
+
+def test_open_ema_study_and_report(root: Path) -> None:
+    out = runner.invoke(app, ["research", "open-ema"])
+    assert out.exit_code == 0, out.output
+    assert "First candle against the EMA: 5-minute candle vs EMA(12)" in out.output
+    assert "Against the controls (test)" in out.output
+    assert "Picking the tickers (test)" in out.output
+    assert "kept in" in out.output
+    assert list((root / "reports" / "research").glob("open_ema-*.json"))
+    bad = runner.invoke(app, ["research", "open-ema", "--ema", "10"])
+    assert bad.exit_code != 0

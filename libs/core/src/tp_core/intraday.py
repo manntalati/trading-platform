@@ -50,6 +50,41 @@ def build_clean_intraday(lake: Lake, minutes: int = 5) -> pd.DataFrame:
     return clean
 
 
+def merge_clean_intraday(lake: Lake, bars: pd.DataFrame, minutes: int = 5) -> None:
+    """Add freshly downloaded raw ``bars`` (``RAW_BARS_SCHEMA``) to the clean table, one symbol
+    at a time, the newer download winning per bar: the same table ``build_clean_intraday``
+    makes, without reading every raw file (years of bars for many symbols don't fit in
+    memory at once)."""
+    base = lake.clean_dir(CLEAN_DATASET.format(minutes=minutes))
+    for symbol, fresh in regular_hours(bars).groupby("symbol"):
+        path = base / f"symbol={symbol}"
+        old = read_parquet_dir(path, RAW_BARS_SCHEMA)
+        both = pd.concat([f for f in (old, fresh) if len(f)], ignore_index=True)
+        out = (
+            both.sort_values("ingested_at", kind="stable")
+            .drop_duplicates(["symbol", "timestamp"], keep="last")
+            .sort_values("timestamp")
+            .reset_index(drop=True)
+        )
+        write_parquet(out, path / "part.parquet", RAW_BARS_SCHEMA)
+
+
+def stored_sessions(lake: Lake, symbol: str, minutes: int = 5) -> set[date]:
+    """The New York dates the clean table has bars of ``symbol`` for."""
+    path = lake.clean_dir(CLEAN_DATASET.format(minutes=minutes)) / f"symbol={symbol}"
+    df = read_parquet_dir(path, RAW_BARS_SCHEMA)
+    if df.empty:
+        return set()
+    stamps = pd.to_datetime(df["timestamp"], utc=True).dt.tz_convert(NEW_YORK)
+    return set(stamps.dt.date)
+
+
+def intraday_symbols(lake: Lake, minutes: int = 5) -> list[str]:
+    """The symbols the clean table has bars for."""
+    base = lake.clean_dir(CLEAN_DATASET.format(minutes=minutes))
+    return sorted(d.name.split("=", 1)[1] for d in base.glob("symbol=*")) if base.exists() else []
+
+
 def load_intraday(
     lake: Lake,
     symbols: Iterable[str] | None = None,

@@ -16,6 +16,7 @@ uv run tp-data macro backfill               # one-off: VIX and Treasury yields f
 uv run tp-data macro daily                  # scheduled: the last 30 days
 uv run tp-data fundamentals                 # SEC filings: company facts and earnings dates
 uv run tp-data bars intraday --symbols SPY,QQQ --days 250  # 5-minute bars for intraday research
+uv run tp-data bars intraday --universe options --days 1000 --resume  # years of a whole universe
 uv run tp-data news fetch                   # the last 3 days of headlines (Alpaca's news feed)
 uv run tp-data news score                   # Claude scores the unscored ones (ANTHROPIC_API_KEY)
 uv run tp-data news show XYZ                # a ticker's recent headlines and scores
@@ -262,6 +263,13 @@ symbols over the last `--days` sessions, regular hours only (9:30 to 16:00 New Y
 which is what intraday research needs. Run it by hand when you want more history; downloading an
 overlapping window again replaces bars rather than duplicating them. Alpaca's intraday history
 goes back to 2016.
+
+`--universe options` (or `bars`, or `all` with your research list) takes a whole universe instead
+of `--symbols`. A long download goes ten symbols and 60 sessions a request, each piece stored
+before the next, so it never holds years of bars for every name in memory; a failed request is
+reported and the rest go on, and `--resume` skips the pieces already stored, so running the same
+command again finishes an interrupted download. About 100 symbols over four years is roughly 8
+million bars and a few minutes of requests.
 
 ## News and sentiment
 
