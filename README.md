@@ -74,6 +74,8 @@ uv run tp-broker sync --source fake       # demo portfolio, no keys needed
 uv run tp-ideas                           # rules-based research ideas, with the numbers behind each
 uv run tp-recs show                       # the latest stored options ideas (new ones starred)
 uv run tp-recs scorecard                  # how past recommendations have done since
+uv run tp-journal take XYZ                # check the gates, then write down that you took an idea
+uv run tp-journal review                  # what you took and passed on, and how it went
 uv run tp-jobs status                     # the job scheduler: each job's last run and next window
 uv run tp-models monitor                  # the ML strategies' models: retrain if due, drift, live accuracy
 ```

@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Callable, Iterator
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import SecretStr
 
 from tp_api import scheduler as sched
 from tp_api.scheduler import Scheduler, ny
+from tp_core.alerts import Alerts
 from tp_core.config import Settings
 from tp_core.storage import Lake
 
@@ -78,6 +81,7 @@ def make(
 def no_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[None]:
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("TP_JOBS_OFF", raising=False)
+    monkeypatch.delenv("TP_DISCORD_WEBHOOK_URL", raising=False)
     yield
     while MADE:
         MADE.pop().release()
@@ -215,3 +219,58 @@ def test_one_scheduler_at_a_time_and_a_job_on_request(tmp_path: Path) -> None:
     second.release()
     assert first.status()["running"]  # the heartbeat is fresh
     assert datetime.fromisoformat(first.status()["heartbeat"]).tzinfo == UTC
+
+
+class Poster:
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+
+    def __call__(self, url: str, body: bytes) -> int:
+        self.sent.append(json.loads(body)["content"])
+        return 204
+
+
+def write_run(lake: Lake, at: datetime, **research: Any) -> None:
+    run = {"run_id": f"{at:%Y%m%dT%H%M%SZ}-abcd1234", "as_of": at.isoformat(),
+           "research": research}  # fmt: skip
+    path = lake.reports_dir("recommendations") / f"{run['run_id']}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(run))
+
+
+def test_alerts_say_new_ideas_and_holdings_once_and_a_job_that_gave_up(tmp_path: Path) -> None:
+    at = ny(FRIDAY, 10)
+    s, runner, clock = make(tmp_path, at)
+    post = Poster()
+    s.alerts = Alerts("https://discord.test/hook", post=post)
+    breakdown = {"symbol": "GOOGL", "setup": "breakdown", "fired": "2024-06-28",
+                 "title": "Breakdown to a new low"}  # fmt: skip
+    write_run(
+        runner.lake, at,
+        swing=[{"symbol": "XYZ", "new": True, "play": {"name": "pullback"}},
+               {"symbol": "ABC", "new": False}],
+        holding_alerts=[breakdown],
+    )  # fmt: skip
+    s.step()
+    assert "tp-recs run" in runner.calls
+    ideas, holdings = post.sent
+    assert "1 idea" in ideas
+    assert "Swing calls: XYZ (pullback)" in ideas
+    assert "ABC" not in ideas
+    assert "GOOGL: Breakdown to a new low" in holdings
+
+    post.sent.clear()
+    clock.at = ny(FRIDAY, 13)  # new data, a new run with the same ideas: nothing to say
+    s.step()
+    assert runner.calls.count("tp-recs run") == 2
+    assert post.sent == []
+
+    clock.at = ny(FRIDAY, 19)
+    runner.outputs["tp-data bars daily"] = (1, "ValueError: something odd")
+    for _ in range(sched.MAX_ATTEMPTS):
+        s.step()
+        clock.at += sched.RETRY
+    assert [m for m in post.sent if "gave up" in m] == [
+        f"⚠️ **Daily bars** gave up after {sched.MAX_ATTEMPTS} tries: exit 1: ValueError: "
+        f"something odd\nlog: {s.log_path('bars')} · `tp-jobs now bars` to run it again"
+    ]

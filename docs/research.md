@@ -332,6 +332,42 @@ with each idea's entry and exit plan) and `tp-recs scorecard` (the track record,
 following the plans made). A track record of rules applied to past data is
 evidence about the rules, not a promise; a few weeks of it is mostly noise.
 
+## The journal and its gates
+
+The scorecard follows every idea; `tp-journal` follows what you did. Before writing down that you
+took an idea from the latest run it checks the gates: the kill switch (`tp-risk kill`), an entry
+limit that has expired, the most it can lose against `TP_OPTIONS_RISK`, the money it ties up
+against `max_position` in `config/risk.toml`, the buying power, how many you've taken today
+(`TP_JOURNAL_MAX_PER_DAY`), and a losing streak that ended today (`TP_JOURNAL_LOSS_STREAK`). Any of
+those blocks it; a negative modeled edge, an event the options price inside the hold, and the
+idea's own risks only warn. `--override "why"` takes it anyway and keeps the reason, so the
+review can show whether overriding paid. Nothing is ordered: you trade at your broker, then write
+it down.
+
+```bash
+uv run tp-journal check XYZ                        # the gates, nothing written
+uv run tp-journal take XYZ --units 1 --price 1.45  # your size and fill (default: the idea's)
+uv run tp-journal pass KRE --list stocks --note "earnings next week"
+uv run tp-journal close 1 2.10                     # the exit, per share: P&L in dollars and in R
+uv run tp-journal list
+uv run tp-journal review                           # taken vs passed; followed the gates vs overrode
+```
+
+The journal is `<data root>/journal/journal.json` (`TP_JOURNAL_FILE`), out of git.
+
+In Claude Code, the project's skills (`.claude/skills/`) drive this: `trade-ideas` goes over the
+day's ideas with their gates, `log-trade` writes down what you did, `trading-review` reads the
+journal against the scorecard.
+
+## Discord alerts
+
+With `TP_DISCORD_WEBHOOK_URL` set, the scheduler posts a line when a job gives up for its window,
+and after each recommendations run the ideas new since the previous session and the setups that
+fired on what you hold, each once (it remembers what it said for ten days).
+`TP_DISCORD_ALERTS=failures,holdings` leaves the ideas out. Only names, setups and a job's last
+line of output go to Discord, never balances or sizes. A webhook that's down is logged and the
+jobs carry on.
+
 ## Asking Claude
 
 Each symbol in **Look up** has a chat with Claude, which gets the setup, option pricing, every

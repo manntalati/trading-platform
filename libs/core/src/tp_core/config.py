@@ -114,6 +114,21 @@ class Settings(BaseSettings):
     # API tokens). TP_NEWS_MODEL defaults to TP_CLAUDE_MODEL.
     news_scoring: bool = Field(default=False, validation_alias="TP_NEWS_SCORING")
     news_model: str | None = Field(default=None, validation_alias="TP_NEWS_MODEL")
+    # Discord alerts (tp_core.alerts): a job that gave up, new ideas, what you hold. The webhook
+    # is a secret: anyone with it can post to the channel. TP_DISCORD_ALERTS picks which kinds.
+    discord_webhook_url: SecretStr | None = Field(
+        default=None, validation_alias="TP_DISCORD_WEBHOOK_URL"
+    )
+    discord_alerts: str = Field(
+        default="failures,ideas,holdings", validation_alias="TP_DISCORD_ALERTS"
+    )
+    # The decision journal (tp-journal): what you took or passed on, and the gates it was
+    # checked against. Unset: journal.json under the data root (kept out of git). Two of the
+    # gates are about pace: at most so many trades a day, and a pause for the rest of the day
+    # after so many losses in a row.
+    journal_file: Path | None = Field(default=None, validation_alias="TP_JOURNAL_FILE")
+    journal_max_per_day: int = Field(default=3, ge=1, validation_alias="TP_JOURNAL_MAX_PER_DAY")
+    journal_loss_streak: int = Field(default=3, ge=1, validation_alias="TP_JOURNAL_LOSS_STREAK")
 
     def require_alpaca_keys(self) -> tuple[str, str]:
         if self.alpaca_api_key is None or self.alpaca_secret_key is None:
