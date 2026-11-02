@@ -28,7 +28,8 @@ cp .env.example .env && chmod 600 .env  # git-ignored; readable by you only
 | `TP_JOBS_OFF` | scheduled jobs to turn off, e.g. `options-midday,validation` | optional |
 | `FRED_API_KEY` | makes FRED the first source for VIX and yields (Cboe and the Treasury work without it); free: https://fred.stlouisfed.org/docs/api/api_key.html | optional |
 | `TP_DASHBOARD_TOKEN` | opening the dashboard from another machine | optional |
-| `TP_DISCORD_WEBHOOK_URL` | a Discord message when a scheduled job fails (systemd only) | optional |
+| `TP_DISCORD_WEBHOOK_URL` | Discord messages: a scheduled job that gave up, new ideas, setups on what you hold (`TP_DISCORD_ALERTS` picks which) | optional |
+| `TP_JOURNAL_MAX_PER_DAY`, `TP_JOURNAL_LOSS_STREAK` | the journal's pace gates: trades a day (3), losses in a row before stopping for the day (3) | optional |
 
 Then `uv run tp-data check` confirms the Alpaca keys work.
 

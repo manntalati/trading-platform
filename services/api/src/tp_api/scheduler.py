@@ -25,6 +25,10 @@ minutes when the network was down) until its window closes.
 Each job runs as its own process, the same command you would type, with its output appended to
 ``data/logs/<job>.log``. Only one scheduler is active at a time (a lock under ``data/jobs``);
 another one waits. ``TP_JOBS_OFF`` (comma-separated job names) turns jobs off.
+
+With ``TP_DISCORD_WEBHOOK_URL`` set it posts to Discord (``tp_core.alerts``) when a job gives up
+for its window, and after a recommendations run, the ideas new since the previous session and
+the setups that fired on what you hold, each once.
 """
 
 from __future__ import annotations
@@ -44,6 +48,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import IO, Any
 
+from tp_core.alerts import Alerts
 from tp_core.calendar import (
     NEW_YORK,
     is_session,
@@ -54,7 +59,8 @@ from tp_core.calendar import (
 )
 from tp_core.config import Settings
 from tp_core.storage import Lake, write_json
-from tp_strategies.recommendations import input_stamp, run_paths
+from tp_strategies.recommendations import alerts as run_alerts
+from tp_strategies.recommendations import input_stamp, latest_run, run_paths
 
 log = logging.getLogger(__name__)
 
@@ -66,6 +72,7 @@ RECS_MIN_GAP = timedelta(minutes=10)
 EXTERNAL_GRACE = timedelta(minutes=20)  # for a job cron or systemd also runs
 HEARTBEAT_STALE = timedelta(minutes=3)
 KEEP_WINDOWS = timedelta(days=4)
+KEEP_ALERTED = timedelta(days=10)  # how long an alert's key is remembered (so it's said once)
 NETWORK_WORDS = (
     "ConnectionError",
     "ConnectTimeout",
@@ -443,6 +450,7 @@ class Scheduler:
     clock: Callable[[], datetime] = field(default=lambda: datetime.now(UTC))
     runner: Runner = run_command
     schedules: Callable[[], dict[str, str]] = external_schedules
+    alerts: Alerts | None = None  # None: from the settings (TP_DISCORD_WEBHOOK_URL)
     _lock_file: IO[str] | None = None
     _external: dict[str, str] | None = None
     _external_at: datetime | None = None
@@ -472,6 +480,7 @@ class Scheduler:
             state = {}
         state.setdefault("jobs", {})
         state.setdefault("recommendations", {})
+        state.setdefault("alerted", {})
         return state
 
     def save_state(self, state: dict[str, Any]) -> None:
@@ -588,6 +597,58 @@ class Scheduler:
         cutoff = (now - KEEP_WINDOWS).strftime("%Y%m%dT%H%MZ")
         entry["windows"] = {k: v for k, v in windows.items() if k >= cutoff}
 
+    def _alerts(self) -> Alerts:
+        if self.alerts is None:
+            self.alerts = Alerts.from_settings(self.settings)
+        return self.alerts
+
+    def _gave_up(self, title: str, name: str, attempts: int, message: str) -> None:
+        tries = f"{attempts} {'try' if attempts == 1 else 'tries'}"
+        self._alerts().send(
+            "failures",
+            f"⚠️ **{title}** gave up after {tries}: {message}\n"
+            f"log: {self._shown_log(name)} · `tp-jobs now {name}` to run it again",
+        )
+
+    def _shown_log(self, name: str) -> str:
+        """The log's path for an alert: relative, so it doesn't say whose machine it's on."""
+        try:
+            return str(self.log_path(name).resolve().relative_to(Path.cwd().resolve()))
+        except ValueError:
+            return f"logs/{name}.log under TP_DATA_ROOT"
+
+    def _announce(self, state: dict[str, Any]) -> None:
+        """Alert the latest run's new ideas and setups on holdings not alerted before."""
+        alerts = self._alerts()
+        if not (alerts.wants("ideas") or alerts.wants("holdings")):
+            return
+        run = latest_run(self.lake)
+        if run is None:
+            return
+        # key -> the last day it was in a run: forgotten KEEP_ALERTED after it stops showing up
+        said: dict[str, str] = state["alerted"]
+        today = self.clock().date().isoformat()
+        found = run_alerts(run)
+        heads = {"ideas": "new since the previous session", "holdings": "on what you hold"}
+        for kind, lines in found.items():
+            fresh = {k: v for k, v in lines.items() if f"{kind}:{k}" not in said}
+            said.update({f"{kind}:{k}": today for k in lines if f"{kind}:{k}" in said})
+            if not fresh or not alerts.wants(kind):
+                continue
+            noun = "idea" if len(fresh) == 1 else "ideas"
+            head = (
+                f"💡 **{len(fresh)} {noun}** {heads[kind]}"
+                if kind == "ideas"
+                else f"👀 **{heads[kind].capitalize()}**"
+            )
+            text = "\n".join(
+                [head, *fresh.values(), "`tp-recs show` or the dashboard for the numbers"]
+            )
+            if alerts.send(kind, text):
+                said.update({f"{kind}:{k}": today for k in fresh})
+        cutoff = (self.clock() - KEEP_ALERTED).date().isoformat()
+        state["alerted"] = {k: day for k, day in said.items() if day >= cutoff}
+
     def _execute(
         self, name: str, command: tuple[str, ...], timeout: float, ok_codes: frozenset[int]
     ) -> tuple[bool, bool, str]:
@@ -612,6 +673,7 @@ class Scheduler:
         retry = now + (NETWORK_RETRY if network else RETRY)
         if (attempts >= MAX_ATTEMPTS and not network) or retry >= w.end:
             self._record(state, job.name, w, "gave up", message, now, attempts)
+            self._gave_up(job.title, job.name, attempts, message)
         else:
             self._record(state, job.name, w, "failed", message, now, attempts, retry)
 
@@ -635,6 +697,15 @@ class Scheduler:
                 else {}
             ),
         }
+        # saved first: an alert that goes wrong mustn't lose the run and have it run again
+        self.save_state(state)
+        if status == "gave up":
+            self._gave_up("Recommendations", "recommendations", attempts, message)
+        elif ok:
+            try:
+                self._announce(state)
+            except Exception:
+                log.exception("recommendations: the alerts for the run failed")
 
     def request(self, name: str) -> None:
         """Run ``name`` at the next tick, whatever its windows say."""

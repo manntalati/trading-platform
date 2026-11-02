@@ -323,6 +323,33 @@ def mark_new(run: dict[str, Any], previous: Mapping[str, Any] | None) -> None:
     )
 
 
+def alerts(run: Mapping[str, Any]) -> dict[str, dict[str, str]]:
+    """What a run has to say in an alert, keyed so each is said once: the ideas new since the
+    previous session (``ideas``) and the setups that fired on what you hold (``holdings``).
+    Each maps a key (with the session or the day the setup fired, so the same setup firing
+    again later is said again) to its line."""
+    research = run.get("research") or {}
+    session = _session_of(run).isoformat()
+    ideas: dict[str, str] = {}
+    for k in LISTS:
+        for idea in research.get(k) or []:
+            if not idea.get("new"):
+                continue
+            setup = (idea.get("play") or {}).get("name")
+            structure = _structure(idea["pick"], k) if idea.get("pick") else None
+            what = ", ".join(x for x in (setup, structure) if x)
+            ideas[f"{session}:{k}:{idea['symbol']}"] = f"{LIST_NAMES[k]}: {idea['symbol']}" + (
+                f" ({what})" if what else ""
+            )
+    holdings = {
+        f"{a.get('fired') or session}:{a['symbol']}:{a.get('setup')}": (
+            f"{a['symbol']}: {a.get('title') or a.get('setup')}"
+        )
+        for a in research.get("holding_alerts") or []
+    }
+    return {"ideas": ideas, "holdings": holdings}
+
+
 # -- the log and the track record -----------------------------------------------------------------
 
 
