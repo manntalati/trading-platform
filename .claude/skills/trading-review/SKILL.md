@@ -16,8 +16,8 @@ Then compare:
 - **Followed the gates against overrode a gate.** If overrides do worse, say so plainly.
 - **What was taken against the scorecard.** Is the user picking the better ideas or the worse
   ones? Are they passing on setups that went on to work?
-- **Open trades past their exit plan's date**, from `tp-journal list` and the plan in
-  `tp-recs show`.
+- **Open trades past their exit plan's date**: `tp-journal list` shows each open trade's
+  "out by" date and marks the ones "past its exit date".
 
 Be honest about sample size. A handful of closed trades says very little, so put "too few to
 tell" ahead of any pattern. Don't suggest changing the gates' settings (`TP_JOURNAL_MAX_PER_DAY`,

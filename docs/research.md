@@ -340,7 +340,9 @@ limit that has expired, the most it can lose against `TP_OPTIONS_RISK`, the mone
 against `max_position` in `config/risk.toml`, the buying power, how many you've taken today
 (`TP_JOURNAL_MAX_PER_DAY`), and a losing streak that ended today (`TP_JOURNAL_LOSS_STREAK`). Any of
 those blocks it; a negative modeled edge, an event the options price inside the hold, and the
-idea's own risks only warn. `--override "why"` takes it anyway and keeps the reason, so the
+idea's own risks only warn, and so does a most-it-can-lose that can't be told (calls sold
+uncovered block). The risk and the money tied up are at your `--price`: a fill worse than the
+idea's limit can lose more. `--override "why"` takes it anyway and keeps the reason, so the
 review can show whether overriding paid. Nothing is ordered: you trade at your broker, then write
 it down.
 
@@ -365,8 +367,9 @@ With `TP_DISCORD_WEBHOOK_URL` set, the scheduler posts a line when a job gives u
 and after each recommendations run the ideas new since the previous session and the setups that
 fired on what you hold, each once (it remembers what it said for ten days).
 `TP_DISCORD_ALERTS=failures,holdings` leaves the ideas out. Only names, setups and a job's last
-line of output go to Discord, never balances or sizes. A webhook that's down is logged and the
-jobs carry on.
+line of output go to Discord, never balances or sizes, and the line is scrubbed first: any secret
+from the settings, and a URL's query string or login, becomes `***`. A webhook that's down is
+logged and the jobs carry on.
 
 ## Asking Claude
 

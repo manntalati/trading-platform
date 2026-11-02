@@ -161,6 +161,49 @@ def test_what_warns() -> None:
     assert no_account["risk"] == "warn"
 
 
+def test_the_risk_gate_says_when_it_cant_tell() -> None:
+    unknown = spread(max_loss=None)
+    assert verdicts(check(unknown))["risk"] == "warn"
+    no_stop = shares()
+    no_stop["pick"].pop("risk_per_share")
+    assert verdicts(check(no_stop, units=5))["risk"] == "warn"
+    budget = {k: v for k, v in BUDGET.items() if k != "risk_per_trade"}
+    no_guideline = a_run(spread(), budget=budget)
+    assert verdicts(check(spread(), run=no_guideline))["risk"] == "warn"
+    short_call = spread(
+        kind=None, max_loss=None, short={"contract": "XYZ C", "side": "sell", "right": "C"},
+        entry={"limit": 1.0, "side": "credit", "valid_until": "2026-11-04"},
+    )  # fmt: skip
+    assert verdicts(check(short_call))["risk"] == "block"
+    covered = spread(
+        kind=None,
+        legs=[{"contract": "XYZ C1", "side": "buy", "right": "C"},
+              {"contract": "XYZ C2", "side": "sell", "right": "C"}],
+    )  # fmt: skip
+    assert verdicts(check(covered))["risk"] == "ok"
+
+
+def test_a_worse_fill_moves_the_risk() -> None:
+    idea = spread(max_loss=180.0, capital=180.0)  # $180 at the 1.80 limit: 1.8% of the account
+    idea["pick"]["entry"] = {"limit": 1.8, "side": "debit", "valid_until": "2026-11-04"}
+    at_limit = j.Sizing.of(idea["pick"], 1, None)
+    assert (at_limit.max_loss, at_limit.capital) == (180.0, 180.0)
+    filled = j.Sizing.of(idea["pick"], 1, 2.3)  # paid 50 cents more a share
+    assert filled.entry == 2.3
+    assert filled.max_loss == pytest.approx(230.0)
+    assert filled.capital == pytest.approx(230.0)
+    gates = j.gates(idea, a_run(idea), sizing=filled, entries=[], rules=j.Rules(), today=TODAY,
+                    kill=None)  # fmt: skip
+    assert verdicts(gates)["risk"] == "block"  # 2.3% over the 2% guideline
+
+    credit = spread(max_loss=450.0, capital=450.0)  # a $5 wide put spread sold for 0.50
+    credit["pick"]["entry"] = {"limit": 0.5, "side": "credit", "valid_until": "2026-11-04"}
+    better = j.Sizing.of(credit["pick"], 1, 0.6)  # took ten cents more
+    assert (better.max_loss, better.capital) == (pytest.approx(440.0), pytest.approx(440.0))
+    stock = j.Sizing.of(shares()["pick"], 20, 61.0)  # a dollar over the 60 limit, the same stop
+    assert (stock.max_loss, stock.capital) == (pytest.approx(80.0), pytest.approx(1220.0))
+
+
 def test_shares_are_sized_per_share() -> None:
     s = j.Sizing.of(shares()["pick"], None, None)
     assert (s.units, s.unit, s.max_loss, s.capital, s.multiplier) == (20, "shares", 60, 1200, 1)
@@ -183,11 +226,11 @@ def test_close_and_review() -> None:
     sizing = j.Sizing.of(idea["pick"], 2, 1.4)
     e = j.entry("took", idea, run, at=AT, entries=[], sizing=sizing, checks=check(idea, units=2),
                 override="sized up on purpose")  # fmt: skip
-    assert (e["id"], e["structure"], e["setup"], e["max_loss"]) == (1, "call debit spread",
-                                                                    "pullback", 300.0)  # fmt: skip
+    assert (e["id"], e["structure"], e["setup"]) == (1, "call debit spread", "pullback")
+    assert e["max_loss"] == pytest.approx(280.0)  # filled at 1.40, under the 1.50 limit
     j.close(e, 2.0, at=AT + timedelta(days=3))
     assert e["closed"]["pnl"] == pytest.approx(120.0)  # (2.00 - 1.40) x 2 x 100
-    assert e["closed"]["r"] == pytest.approx(0.4)
+    assert e["closed"]["r"] == pytest.approx(120 / 280)
     with pytest.raises(ValueError, match="already closed"):
         j.close(e, 2.0, at=AT)
 
@@ -251,7 +294,8 @@ def test_the_cli_takes_passes_closes_and_reviews(lake: Lake) -> None:
     lines = out.output.splitlines()
     assert lines[0].startswith("#3")
     assert "earnings soon" in lines[0]
-    assert "open" in lines[1]
+    assert "open, out by 2026-11-20" in lines[1]
+    assert "past its exit date" not in lines[1]
     assert "override: a core holding" in lines[2]
 
     out = runner.invoke(app, ["review"])

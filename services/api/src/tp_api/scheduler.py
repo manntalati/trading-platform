@@ -607,8 +607,15 @@ class Scheduler:
         self._alerts().send(
             "failures",
             f"⚠️ **{title}** gave up after {tries}: {message}\n"
-            f"log: {self.log_path(name)} · `tp-jobs now {name}` to run it again",
+            f"log: {self._shown_log(name)} · `tp-jobs now {name}` to run it again",
         )
+
+    def _shown_log(self, name: str) -> str:
+        """The log's path for an alert: relative, so it doesn't say whose machine it's on."""
+        try:
+            return str(self.log_path(name).resolve().relative_to(Path.cwd().resolve()))
+        except ValueError:
+            return f"logs/{name}.log under TP_DATA_ROOT"
 
     def _announce(self, state: dict[str, Any]) -> None:
         """Alert the latest run's new ideas and setups on holdings not alerted before."""
@@ -690,10 +697,15 @@ class Scheduler:
                 else {}
             ),
         }
+        # saved first: an alert that goes wrong mustn't lose the run and have it run again
+        self.save_state(state)
         if status == "gave up":
             self._gave_up("Recommendations", "recommendations", attempts, message)
         elif ok:
-            self._announce(state)
+            try:
+                self._announce(state)
+            except Exception:
+                log.exception("recommendations: the alerts for the run failed")
 
     def request(self, name: str) -> None:
         """Run ``name`` at the next tick, whatever its windows say."""

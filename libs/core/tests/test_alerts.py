@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import urllib.error
 
 import pytest
 from pydantic import SecretStr
 
-from tp_core.alerts import LIMIT, Alerts, clip
+from tp_core.alerts import LIMIT, Alerts, clip, scrub, secrets_of
 from tp_core.config import Settings
 
 URL = "https://discord.com/api/webhooks/1/x"
@@ -54,7 +55,35 @@ def test_a_bad_webhook_is_logged_not_raised(caplog: pytest.LogCaptureFixture) ->
     assert not Alerts(URL, post=Poster(status=404)).send("failures", "x")
     down = Poster(error=urllib.error.URLError("offline"))
     assert not Alerts(URL, post=down).send("failures", "x")
-    assert caplog.text.count("Discord alert not sent") == 2
+    cut = Poster(error=http.client.IncompleteRead(b"par"))
+    assert not Alerts(URL, post=cut).send("failures", "x")
+    odd = Poster(error=RuntimeError(f"can't post to {URL}"))
+    assert not Alerts(URL, post=odd).send("failures", "x")
+    assert caplog.text.count("Discord alert not sent") == 4
+    assert URL not in caplog.text  # only the error's type is logged
+
+
+def test_secrets_and_url_queries_are_scrubbed() -> None:
+    key, token = "sk-ant-api03-abcdef", "pk_live_123456"
+    settings = Settings(
+        discord_webhook_url=SecretStr(URL),
+        anthropic_api_key=SecretStr(key),
+        dashboard_token=SecretStr(token),
+    )
+    assert {key, token, URL} <= set(secrets_of(settings))
+    post = Poster()
+    alerts = Alerts.from_settings(settings, post=post)
+    alerts.send(
+        "failures",
+        f"401 for https://api.example.com/v1/q?apikey=abc&x=1 with {key}, {token} "
+        f"at {URL} via https://me:pw@host.example.com/x",
+    )
+    content = post.sent[0][1]["content"]
+    assert content == (
+        "401 for https://api.example.com/v1/q?*** with ***, *** at *** via "
+        "https://***@host.example.com/x"
+    )
+    assert scrub("keys k and s stay", ["k", "s"]) == "keys k and s stay"  # too short to scrub
 
 
 def test_long_messages_are_clipped() -> None:

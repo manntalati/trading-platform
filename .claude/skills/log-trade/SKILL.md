@@ -14,9 +14,15 @@ shares, and the fill price per share (for options, the price per share of the co
 
 1. `uv run tp-journal check SYMBOL --units N --price P` and show the user the result.
 2. If nothing blocks: `uv run tp-journal take SYMBOL --units N --price P --note "..."`.
-3. If a gate blocks, tell the user which gate and why. Only add `--override "reason"` when the
-   user gives a reason in their own words. Never make one up, and never override the kill switch
-   on your own initiative. The review keeps overridden trades separate, so the reason matters.
+3. If a gate blocks, tell the user which gate and why. A trade that was placed must still be
+   recorded: leaving it out would make the review look better than the trading was. So ask the
+   user why they went ahead, and add `--override "reason"` in their own words. If the honest
+   answer is that it was placed before the gates were checked, use
+   `--override "placed before checking the gates"`, once the user says that's right. Never make a
+   reason up, and never override the kill switch on your own initiative. The review keeps
+   overridden trades separate, so the reason matters.
+4. If it was placed before checking, suggest `uv run tp-journal check SYMBOL --units N` before
+   ordering next time: the gates can only help ahead of the order.
 
 **Passed on one.** `uv run tp-journal pass SYMBOL --note "why"`. Ask for a one-line why if they
 didn't give one; a pass is worth as much to the review as a trade.

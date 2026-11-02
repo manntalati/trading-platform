@@ -179,6 +179,7 @@ def list_(limit: Annotated[int, typer.Option(help="How many, newest first.")] = 
     if not entries:
         typer.echo("the journal is empty: `tp-journal take` or `tp-journal pass` an idea")
         return
+    today = _now().astimezone(NEW_YORK).date().isoformat()
     for e in reversed(entries[-limit:]):
         at = datetime.fromisoformat(e["at"]).astimezone(NEW_YORK)
         line = f"#{e['id']:<3} {at:%Y-%m-%d} {e['decision']:<6} {e['symbol']:<6} {e['structure']}"
@@ -188,7 +189,11 @@ def list_(limit: Annotated[int, typer.Option(help="How many, newest first.")] = 
             if done and done.get("pnl") is not None:
                 line += f"  closed ${done['pnl']:+,.0f}"
             elif not done:
-                line += "  open"
+                plan = e.get("plan") or {}
+                out_by = plan.get("out_by") or plan.get("sell_by")
+                line += "  open" + (f", out by {out_by}" if out_by else "")
+                if out_by and str(out_by) < today:
+                    line += " (past its exit date)"
         if e.get("override"):
             line += f"  (override: {e['override']})"
         if e.get("note"):

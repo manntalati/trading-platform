@@ -8,6 +8,7 @@ it goes through the gates:
     contract        the idea has no contract or shares to take                       block
     fresh           its entry limit has expired: make a new run                      block
     risk            the most it can lose is over TP_OPTIONS_RISK of the account      block
+                    (or it sells calls it doesn't cover); warn when that can't be told
     position        the money it ties up is over max_position (config/risk.toml)     block
     buying power    it needs more than the account's buying power                    block
     pace            TP_JOURNAL_MAX_PER_DAY trades taken today already                block
@@ -35,7 +36,7 @@ from tp_core.config import Settings
 from tp_core.storage import write_json
 from tp_risk.limits import Limits
 from tp_risk.state import Switch
-from tp_strategies.recommendations import LISTS, _structure
+from tp_strategies.recommendations import LISTS, _structure, legs
 
 Verdict = Literal["ok", "warn", "block"]
 Decision = Literal["took", "passed"]
@@ -113,12 +114,14 @@ def _is_shares(pick: Mapping[str, Any]) -> bool:
 
 @dataclass(frozen=True)
 class Sizing:
-    """What ``units`` contracts (or shares) of an idea's pick would take, in dollars."""
+    """What ``units`` contracts (or shares) of an idea's pick would take, in dollars. At a
+    ``price`` other than the idea's limit the most it can lose and the money it ties up move
+    with it: a debit paid (or a credit received) a dollar worse is a dollar more, per share."""
 
     units: float
     unit: str  # "contracts" or "shares"
     suggested: float
-    entry: float | None  # per share: the limit price
+    entry: float | None  # per share: the fill if given, else the limit price
     side: str  # "debit" (paid) or "credit" (received)
     max_loss: float | None
     capital: float | None
@@ -130,18 +133,26 @@ class Sizing:
         shares = _is_shares(pick)
         suggested = float(size.get("shares" if shares else "contracts") or 0)
         n = units if units is not None else (suggested or 1.0)
-        limit = price if price is not None else _f(entry.get("limit"))
+        limit = _f(entry.get("limit"))
+        fill = price if price is not None else limit
+        side = str(entry.get("side") or "debit")
         if shares:
             per_loss = _f(pick.get("risk_per_share"))
-            per_capital = limit if limit is not None else _f(pick.get("price"))
+            per_capital = fill if fill is not None else _f(pick.get("price"))
         else:
             per_loss, per_capital = _f(pick.get("max_loss")), _f(pick.get("capital"))
+            if fill is not None and limit is not None:  # the pick's figures are at the limit
+                worse = (1 if side == "debit" else -1) * (fill - limit) * MULTIPLIER
+                per_capital = max(per_capital + worse, 0.0) if per_capital is not None else None
+        if per_loss is not None and fill is not None and limit is not None:
+            worse = (1 if side == "debit" else -1) * (fill - limit)
+            per_loss = max(per_loss + worse * (1 if shares else MULTIPLIER), 0.0)
         return cls(
             units=n,
             unit="shares" if shares else "contracts",
             suggested=suggested,
-            entry=limit,
-            side=str(entry.get("side") or "debit"),
+            entry=fill,
+            side=side,
             max_loss=per_loss * n if per_loss is not None else None,
             capital=per_capital * n if per_capital is not None else None,
         )
@@ -156,6 +167,12 @@ class Sizing:
 
 
 # -- the gates ------------------------------------------------------------------------------------
+
+
+def _uncovered(pick: Mapping[str, Any]) -> bool:
+    """Whether the pick sells more calls than it buys: its loss has no ceiling."""
+    calls = [leg for leg in legs(pick) if str(leg.get("right") or "").upper()[:1] == "C"]
+    return sum(1 if leg["side"] == "sell" else -1 for leg in calls) > 0
 
 
 def _streak(entries: Sequence[Mapping[str, Any]]) -> tuple[int, date | None]:
@@ -204,23 +221,28 @@ def gates(
     budget = (run.get("research") or {}).get("budget") or {}
     account = _f(budget.get("account_value"))
     risk_share = _f(budget.get("risk_per_trade"))
-    if not account:
+    if _uncovered(pick):
+        add("risk", "block", "it sells calls it doesn't cover: no limit on what it can lose")
+    elif not account:
         add("risk", "warn", "no account value from the brokerage sync: can't size it")
+    elif sizing.max_loss is None:
+        add("risk", "warn", f"can't tell the most {sizing.amount} can lose: no stop or max loss")
+    elif risk_share is None:
+        add("risk", "warn", "no risk guideline in the run's budget (TP_OPTIONS_RISK): can't judge")
     else:
-        if sizing.max_loss is not None and risk_share is not None:
-            share = sizing.max_loss / account
-            line = (
-                f"{sizing.amount} can lose ${sizing.max_loss:,.0f}, "
-                f"{share:.1%} of the account; the guideline is {risk_share:.0%} (TP_OPTIONS_RISK)"
-            )
-            add("risk", "block" if share > risk_share + 1e-9 else "ok", line)
-        if sizing.capital is not None:
-            share = sizing.capital / account
-            line = (
-                f"ties up ${sizing.capital:,.0f}, {share:.1%} of the account; the limit is "
-                f"{rules.max_position:.0%} (max_position)"
-            )
-            add("position", "block" if share > rules.max_position + 1e-9 else "ok", line)
+        share = sizing.max_loss / account
+        line = (
+            f"{sizing.amount} can lose ${sizing.max_loss:,.0f}, "
+            f"{share:.1%} of the account; the guideline is {risk_share:.0%} (TP_OPTIONS_RISK)"
+        )
+        add("risk", "block" if share > risk_share + 1e-9 else "ok", line)
+    if account and sizing.capital is not None:
+        share = sizing.capital / account
+        line = (
+            f"ties up ${sizing.capital:,.0f}, {share:.1%} of the account; the limit is "
+            f"{rules.max_position:.0%} (max_position)"
+        )
+        add("position", "block" if share > rules.max_position + 1e-9 else "ok", line)
     power = _f(budget.get("buying_power"))
     if power is not None and sizing.capital is not None:
         verdict: Verdict = "block" if sizing.capital > power else "ok"

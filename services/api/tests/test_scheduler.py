@@ -272,5 +272,44 @@ def test_alerts_say_new_ideas_and_holdings_once_and_a_job_that_gave_up(tmp_path:
         clock.at += sched.RETRY
     assert [m for m in post.sent if "gave up" in m] == [
         f"⚠️ **Daily bars** gave up after {sched.MAX_ATTEMPTS} tries: exit 1: ValueError: "
-        f"something odd\nlog: {s.log_path('bars')} · `tp-jobs now bars` to run it again"
+        "something odd\nlog: logs/bars.log · `tp-jobs now bars` to run it again"
     ]
+
+
+def test_a_failure_alert_never_carries_a_secret(tmp_path: Path) -> None:
+    at = ny(FRIDAY, 19)
+    s, runner, clock = make(tmp_path, at)
+    post = Poster()
+    key = "sk-ant-api03-verysecret"
+    settings = s.settings.model_copy(
+        update={
+            "discord_webhook_url": SecretStr("https://discord.test/hook"),
+            "anthropic_api_key": SecretStr(key),
+        }
+    )
+    s.alerts = Alerts.from_settings(settings, post=post)
+    runner.outputs["tp-data bars daily"] = (
+        1, f"HTTPError: 403 for https://data.example.com/bars?token=abc123 (key {key})"
+    )  # fmt: skip
+    for _ in range(sched.MAX_ATTEMPTS):
+        s.step()
+        clock.at += sched.RETRY
+    (alert,) = [m for m in post.sent if "gave up" in m]
+    assert key not in alert
+    assert "abc123" not in alert
+    assert str(tmp_path) not in alert
+    assert "https://data.example.com/bars?*** (key ***)" in alert
+
+
+def test_alerts_that_fail_dont_rerun_recommendations(tmp_path: Path) -> None:
+    at = ny(FRIDAY, 10)
+    s, runner, clock = make(tmp_path, at)
+    s.alerts = Alerts("https://discord.test/hook", post=Poster())
+    write_run(runner.lake, at, swing=[{"new": True}])  # no symbol: building the alert raises
+    assert "recommendations" in s.step()  # and the tick carries on
+    state = s.load_state()
+    assert state["recommendations"]["status"] == "ok"
+    assert "finished_at" in state["recommendations"]
+    clock.at += timedelta(minutes=1)
+    assert "recommendations" not in s.step()
+    assert runner.calls.count("tp-recs run") == 1
