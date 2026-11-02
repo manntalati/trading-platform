@@ -68,10 +68,15 @@ def scrub(text: str, secrets: Iterable[str] = ()) -> str:
     return _URL_QUERY.sub(r"\1?***", text)
 
 
+ACCOUNT_IDS = ("options_account", "snaptrade_client_id")  # plain settings, but never for Discord
+
+
 def secrets_of(settings: Settings) -> tuple[str, ...]:
-    """The value of every secret (``SecretStr``) setting that is set."""
+    """The value of every secret (``SecretStr``) setting that is set, and of the account ids."""
     values = (getattr(settings, name) for name in type(settings).model_fields)
-    return tuple(v.get_secret_value() for v in values if isinstance(v, SecretStr))
+    secrets = tuple(v.get_secret_value() for v in values if isinstance(v, SecretStr))
+    ids = (getattr(settings, name) for name in ACCOUNT_IDS)
+    return secrets + tuple(i for i in ids if i)
 
 
 @dataclass(frozen=True)

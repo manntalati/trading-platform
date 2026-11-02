@@ -170,7 +170,11 @@ class Sizing:
 
 
 def _uncovered(pick: Mapping[str, Any]) -> bool:
-    """Whether the pick sells more calls than it buys: its loss has no ceiling."""
+    """Whether the pick sells more calls than it buys: its loss has no ceiling.
+
+    Counts legs, not contracts: right while every playbook leg is one contract, but a ratio
+    spread (buy 1, sell 2) would pass as covered.
+    """
     calls = [leg for leg in legs(pick) if str(leg.get("right") or "").upper()[:1] == "C"]
     return sum(1 if leg["side"] == "sell" else -1 for leg in calls) > 0
 

@@ -69,19 +69,21 @@ def test_secrets_and_url_queries_are_scrubbed() -> None:
         discord_webhook_url=SecretStr(URL),
         anthropic_api_key=SecretStr(key),
         dashboard_token=SecretStr(token),
+        options_account="Z12345678",
+        snaptrade_client_id="TP-CLIENT-42",
     )
-    assert {key, token, URL} <= set(secrets_of(settings))
+    assert {key, token, URL, "Z12345678", "TP-CLIENT-42"} <= set(secrets_of(settings))
     post = Poster()
     alerts = Alerts.from_settings(settings, post=post)
     alerts.send(
         "failures",
         f"401 for https://api.example.com/v1/q?apikey=abc&x=1 with {key}, {token} "
-        f"at {URL} via https://me:pw@host.example.com/x",
+        f"at {URL} via https://me:pw@host.example.com/x for account Z12345678",
     )
     content = post.sent[0][1]["content"]
     assert content == (
         "401 for https://api.example.com/v1/q?*** with ***, *** at *** via "
-        "https://***@host.example.com/x"
+        "https://***@host.example.com/x for account ***"
     )
     assert scrub("keys k and s stay", ["k", "s"]) == "keys k and s stay"  # too short to scrub
 
