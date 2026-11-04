@@ -15,6 +15,7 @@ RAW_CORPORATE_ACTIONS = "alpaca/corporate_actions"
 CLEAN_STOCK_BARS_1D = "stock_bars_1d"
 QUARANTINE_STOCK_BARS_1D = "stock_bars_1d_quarantine"
 RAW_OPTION_CHAIN_SNAPSHOTS = "alpaca/option_chain_snapshots"
+RAW_STOCK_SNAPSHOTS = "alpaca/stock_snapshots"
 RAW_BROKER_ACCOUNTS = "broker/accounts"
 RAW_BROKER_HOLDINGS = "broker/holdings"
 RAW_BROKER_ACTIVITIES = "broker/activities"
@@ -125,6 +126,27 @@ RAW_OPTION_CHAIN_SCHEMA = pa.schema(
         ("feed", pa.string()),
         ("ingested_at", _TS),
         ("run_id", pa.string()),
+    ]
+)
+
+
+# The underlyings' snapshots taken with each option chain snapshot: the last trade and quote, and
+# the session so far (Alpaca's dailyBar), which is today's provisional bar before the close.
+RAW_STOCK_SNAPSHOT_SCHEMA = pa.schema(
+    [
+        ("snapshot_at", _TS),
+        ("symbol", pa.string()),
+        ("price", pa.float64()),  # last trade
+        ("bid", pa.float64()),
+        ("ask", pa.float64()),
+        ("quote_at", _TS),
+        ("trade_at", _TS),
+        ("day_open", pa.float64()),  # the session so far, from the quotes feed's trades
+        ("day_high", pa.float64()),
+        ("day_low", pa.float64()),
+        ("day_volume", pa.float64()),
+        ("day_at", _TS),  # the daily bar's own timestamp (midnight New York of its session)
+        ("prev_close", pa.float64()),
     ]
 )
 

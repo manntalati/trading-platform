@@ -217,6 +217,36 @@ def options_snapshot(
         raise typer.Exit(code=1)
 
 
+@options_app.command("late")
+def options_late(source: SourceOpt = SourceName.alpaca) -> None:
+    """A quick snapshot 15 minutes before the close: today's bar so far and the chains of the
+    [options] late names (strategy 16's), in seconds, so a setup that enters on the session it
+    fires (at 15:45) sees them in time. Reported under reports/options_late/, apart from the
+    full snapshot, so it doesn't count as the day's closing snapshot."""
+    settings = Settings()
+    try:
+        universes = load_universes(settings.universes_file)
+    except (OSError, ValueError) as exc:
+        _config_error(exc)
+    if not universes.late:
+        typer.echo("no [options] late names in config/universes.toml")
+        raise typer.Exit(code=2)
+    result = options_jobs.run_snapshot(
+        Lake(settings.data_root),
+        make_source(source, settings),
+        list(universes.late),
+        now=now_utc(),
+        max_dte=universes.options_max_dte,
+        strike_window=universes.options_strike_window,
+        report="options_late",
+    )
+    typer.echo(result.summary())
+    for failure in result.failures:
+        typer.echo(f"  FAILED {failure.underlying}: {failure.error}")
+    if not result.ok:
+        raise typer.Exit(code=1)
+
+
 @options_app.command("history")
 def options_history(
     limit: Annotated[

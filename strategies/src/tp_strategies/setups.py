@@ -19,6 +19,14 @@ instead of showing the same strongest names every day.
   close below the 5-day average.
 - ``breakdown``: a new 50-day closing low below the 200-day, the 50-day under the 200-day. Bets
   on the decline going on; out on a close above the 10-day average.
+- ``stress_dip`` (strategy 16): an index fund (QQQ, SPY, IWM, DIA) dips in an uptrend while the
+  VIX says the market is stressed. Evaluated 15 minutes before the close with the live price as
+  the provisional close, entered that session or not at all; a call 14-30 days out at about 0.70
+  delta, out on a close above the 5-day average, at a 40% loss or on the third session.
+  ``stress_dip_research`` is the same rule on sector funds and mega caps (those only with the VIX
+  at 25+ and no results near): ideas for research, tracked apart, not to trade.
+  (``tp_strategies.library.stress_dip``; not calibrated by ``tp-recs calibrate``, whose events
+  are bar closes without the VIX and whose exit grid would replace the strategy's fixed exits.)
 
 Premium selling and cheap volatility are judged on the option chain, not the bars
 (``tp_strategies.playbook``). The upward setups also make stock ideas: shares, with a stop and an
@@ -40,7 +48,7 @@ import pandas as pd
 
 from tp_core.indicators import wilder_rsi
 
-ListName = Literal["swing", "leaps", "bearish", "income", "volatility"]
+ListName = Literal["swing", "leaps", "bearish", "income", "volatility", "stress"]
 Structure = Literal["long_call", "long_put", "leaps_call", "credit", "straddle"]
 
 
@@ -211,8 +219,34 @@ SETUPS: dict[str, Setup] = {
             "30-day implied volatility at most 0.9x the forecast, the term structure not inverted "
             "and no event priced in",
         ),
+        Setup(
+            "stress_dip",
+            "Stress dip in an index fund",
+            "stress",
+            1,
+            3,
+            0,
+            "long_call",
+            Exits(None, -0.4, 3, 7, "above_ma5"),
+            "above the 200-day and RSI(2) under 10 (the 50-day above the 200-day) or a down day "
+            "closing in the bottom fifth of its range, with the previous VIX close above its "
+            "10-day average or at least 20; worked out at 15:45, entered by 15:58",
+        ),
+        Setup(
+            "stress_dip_research",
+            "Stress dip (research only)",
+            "stress",
+            1,
+            3,
+            0,
+            "long_call",
+            Exits(None, -0.4, 3, 7, "above_ma5"),
+            "the stress-dip rule on a sector fund, or on a mega cap with the previous VIX close at "
+            "25+ and no results within 5 sessions; tracked for research, not to trade",
+        ),
     )
 }
+STRESS_SETUPS = ("stress_dip", "stress_dip_research")  # strategy 16: judged at 15:45
 STOCK_SETUPS = ("pullback", "breakout", "leader", "earnings_up")  # the ones with ``stock``
 BAR_SETUPS = (
     "pullback",

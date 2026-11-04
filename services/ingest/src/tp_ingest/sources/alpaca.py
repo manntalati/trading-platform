@@ -393,11 +393,14 @@ def _num(value: Any) -> float | None:
 
 
 def underlying_snapshots_from_raw(raw: dict[str, dict[str, Any]]) -> pd.DataFrame:
-    """Map ``{symbol: {latestTrade: {p, t}, latestQuote: {bp, ap, t}, ...}}``."""
+    """Map ``{symbol: {latestTrade: {p, t}, latestQuote: {bp, ap, t}, dailyBar: {o, h, l, v,
+    t}, prevDailyBar: {c}}}``. The daily bar is the session so far while the market is open."""
     rows = []
     for symbol, snap in raw.items():
         trade = snap.get("latestTrade") or {}
         quote = snap.get("latestQuote") or {}
+        day = snap.get("dailyBar") or {}
+        prev = snap.get("prevDailyBar") or {}
         rows.append(
             {
                 "symbol": symbol,
@@ -406,10 +409,16 @@ def underlying_snapshots_from_raw(raw: dict[str, dict[str, Any]]) -> pd.DataFram
                 "ask": _num(quote.get("ap")),
                 "quote_at": quote.get("t"),
                 "trade_at": trade.get("t"),
+                "day_open": _num(day.get("o")),
+                "day_high": _num(day.get("h")),
+                "day_low": _num(day.get("l")),
+                "day_volume": _num(day.get("v")),
+                "day_at": day.get("t"),
+                "prev_close": _num(prev.get("c")),
             }
         )
     df = pd.DataFrame(rows, columns=list(UNDERLYING_COLUMNS))
-    for col in ("quote_at", "trade_at"):
+    for col in ("quote_at", "trade_at", "day_at"):
         df[col] = pd.to_datetime(df[col], utc=True, format="ISO8601")
     return df
 

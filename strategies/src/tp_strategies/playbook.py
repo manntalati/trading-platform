@@ -32,6 +32,16 @@ the risk guideline. They rank by the setup's drift over the stock's volatility f
 walk-forward ranking held up, where it puts the name today. Bearish setups live on stocks you
 hold are listed as reasons to look at selling (``holding_alerts``).
 
+**Strategy 16, stress-dip calls** (``stress`` list): the index funds dipping in an uptrend while
+the VIX says the market is stressed, worked out only in the last minutes of the session (from 20
+to 2 minutes before the close) on today's bar so far (``tp_core.intraday.provisional_bars``,
+from the late snapshot at 15:45) and the previous session's VIX. The contract is a fixed rule
+(14-30 days, the expiry nearest 21; delta 0.65-0.75, nearest 0.70; spread at most 3% of the mid;
+open interest 500+), not the horizon optimizer, whose numbers are shown for information. The
+entry is a limit at the mid, raised to the mid plus a quarter of the spread 8 minutes before the
+close (never above the ask), cancelled 2 minutes before: entered that session or not at all.
+Sector funds and mega caps (tier 2) are listed as research only.
+
 **News**: every idea carries its name's last five sessions of headlines (``tp_core.news``) and
 their mean sentiment, Claude's scores where it scored them and keyword scores otherwise. News
 the idea's way adds to its score and news against it takes off, by up to ``NEWS_WEIGHT`` with
@@ -52,7 +62,9 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from tp_core.calendar import NEW_YORK, sessions
+from tp_core.calendar import NEW_YORK, is_session, previous_session, session_close, sessions
+from tp_core.intraday import provisional_bars
+from tp_core.macro import load_macro
 from tp_core.news import recent_news
 from tp_core.portfolio import Classifier
 from tp_core.reference import LakeReference
@@ -61,6 +73,7 @@ from tp_core.volatility import chain_spot, iv_history
 from tp_ml import monitor
 from tp_strategies import option_edge as edge
 from tp_strategies.budget import LEVELS, Budget
+from tp_strategies.library import stress_dip as sd
 from tp_strategies.option_edge import Leg, Outlook, Surface
 from tp_strategies.options_research import (
     DISCLAIMER,
@@ -89,7 +102,7 @@ log = logging.getLogger(__name__)
 
 CALIBRATION = "playbook"  # reports/playbook/calibration.json
 STOCKS = "stocks"
-LISTS = ("swing", "leaps", "bearish", "income", "volatility", STOCKS)
+LISTS = ("swing", "leaps", "bearish", "income", "volatility", "stress", STOCKS)
 RICH_RATIO = 1.25
 CHEAP_RATIO = 0.9
 MIN_OPEN_INTEREST = 50
@@ -105,6 +118,16 @@ NEWS_FULL = 4
 NEWS_LEAN = 0.25  # a mean sentiment this far the idea's way (or against it) is said so
 NEWS_BUSY = 8  # headlines in the five sessions: something is going on
 NEWS_ALERT = -0.4  # a held stock's news this bad, from 3+ headlines, is an alert
+LATE_FROM = timedelta(minutes=20)  # strategy 16 is judged from this long before the close ...
+LATE_UNTIL = timedelta(minutes=2)  # ... until this long before (its orders are cancelled then)
+REPRICE = timedelta(minutes=8)  # before the close: the limit goes to the mid + a quarter spread
+STRESS_DTE = (14, 30)
+STRESS_TARGET_DTE = 21
+STRESS_DELTA = (0.65, 0.75)
+STRESS_TARGET_DELTA = 0.70
+STRESS_MAX_SPREAD = 0.03  # of the mid
+STRESS_MIN_OI = 500
+STRESS_RISK = 0.5  # of the premium: what a gap through the 40% stop can cost
 
 
 # -- calibration ----------------------------------------------------------------------------------
@@ -164,6 +187,7 @@ class Name:
     iv_level: float | None  # the usual 30-day implied volatility (a year's median), when known
     earnings: pd.DataFrame | None = None
     next_earnings: date | None = None
+    late: pd.DataFrame | None = None  # strategy 16: the rule's inputs with today's bar so far
 
     @property
     def spot(self) -> float:
@@ -556,6 +580,9 @@ def ideas_for(
     ]
     live += [Active(setups[a.setup.name], a.fired, a.age, a.strength) for a in option_setups(name)]
     out = []
+    for act in stress_setups(name):
+        idea = _stress_idea(name, act, surface, calibration, budget, missed)
+        out += [idea] if idea else []
     for act in live:
         setup = act.setup
         if setup.structure == "credit":
@@ -1152,6 +1179,259 @@ def news_alert(symbol: str, held: str, news: Mapping[str, Any] | None) -> dict[s
     }
 
 
+# -- strategy 16: stress-dip calls ----------------------------------------------------------------
+
+
+def late_window(now: datetime) -> bool:
+    """Whether ``now`` is in the last minutes of a session, when strategy 16 is judged and
+    entered (from ``LATE_FROM`` to ``LATE_UNTIL`` before the close; half days too)."""
+    day = now.astimezone(NEW_YORK).date()
+    if not is_session(day):
+        return False
+    close = session_close(day)
+    return bool(close - LATE_FROM <= now < close - LATE_UNTIL)
+
+
+def late_frame(
+    bars: pd.DataFrame, bar: pd.Series, vix: pd.Series, today: date
+) -> pd.DataFrame | None:
+    """The rule's inputs (``stress_dip.daily``) on the bars before ``today`` with today's bar so
+    far as the last row, and the stress columns from the VIX up to the previous session (a
+    previous close older than the previous session doesn't count as known: not stressed)."""
+    hist = bars[[d.date() < today for d in pd.DatetimeIndex(bars.index)]]
+    if len(hist) < 200:
+        return None
+    row = pd.DataFrame(
+        {k: [float(bar[k])] for k in ("open", "high", "low", "close")},
+        index=pd.DatetimeIndex([pd.Timestamp(today)]),
+    )
+    ind = sd.daily(pd.concat([hist[["open", "high", "low", "close"]], row]))
+    st = sd.stress(vix, ind.index)
+    for column in ("vix_prev", "vix_avg", "vix_date", "stressed"):
+        ind[column] = st[column].to_numpy()
+    when = ind["vix_date"].iloc[-1]
+    if pd.isna(when) or pd.Timestamp(when).date() < previous_session(today):
+        ind.loc[ind.index[-1], "stressed"] = False
+    ind["stressed"] = ind["stressed"].astype(bool)
+    ind["at"] = bar.get("at")
+    return ind
+
+
+def stress_setups(name: Name) -> list[Active]:
+    """Strategy 16 on today's bar so far: ``stress_dip`` on the index funds, and
+    ``stress_dip_research`` on the tier 2 sector funds, and on the tier 2 mega caps only with
+    the previous VIX close at ``sd.TIER2_VIX``+ and no results near."""
+    late = name.late
+    if late is None or late.empty or late.index[-1].date() != name.today:
+        return []
+    last = late.iloc[-1]
+    if not (bool(sd.dip(late).iloc[-1]) and bool(last["stressed"])):
+        return []
+    if name.symbol in sd.INDEX:
+        setup = SETUPS["stress_dip"]
+    elif name.symbol in sd.TIER2_FUNDS:
+        setup = SETUPS["stress_dip_research"]
+    elif name.symbol in sd.TIER2_STOCKS:
+        if not last["vix_prev"] >= sd.TIER2_VIX or _results_near(name):
+            return []
+        setup = SETUPS["stress_dip_research"]
+    else:
+        return []
+    strength = float(np.clip(1 - last["rsi2"] / 100, 0, 1)) if pd.notna(last["rsi2"]) else 0.5
+    return [Active(setup, pd.Timestamp(name.today), 0, strength)]
+
+
+def _results_near(name: Name) -> bool:
+    """Results within ``sd.EARNINGS_SESSIONS`` sessions: just out, expected (when the date is
+    known), or an event the options price within a week."""
+    today = name.today
+    if name.earnings is not None and len(name.earnings):
+        past = pd.to_datetime(name.earnings["session"]).dt.date
+        recent = [d for d in past if d <= today]
+        if recent and len(sessions(max(recent), today)) <= sd.EARNINGS_SESSIONS + 1:
+            return True
+    if name.next_earnings is not None and 0 <= (name.next_earnings - today).days <= 7:
+        return True
+    event = name.analysis["vol"].get("event")
+    by = (event or {}).get("by")
+    return bool(by and (date.fromisoformat(str(by)[:10]) - today).days <= 7)
+
+
+def stress_contract(priced: pd.DataFrame) -> pd.Series | None:
+    """The strategy's fixed contract: a call ``STRESS_DTE`` days out (the expiry nearest
+    ``STRESS_TARGET_DTE``), delta in ``STRESS_DELTA`` (nearest ``STRESS_TARGET_DELTA``), spread
+    at most ``STRESS_MAX_SPREAD`` of the mid, open interest ``STRESS_MIN_OI``+."""
+    oi = priced["open_interest"] if "open_interest" in priced else pd.Series(np.nan, priced.index)
+    c = priced[
+        (priced["right"] == "C")
+        & priced["dte"].between(*STRESS_DTE)
+        & priced["delta"].between(*STRESS_DELTA)
+        & (priced["spread_pct"] <= STRESS_MAX_SPREAD)
+        & (oi >= STRESS_MIN_OI)
+    ]
+    if c.empty:
+        return None
+    days = min(set(c["dte"]), key=lambda d: (abs(d - STRESS_TARGET_DTE), d))
+    g = c[c["dte"] == days]
+    return _nearest(g, (g["delta"] - STRESS_TARGET_DELTA).abs())
+
+
+def late_entry(row: pd.Series, today: date) -> dict[str, Any]:
+    """Work it from the mid; ``REPRICE`` before the close up to the mid plus a quarter of the
+    spread, never above the ask; cancelled ``LATE_UNTIL`` before the close."""
+    close = session_close(today)
+    mid, ask = float(row["mid"]), float(row["ask"])
+    raised = min(mid + (ask - float(row["bid"])) / 4, ask)
+
+    def at(t: timedelta) -> str:
+        return (close - t).astimezone(NEW_YORK).strftime("%H:%M")
+
+    return {
+        "side": "debit",
+        "limit": round(mid, 2),
+        "worst": round(raised, 2),
+        "valid_until": today.isoformat(),
+        "worth_it": True,
+        "reprice_at": at(REPRICE),
+        "cancel_at": at(LATE_UNTIL),
+        "text": (
+            f"Limit {mid:.2f} (the mid) now; at {at(REPRICE)} raise it to {raised:.2f} (mid + a "
+            f"quarter of the spread, never above the ask {ask:.2f}); not filled by "
+            f"{at(LATE_UNTIL)}: cancel it. No entry tomorrow: most of the bounce is overnight."
+        ),
+    }
+
+
+def _stress_idea(
+    name: Name,
+    act: Active,
+    surface: Surface,
+    calibration: Mapping[str, Any] | None,
+    budget: Budget | None,
+    missed: list[dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    assert name.priced is not None
+    assert name.late is not None
+    setup = act.setup
+    row = stress_contract(name.priced)
+    if row is None:
+        log.info("%s: stress dip fired but no contract met the rule", name.symbol)
+        return None
+    outlook = name.outlook(setup, calibration, setup.horizon)
+    best = _candidate("call", [(row, 1)], outlook, surface)
+    if budget is not None and not (budget.allows(best.structure) and budget.affords(need(best))):
+        if missed is not None:
+            missed.append(_missed(name, act, [best], budget))
+        return None
+    view = position_view(best, name)
+    view["entry"] = late_entry(row, name.today)
+    fill = view["entry"]["worst"]  # the track record assumes the raised limit filled
+    view["legs"][0]["price"] = fill
+    view["debit"], view["cost"], view["max_loss"] = fill, fill * 100, fill * 100
+    view["model"] = dict(view["model"]) | {"entry": fill}
+    view["exit"] = exit_plan(setup, view, name, name.today)
+    view["exit"]["stock"] = rule_level(name.late, setup.exits.underlying)
+    if budget is not None:
+        view["size"] = budget.size(fill * 100, STRESS_RISK * fill * 100)
+    last = name.late.iloc[-1]
+    research = setup.name != "stress_dip"
+    return {
+        "symbol": name.symbol,
+        "kind": setup.list,
+        "list": setup.list,
+        "setup": name.analysis["setup"],
+        "play": {
+            "name": setup.name,
+            "title": setup.title,
+            "rule": setup.rule,
+            "fired": name.today.isoformat(),
+            "age": 0,
+            "strength": act.strength,
+            "horizon": setup.horizon,
+            "drift": outlook.drift,
+            "drift_source": "market",
+            "tier": 2 if research else 1,
+            "rsi2": _f(last["rsi2"]),
+            "ibs": _f(last["ibs"]),
+            "vix_prev": _f(last["vix_prev"]),
+            "vix_avg": _f(last["vix_avg"]),
+            "backtest": {},
+        },
+        "score": (0.0 if research else 2.0) + act.strength,
+        "spot": name.spot,
+        "stock": name.analysis["stock"],
+        "vol": name.analysis["vol"],
+        "pick": view,
+        "alternative": None,
+        "why": _stress_why(name, setup, view),
+        "risks": _stress_risks(view, budget, research),
+    }
+
+
+def _stress_why(name: Name, setup: Setup, view: Mapping[str, Any]) -> list[str]:
+    last, leg, model = name.late.iloc[-1], view["legs"][0], view["model"]  # type: ignore[union-attr]
+    at = (
+        pd.Timestamp(last["at"]).tz_convert(NEW_YORK).strftime("%H:%M")
+        if pd.notna(last.get("at"))
+        else "now"
+    )
+    weak = last["ret1"] < 0 and last["ibs"] < sd.IBS_BELOW
+    return [
+        f"{setup.title} (today, at {at}): {setup.rule}.",
+        f"At {last['close']:,.2f} so far: RSI(2) {last['rsi2']:.0f}, IBS {last['ibs']:.2f} "
+        f"({last['ret1']:+.1%} today{', a weak close' if weak else ''}), "
+        f"{last['close'] / last['ma200'] - 1:+.1%} vs the 200-day average. The previous VIX close "
+        f"{last['vix_prev']:.1f} against its 10-day average of {last['vix_avg']:.1f}.",
+        f"The strategy's contract rule: {leg['dte']} days, delta {leg['delta']:.2f}, spread "
+        f"{_pct(leg['spread_pct'])} of the mid, open interest "
+        f"{leg['open_interest'] or 0:,.0f}.",
+        f"The options model, for information only (it values the call at 3 sessions with a "
+        f"market drift): expected {_pct(model['expected_return'], 0, signed=True)}, "
+        f"{_pct(model['prob_profit'], 0)} chance of a profit.",
+        "Entry: " + view["entry"]["text"],
+        "Out on the first close above the 5-day average, at a 40% loss, or on the third session; "
+        "no profit target. The study and its caveats: docs/strategies/16-stress-dip-calls.md.",
+    ]
+
+
+def _stress_risks(view: Mapping[str, Any], budget: Budget | None, research: bool) -> list[str]:
+    out = []
+    if research:
+        out.append(
+            "Research only (tier 2): on real option prices calls bought on single-stock dips "
+            "lost money, and sector funds' spreads are wide. Tracked apart; don't trade it."
+        )
+    out.append(
+        "Judged on the price 15 minutes before the close: the close can undo the signal (in the "
+        "study about 1 in 6 signals at 15:45 weren't there at the close)."
+    )
+    out.append("A gap can blow through the 40% stop: size for losing half the premium.")
+    size = view.get("size")
+    if budget is not None and size and size["over_guideline"]:
+        out.append(
+            f"Half the premium of one contract ({_usd(view['cost'] * STRESS_RISK)}) is over your "
+            f"{budget.risk_per_trade:.0%} a trade (TP_OPTIONS_RISK)."
+        )
+    return out
+
+
+def _one_a_day(ideas: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The stress list, tier 1 first by the lowest RSI(2): only the first is the day's entry
+    (the funds' dips move together)."""
+    ranked = sorted(ideas, key=lambda i: (i["play"].get("tier", 2), i["play"].get("rsi2") or 100))
+    first = next((i for i in ranked if i["play"].get("tier") == 1), None)
+    for idea in ranked:
+        if idea["play"].get("tier") != 1:
+            continue
+        idea["play"]["todays_entry"] = idea is first
+        if idea is not first and first is not None:
+            idea["risks"].append(
+                f"One new entry a day: {first['symbol']} has the lowest RSI(2) "
+                f"({first['play']['rsi2']:.0f}), so it's that one, not this."
+            )
+    return ranked
+
+
 # -- the lists ------------------------------------------------------------------------------------
 
 
@@ -1214,6 +1494,9 @@ def build_lists(
         unique: dict[str, dict[str, Any]] = {}  # one idea per name per list: its best setup
         for idea in sorted(ideas, key=lambda i: -i["score"]):
             unique.setdefault(idea["symbol"], idea)
+        if k == "stress":  # correlated funds: no sector cap, and one entry a day
+            out[k] = _one_a_day(list(unique.values()))
+            continue
         out[k] = _capped(list(unique.values()), groups, per_group, per_list)
     leaps = {i["symbol"] for i in out["leaps"]}
     watch = [w for w in watch if w["symbol"] not in leaps]
@@ -1272,8 +1555,11 @@ def prepare(
     momentum_rank: pd.Series | None = None,
     earnings: pd.DataFrame | None = None,
     rules: Rules | None = None,
+    late_bar: pd.Series | None = None,
+    vix: pd.Series | None = None,
 ) -> Name:
-    """Analyze one name (``options_research.analyze``) and work out what the setups read."""
+    """Analyze one name (``options_research.analyze``) and work out what the setups read;
+    with today's bar so far (``late_bar``) and the VIX, what strategy 16 reads too."""
     closes = bars["close"]
     spot = chain_spot(chain) if chain is not None and not chain.empty else None
     spot = spot or float(closes.iloc[-1])
@@ -1303,6 +1589,11 @@ def prepare(
         year_vol=year_vol(closes),
         iv_level=iv_level(iv_hist),
         earnings=earnings,
+        late=(
+            late_frame(bars, late_bar, vix, now.astimezone(NEW_YORK).date())
+            if late_bar is not None and vix is not None
+            else None
+        ),
     )
 
 
@@ -1335,6 +1626,9 @@ def scan(
     earnings = earnings_by_symbol(lake)
     ranked = model_ranks(lake)
     news = recent_news(lake, wanted, now)
+    late = provisional_bars(lake, today) if late_window(now) else pd.DataFrame()
+    macro = load_macro(lake) if len(late) else pd.DataFrame()
+    vix = macro["VIXCLS"] if "VIXCLS" in macro.columns else None
     names: list[Name] = []
     errors: dict[str, str] = {}
     for symbol in wanted:
@@ -1354,6 +1648,8 @@ def scan(
                     momentum_rank=ranks.get(symbol),
                     earnings=earnings.get(symbol),
                     rules=rules,
+                    late_bar=late.loc[str(symbol)] if symbol in late.index else None,  # type: ignore[arg-type]
+                    vix=vix,
                 )
             )
         except Exception as exc:  # one odd chain must not take the whole scan down

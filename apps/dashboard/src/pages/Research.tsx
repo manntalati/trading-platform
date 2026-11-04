@@ -88,6 +88,11 @@ const KINDS = [
     rule: "Options at most 0.9x the volatility forecast, the term structure not inverted and no event priced in: a straddle that profits from movement either way.",
   },
   {
+    key: "stress",
+    label: "Stress-dip calls",
+    rule: "Strategy 16: QQQ, SPY, IWM or DIA dipping in an uptrend (RSI(2) under 10, or a down day closing near its low) while the VIX is stressed (the previous close above its 10-day average, or 20+). Worked out at 15:45 on the day's price so far: a call 14-30 days out at delta ~0.70, a limit at the mid, raised to mid + a quarter of the spread 8 minutes before the close, cancelled 2 minutes before. Entered that day or not at all; one a day (the lowest RSI(2)). Out on a close above the 5-day average, a 40% loss, or the third session. Sector funds and mega caps are listed as research only. Empty outside the last minutes of the session.",
+  },
+  {
     key: "stocks",
     label: "Stocks",
     rule: "Shares on the upward setups (a pullback in an uptrend, a breakout from a squeeze, a trend leader at its 50-day, an earnings beat), any name with daily bars: a limit near the price, a stop and an optional target a few ATRs away, a time stop and the setup's stock-side exit, all chosen by the backtest, and as many shares as your buying power and risk guideline allow. Ranked by the setup's drift over the stock's volatility, and the ML ranker where it has held up.",
@@ -230,6 +235,7 @@ const LIST_LABEL: Record<IdeaList, string> = {
   bearish: "Bearish",
   income: "Premium",
   volatility: "Volatility",
+  stress: "Stress dip",
   stocks: "Stocks",
 };
 

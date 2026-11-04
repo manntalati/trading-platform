@@ -8,6 +8,8 @@ windows on the exchange calendar, in New York time, on trading days:
     broker           every hour, 07:30 to 22:30  Fidelity through SnapTrade (once linked)
     options-midday   12:30 to 30 min before the close   option chains during the day
     options-close    15 minutes before the close  the plan's daily snapshot
+    options-late     15 minutes before the close  today's bar so far and the strategy 16 names'
+                                                 chains, then recommendations at once
     bars             18:30 to the next open      daily bars
     news             07:30, 12:15 and 18:45      headlines; Claude scores them (TP_NEWS_SCORING)
     models           19:30 to the next open      the ML strategies' models: retrain, drift, accuracy
@@ -25,6 +27,9 @@ minutes when the network was down) until its window closes.
 Each job runs as its own process, the same command you would type, with its output appended to
 ``data/logs/<job>.log``. Only one scheduler is active at a time (a lock under ``data/jobs``);
 another one waits. ``TP_JOBS_OFF`` (comma-separated job names) turns jobs off.
+
+A job with ``then_recs`` (the late snapshot) makes the recommendations as soon as it succeeds,
+so an idea that has to be entered before the close is listed, and alerted, within a minute.
 
 With ``TP_DISCORD_WEBHOOK_URL`` set it posts to Discord (``tp_core.alerts``) when a job gives up
 for its window, and after a recommendations run, the ideas new since the previous session and
@@ -133,6 +138,13 @@ def _options_close(day: date) -> list[tuple[datetime, datetime]]:
     return [(close - timedelta(minutes=15), close)]
 
 
+def _options_late(day: date) -> list[tuple[datetime, datetime]]:
+    """From 15 minutes before the close to 3 minutes before: worth nothing once entries on the
+    session are over (strategy 16 enters by 2 minutes before the close)."""
+    close = session_close(day)
+    return [(close - timedelta(minutes=15), close - timedelta(minutes=3))]
+
+
 def _bars(day: date) -> list[tuple[datetime, datetime]]:
     start = max(ny(day, 18, 30), session_close(day) + timedelta(hours=2))
     return [(start, session_open(next_session(day)) - timedelta(minutes=30))]
@@ -215,6 +227,7 @@ class Job:
     needs: Callable[[Settings], str | None] = lambda s: None  # why it can't run yet
     ok_codes: frozenset[int] = frozenset({0})
     timeout: float = 3600.0
+    then_recs: bool = False  # make the recommendations right after it, not at the next tick
 
     def windows_around(self, now: datetime) -> list[Window]:
         spans = (
@@ -356,6 +369,17 @@ JOBS: tuple[Job, ...] = (
         weekly=_weekly,
         ok_codes=frozenset({0, 1}),
         timeout=4 * 3600.0,
+    ),
+    Job(
+        "options-late",
+        "Late snapshot (strategy 16)",
+        "15 minutes before the close, then recommendations",
+        ("tp-data", "options", "late"),
+        written_since(REPORTS / "options_late", "*.json"),
+        _options_late,
+        needs=_needs_alpaca,
+        timeout=600.0,
+        then_recs=True,
     ),
 )
 RECS_COMMAND = ("tp-recs", "run")
@@ -550,7 +574,8 @@ class Scheduler:
                 if other and now < w.start + grace:
                     continue  # give cron/systemd its turn first
                 out.append(w)
-        return out
+        then = {j.name for j in self.jobs if j.then_recs}
+        return sorted(out, key=lambda w: w.job not in then)  # the time-critical ones first
 
     def recs_due(self, now: datetime, state: dict[str, Any]) -> str | None:
         """A stamp of the inputs when new recommendations are due, else ``None``."""
@@ -669,6 +694,12 @@ class Scheduler:
         now = self.clock()
         if ok:
             self._record(state, job.name, w, "ok", message, now, attempts)
+            if job.then_recs and "recommendations" not in self.off():
+                self.save_state(state)
+                stamp = hashlib.sha1(
+                    json.dumps(input_stamp(self.lake), sort_keys=True).encode()
+                ).hexdigest()
+                self.run_recommendations(stamp, state)  # the ideas now, not after RECS_MIN_GAP
             return
         retry = now + (NETWORK_RETRY if network else RETRY)
         if (attempts >= MAX_ATTEMPTS and not network) or retry >= w.end:

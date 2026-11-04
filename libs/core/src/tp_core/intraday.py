@@ -6,6 +6,10 @@ UTC), and ``clean/stock_bars_5m/symbol=<SYM>/part.parquet`` rebuilt from all of 
 download winning per symbol and bar. Only bars that start between 9:30 and 16:00 New York are
 kept. Prices are raw (not adjusted for splits or dividends): fine within a day, which is all
 intraday research here needs.
+
+``provisional_bars`` reads today's bar so far from the underlyings' snapshots the option chain
+snapshots store (``raw/alpaca/stock_snapshots``: Alpaca's dailyBar and last trade), for rules
+that act before the close on the session they fire (strategy 16 at 15:45).
 """
 
 from __future__ import annotations
@@ -16,7 +20,7 @@ from datetime import date, time
 import pandas as pd
 
 from tp_core.calendar import NEW_YORK
-from tp_core.schemas import RAW_BARS_SCHEMA
+from tp_core.schemas import RAW_BARS_SCHEMA, RAW_STOCK_SNAPSHOT_SCHEMA, RAW_STOCK_SNAPSHOTS
 from tp_core.storage import Lake, read_parquet_dir, write_parquet
 
 RAW_DATASET = "alpaca/stock_bars_{minutes}m"
@@ -110,3 +114,34 @@ def load_intraday(
         df = df[df["session"] <= end]
     out: pd.DataFrame = df[list(COLUMNS)].sort_values(["symbol", "timestamp"])
     return out.reset_index(drop=True)
+
+
+def provisional_bars(lake: Lake, day: date, symbols: Iterable[str] | None = None) -> pd.DataFrame:
+    """Today's bar so far per symbol (index), from the latest underlying snapshot of ``day``:
+    ``open``, ``high``, ``low`` (the session's trades so far on the quotes feed), ``close`` (the
+    last trade, else the bid-ask middle), ``prev_close`` and ``at`` (when the
+    snapshot was taken). Only snapshots whose daily bar is ``day``'s session; empty when there
+    are none."""
+    path = lake.raw_dir(RAW_STOCK_SNAPSHOTS) / f"snapshot_date={day.isoformat()}"
+    df = read_parquet_dir(path, RAW_STOCK_SNAPSHOT_SCHEMA)
+    columns = ["open", "high", "low", "close", "prev_close", "at"]
+    if df.empty:
+        return pd.DataFrame(columns=columns)
+    if symbols is not None:
+        df = df[df["symbol"].isin(list(symbols))]
+    bar_day = pd.to_datetime(df["day_at"], utc=True).dt.tz_convert(NEW_YORK).dt.date
+    df = df[bar_day == day]
+    df = df.sort_values("snapshot_at").drop_duplicates("symbol", keep="last")
+    close = df["price"].fillna((df["bid"] + df["ask"]) / 2)
+    out = pd.DataFrame(
+        {
+            "open": df["day_open"].to_numpy(),
+            "high": pd.concat([df["day_high"], close], axis=1).max(axis=1).to_numpy(),
+            "low": pd.concat([df["day_low"], close], axis=1).min(axis=1).to_numpy(),
+            "close": close.to_numpy(),
+            "prev_close": df["prev_close"].to_numpy(),
+            "at": df["snapshot_at"].to_numpy(),
+        },
+        index=pd.Index(df["symbol"], name="symbol"),
+    )
+    return out[out[["open", "high", "low", "close"]].notna().all(axis=1)]

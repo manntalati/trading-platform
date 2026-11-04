@@ -106,3 +106,19 @@ def test_underlying_quote_failure_still_stores_chains(
     chain = load_chain_snapshots(lake, "SPY")
     assert len(chain) > 0
     assert chain["underlying_price"].isna().all()
+
+
+def test_snapshot_keeps_the_session_so_far_for_late_rules(lake: Lake) -> None:
+    from tp_core.intraday import provisional_bars
+
+    source = FakeSource(as_of=date(2024, 7, 12))
+    run_snapshot(lake, source, ["SPY", "QQQ"], now=NOW, max_dte=10, report="options_late")
+    bars = provisional_bars(lake, date(2024, 7, 12))
+    assert sorted(bars.index) == ["QQQ", "SPY"]
+    spy = bars.loc["SPY"]
+    assert spy["low"] <= spy["close"] <= spy["high"]
+    assert spy["open"] > 0
+    assert spy["prev_close"] > 0
+    assert provisional_bars(lake, date(2024, 7, 11)).empty  # another day's: nothing
+    assert list(lake.reports_dir("options_late").glob("*.json"))  # its own report
+    assert not list(lake.reports_dir("options_snapshot").glob("*.json"))

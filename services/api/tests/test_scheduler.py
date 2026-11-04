@@ -313,3 +313,19 @@ def test_alerts_that_fail_dont_rerun_recommendations(tmp_path: Path) -> None:
     clock.at += timedelta(minutes=1)
     assert "recommendations" not in s.step()
     assert runner.calls.count("tp-recs run") == 1
+
+
+def test_the_late_snapshot_comes_first_and_makes_the_ideas_at_once(tmp_path: Path) -> None:
+    s, runner, clock = make(tmp_path, ny(FRIDAY, 15, 40))
+    runner.writes["tp-data options late"] = "reports/options_late/x.json"
+    s.step()
+    assert "tp-data options late" not in runner.calls  # not before 15:45
+    runner.calls.clear()
+    clock.at = ny(FRIDAY, 15, 46)  # a recommendations run 6 minutes ago would hold the next one
+    s.step()
+    assert runner.calls[:2] == ["tp-data options late", "tp-recs run"]
+    clock.at = ny(FRIDAY, 15, 58)  # entries are over: too late to bother
+    late = next(j for j in sched.JOBS if j.name == "options-late")
+    assert not [w for w in late.windows_around(clock.at) if w.start <= clock.at < w.end]
+    half_day = date(2024, 11, 29)
+    assert sched._options_late(half_day) == [(ny(half_day, 12, 45), ny(half_day, 12, 57))]

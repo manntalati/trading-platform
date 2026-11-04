@@ -932,7 +932,7 @@ export interface WatchItem {
   text: string;
 }
 
-export type IdeaList = "swing" | "leaps" | "bearish" | "income" | "volatility" | "stocks";
+export type IdeaList = "swing" | "leaps" | "bearish" | "income" | "volatility" | "stress" | "stocks";
 
 // the stored run a /api/research answer comes from (tp_strategies/recommendations.py)
 export interface ResearchRun {
@@ -956,6 +956,7 @@ export interface Research {
   bearish: ResearchIdea[];
   income: ResearchIdea[];
   volatility: ResearchIdea[];
+  stress?: ResearchIdea[]; // runs stored before strategy 16 lack it
   stocks?: ResearchIdea[]; // runs stored before stock ideas lack it
   holding_alerts?: HoldingAlert[];
   model_rank?: ModelRankInfo | null;
