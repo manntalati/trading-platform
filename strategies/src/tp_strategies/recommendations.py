@@ -43,7 +43,9 @@ import pyarrow as pa
 from tp_core.bars import close_matrix, load_bars
 from tp_core.calendar import NEW_YORK
 from tp_core.config import Universes
+from tp_core.fills import fills_path, is_option, with_fills
 from tp_core.macro import risk_free_rate
+from tp_core.occ import parse_occ
 from tp_core.pnl import option_label
 from tp_core.portfolio import CASH_KIND, Classifier, held_symbols, holdings_table, latest_snapshot
 from tp_core.schemas import RAW_OPTION_CHAIN_SCHEMA
@@ -110,9 +112,11 @@ def research_symbols(lake: Lake, universes: Universes) -> list[str]:
     )
 
 
-def held_summary(lake: Lake, classifier: Classifier) -> dict[str, str]:
-    """What you hold per underlying, in words ("40 shares, 2 x XYZ Jan 16 '26 $50 Call")."""
-    snap = latest_snapshot(lake)
+def held_summary(lake: Lake, classifier: Classifier, now: datetime | None = None) -> dict[str, str]:
+    """What you hold per underlying, in words ("40 shares, 2 x XYZ Jan 16 '26 $50 Call"), with
+    the trades you recorded that the sync doesn't show yet (``tp_core.fills``) and saying so:
+    "60 shares (20 bought, not synced yet)"."""
+    snap, states = with_fills(lake, latest_snapshot(lake), now)
     if snap.empty:
         return {}
     table = holdings_table(snap, classifier)
@@ -125,7 +129,18 @@ def held_summary(lake: Lake, classifier: Classifier) -> dict[str, str]:
             out.setdefault(underlying, []).append(f"{qty:g} x {label}")
         else:
             out.setdefault(underlying, []).append(f"{qty:g} shares")
-    return {k: ", ".join(v) for k, v in out.items()}
+    for state in states:
+        if not state.counts_holding:
+            continue
+        for leg in state.fill["legs"]:
+            qty, symbol = float(leg["quantity"]), str(leg["symbol"])
+            option = is_option(symbol)
+            what = f"{abs(qty):g} x {option_label(symbol)}" if option else f"{abs(qty):g} shares"
+            underlying = parse_occ(symbol).root if option else symbol
+            done = "bought" if qty > 0 else "sold"
+            out.setdefault(underlying, []).append(f"({what} {done}, not synced yet)")
+    # all of it sold: only the note is left, and it isn't held any more
+    return {k: ", ".join(v) for k, v in out.items() if any("not synced" not in x for x in v)}
 
 
 # -- inputs: has anything changed since the last run? ---------------------------------------------
@@ -156,6 +171,7 @@ def input_stamp(lake: Lake) -> dict[str, str | None]:
         "news": _newest(lake.reports_dir("news"), "*.json"),
         "news_scores": _newest(lake.reports_dir("news_scores"), "*.json"),
         "broker": _newest(newest_day, "*.parquet") if newest_day is not None else None,
+        "fills": _newest(fills_path(lake).parent, fills_path(lake).name),
     }
 
 
@@ -198,7 +214,7 @@ def make_run(
         chains=chains,
         now=now,
         rate=risk_free_rate(lake, default_rate),
-        held=held_summary(lake, classifier),
+        held=held_summary(lake, classifier, now),
         calibration=load_calibration(lake),
         budget=budget,
     )

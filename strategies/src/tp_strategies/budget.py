@@ -14,18 +14,29 @@ sync (``tp-broker sync``), and how many contracts of an idea fit.
   contract risks more than that, it's still one contract, flagged.
 - **Approval level**: ``TP_OPTIONS_LEVEL`` leaves out what the broker won't let the account
   trade (``LEVELS``, after Fidelity's tiers).
+- **Trades the sync doesn't show yet** (``tp_core.fills``): a sale you recorded adds its
+  proceeds to the buying power at once, and a purchase takes its cost off, until a sync shows
+  them; ``pending`` is that money, already inside ``buying_power``.
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from typing import Any
 
 import pandas as pd
 
 from tp_core.config import Settings
-from tp_core.portfolio import CASH_KIND, Classifier, account_cash, latest_snapshot
+from tp_core.fills import pending_cash, with_fills
+from tp_core.portfolio import (
+    CASH_KIND,
+    Classifier,
+    PortfolioSnapshot,
+    account_cash,
+    latest_snapshot,
+)
 from tp_core.storage import Lake
 
 PAPER_SOURCES = frozenset({"alpaca"})
@@ -57,6 +68,8 @@ class Budget:
     options_level: int | None = None
     as_of: str | None = None  # when the broker last reported it
     paper: bool = False
+    pending: float = 0.0  # inside buying_power: recorded trades the sync doesn't show yet
+    pending_fills: int = 0
 
     @property
     def risk_cap(self) -> float:
@@ -93,17 +106,11 @@ class Budget:
         return asdict(self) | {"risk_cap": self.risk_cap}
 
 
-def budget_from_lake(
-    lake: Lake,
-    *,
-    account: str | None = None,
-    risk_per_trade: float = 0.02,
-    options_level: int | None = None,
-    classifier: Classifier | None = None,
-) -> Budget | None:
-    """The budget from the latest brokerage sync; None before the first (or if ``account``
-    matches none)."""
-    snap = latest_snapshot(lake)
+def choose_account(
+    snap: PortfolioSnapshot, account: str | None = None, classifier: Classifier | None = None
+) -> tuple[float, float, pd.Series] | None:
+    """The account ideas are sized for, with its buying power and value: the one ``account``
+    names, else the one with the most buying power (real accounts before paper ones)."""
     if snap.empty:
         return None
     accounts = snap.accounts
@@ -119,13 +126,59 @@ def budget_from_lake(
     if account:
         wanted = account.strip().lower()
         rows = [r for r in rows if _matches(r[2], wanted)]
-    if not rows:
+    return max(rows, key=lambda r: r[0]) if rows else None
+
+
+def fill_account(
+    snap: PortfolioSnapshot,
+    *,
+    account: str | None = None,
+    symbol: str | None = None,
+    default: str | None = None,
+    classifier: Classifier | None = None,
+) -> pd.Series | None:
+    """The account a trade you record went through: the one ``account`` names; else, for a
+    ``symbol`` only one account holds, that one (a sale of something you held); else the
+    account ideas are sized for (``default``: TP_OPTIONS_ACCOUNT)."""
+    if account:
+        chosen = choose_account(snap, account, classifier)
+        return chosen[2] if chosen else None
+    h = snap.holdings
+    if symbol and not h.empty:
+        mine = h[h["symbol"].astype(str).str.upper() == symbol.upper()]
+        holders = mine[["source", "account_id"]].drop_duplicates()
+        if len(holders) == 1:
+            a = snap.accounts
+            row = a[(a["source"] == holders.iloc[0]["source"])
+                    & (a["account_id"] == holders.iloc[0]["account_id"])]  # fmt: skip
+            if len(row):
+                found: pd.Series = row.iloc[0]
+                return found
+    chosen = choose_account(snap, default, classifier)
+    return chosen[2] if chosen else None
+
+
+def budget_from_lake(
+    lake: Lake,
+    *,
+    account: str | None = None,
+    risk_per_trade: float = 0.02,
+    options_level: int | None = None,
+    classifier: Classifier | None = None,
+    now: datetime | None = None,
+) -> Budget | None:
+    """The budget from the latest brokerage sync, with the recorded trades it doesn't show yet;
+    None before the first sync (or if ``account`` matches none)."""
+    snap, states = with_fills(lake, latest_snapshot(lake), now)
+    chosen = choose_account(snap, account, classifier)
+    if chosen is None:
         return None
-    power, value, a = max(rows, key=lambda r: r[0])
+    power, value, a = chosen
     name = str(a["account_name"]) if pd.notna(a["account_name"]) else "Account"
     masked = a.get("account_number_masked")
     label = f"{name} {masked}" if isinstance(masked, str) and masked else name
     taken = pd.Timestamp(a["taken_at"])
+    pending, count = pending_cash(states, str(a["source"]), str(a["account_id"]))
     return Budget(
         buying_power=max(power, 0.0),
         account_value=value,
@@ -134,6 +187,8 @@ def budget_from_lake(
         options_level=options_level,
         as_of=taken.isoformat() if pd.notna(taken) else None,
         paper=str(a["source"]) in PAPER_SOURCES,
+        pending=pending,
+        pending_fills=count,
     )
 
 

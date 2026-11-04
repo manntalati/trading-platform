@@ -318,6 +318,14 @@ def entry(
     }
     if decision == "took" and sizing is not None and pick:
         out |= {
+            "legs": (
+                [{"symbol": str(idea["symbol"]).upper(), "side": "buy", "price": sizing.entry}]
+                if _is_shares(pick)
+                else [
+                    {"symbol": leg["contract"], "side": leg["side"], "price": leg.get("price")}
+                    for leg in legs(pick)
+                ]
+            ),
             "units": sizing.units,
             "unit": sizing.unit,
             "suggested": sizing.suggested,
@@ -329,6 +337,30 @@ def entry(
             "closed": None,
         }
     return out
+
+
+def fill_legs(
+    e: Mapping[str, Any], *, closing: bool, price: float | None = None
+) -> tuple[list[dict[str, Any]], float] | None:
+    """The legs and the money of a taken trade's fill (``tp_core.fills``): opening at its entry,
+    or ``closing`` at ``price``. None for an entry recorded before legs were kept."""
+    recorded = e.get("legs")
+    each = price if closing else _f(e.get("entry"))
+    if not recorded or each is None:
+        return None
+    units, mult = float(e["units"]), 1 if e.get("unit") == "shares" else MULTIPLIER
+    sign = -1 if closing else 1  # closing undoes each leg
+    out = [
+        {
+            "symbol": leg["symbol"],
+            "quantity": sign * units * (1 if leg["side"] == "buy" else -1),
+            # each leg's own price where it's known (a spread's net is in the cash)
+            "price": each if len(recorded) == 1 else (_f(leg.get("price")) or 0.0),
+        }
+        for leg in recorded
+    ]
+    paid = (1 if e.get("side") == "debit" else -1) * each * units * mult
+    return out, (paid if closing else -paid)
 
 
 def close(e: dict[str, Any], price: float, *, at: datetime, note: str | None = None) -> None:

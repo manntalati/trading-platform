@@ -45,6 +45,16 @@ export async function postJson<T>(path: string, body: unknown): Promise<T> {
   return (await res.json()) as T;
 }
 
+/** DELETE for removing something the dashboard recorded (same header as ``postJson``). */
+export async function deleteJson<T>(path: string): Promise<T> {
+  const token = dashboardToken();
+  const headers: Record<string, string> = { "X-TP-Client": "dashboard" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(path, { method: "DELETE", headers });
+  if (!res.ok) throw new ApiError(res.status, detail(await res.text()) || res.statusText);
+  return (await res.json()) as T;
+}
+
 /** FastAPI errors arrive as {"detail": "..."} (or a list of validation problems). */
 function detail(text: string): string {
   try {

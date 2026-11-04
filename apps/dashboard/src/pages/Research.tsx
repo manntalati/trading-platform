@@ -28,6 +28,7 @@ import {
   type TrackRecord,
   type TrackedRecommendation,
 } from "../types";
+import { RecordedTrades } from "../components/fills";
 import Ideas from "./Ideas";
 import { BudgetLine, HoldingAlerts, IdeaCard, ModelRankLine, NewsList, OutOfReachList, PlayLine, WatchList } from "./Playbook";
 import { PriceHistory } from "./Market";
@@ -151,6 +152,7 @@ function OptionsIdeas() {
         {r.iv_history_days < 20 ? `: ${r.iv_history_days} so far, so implied vs realized volatility stands in.` : "."}{" "}
         Add your own tickers in <code>config/universes.local.toml</code>, or <a href="#/research/lookup">look one up</a> to fetch it now.
       </div>
+      <RecordedTrades onChange={data.reload} />
       <div className="toolbar">
         {KINDS.map((k) => (
           <button key={k.key} aria-pressed={kind === k.key} onClick={() => setKind(k.key)}>

@@ -10,11 +10,17 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
+from tp_broker.fake import FakeBroker
+from tp_broker.jobs import run_sync
+from tp_core.fills import load_fills
+from tp_core.portfolio import Classifier
 from tp_core.storage import Lake
 from tp_risk.state import FileRiskState, Switch
 from tp_strategies import journal as j
 from tp_strategies import journal_cli
+from tp_strategies.budget import budget_from_lake
 from tp_strategies.journal_cli import app
+from tp_strategies.recommendations import held_summary
 
 TODAY = date(2026, 11, 2)
 AT = datetime(2026, 11, 2, 15, 0, tzinfo=UTC)  # 10:00 in New York
@@ -317,3 +323,52 @@ def test_the_cli_without_a_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     out = runner.invoke(app, ["check", "XYZ"])
     assert out.exit_code == 1
     assert "tp-recs run" in out.output
+
+
+@pytest.fixture
+def synced(lake: Lake) -> Lake:
+    """The demo brokerage synced an hour before: Individual …1234 has $3,000 of buying power,
+    40 AAPL and 25 MSFT."""
+    run_sync(lake, FakeBroker(price_of=lambda s: 100.0, as_of=TODAY), now=AT - timedelta(hours=1))
+    return lake
+
+
+def test_a_sale_you_record_counts_in_the_ideas_until_the_sync_shows_it(synced: Lake) -> None:
+    before = budget_from_lake(synced, now=AT)
+    assert before is not None
+    assert before.buying_power == pytest.approx(3000.0)
+    out = runner.invoke(app, ["trade", "sell", "msft", "25", "101.5", "--note", "freeing cash"])
+    assert out.exit_code == 0, out.output
+    assert "fill #1: $2,537.50 received in Fidelity (demo) …1234" in out.output
+
+    after = budget_from_lake(synced, now=AT)
+    assert after is not None
+    assert after.buying_power == pytest.approx(3000.0 + 25 * 101.5)  # the proceeds, at once
+    assert (after.pending, after.pending_fills) == (pytest.approx(2537.5), 1)
+    held = held_summary(synced, Classifier(sectors={}, funds={}), AT)
+    assert "MSFT" not in held  # sold: no longer held for the ideas
+    assert held["AAPL"].startswith("40 shares")
+
+    out = runner.invoke(app, ["pending"])
+    assert out.exit_code == 0, out.output
+    assert "pending  -25 MSFT  $+2,537.50 (counted)" in out.output
+    assert runner.invoke(app, ["pending", "--drop", "1"]).exit_code == 0
+    again = budget_from_lake(synced, now=AT)
+    assert again is not None
+    assert again.buying_power == pytest.approx(3000.0)
+
+
+def test_taking_and_closing_an_idea_record_its_fills(synced: Lake) -> None:
+    out = runner.invoke(app, ["take", "KO", "--override", "a core holding", "--price", "59.5"])
+    assert out.exit_code == 0, out.output
+    assert "fill #1: $1,190.00 paid" in out.output  # 20 x 59.50
+    out = runner.invoke(app, ["close", "1", "62"])
+    assert out.exit_code == 0, out.output
+    assert "fill #2: $1,240.00 received" in out.output
+    fills = load_fills(synced)
+    assert [f["legs"][0]["quantity"] for f in fills] == [20.0, -20.0]
+    assert fills[0]["journal_id"] == 1
+    skipped = runner.invoke(app, ["take", "KO", "--override", "again", "--no-fill"])
+    assert skipped.exit_code == 0, skipped.output
+    assert "fill #" not in skipped.output
+    assert len(load_fills(synced)) == 2

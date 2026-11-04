@@ -736,6 +736,28 @@ export interface Budget {
   options_level: number | null;
   as_of: string | null;
   paper: boolean;
+  pending?: number; // inside buying_power: trades you recorded that the sync doesn't show yet
+  pending_fills?: number;
+}
+
+// /api/fills (services/api/src/tp_api/fills.py): trades recorded before the sync shows them
+export interface RecordedFill {
+  id: number;
+  at: string;
+  account: string;
+  legs: { symbol: string; quantity: number; price: number }[];
+  cash: number; // + received, - paid
+  settles: string;
+  note: string | null;
+  journal_id: number | null;
+  status: "pending" | "settling" | "synced" | "stale";
+  counts: boolean; // still counted in the ideas' buying power
+}
+
+export interface FillsView {
+  fills: RecordedFill[];
+  accounts: { key: string; label: string }[];
+  synced: boolean; // a brokerage sync exists to count them against
 }
 
 export interface PlaySize {
