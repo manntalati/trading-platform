@@ -403,7 +403,15 @@ export function BudgetLine({ budget }: { budget: Budget | null | undefined }) {
       {budget.paper ? " (paper)" : ""}: buying power <strong>{money(budget.buying_power)}</strong>, at most {pct(budget.risk_per_trade, 0)} of{" "}
       {money(budget.account_value)} ({money(budget.risk_cap)}) at risk a trade
       {budget.options_level != null ? `, options level ${budget.options_level}` : ""}
-      {budget.as_of ? ` (synced ${new Date(budget.as_of).toLocaleString()})` : ""}.{" "}
+      {budget.as_of ? ` (synced ${new Date(budget.as_of).toLocaleString()})` : ""}
+      {budget.pending_fills ? (
+        <>
+          , {budget.pending && budget.pending >= 0 ? "including" : "after"} <strong>{money(Math.abs(budget.pending ?? 0))}</strong>{" "}
+          {budget.pending && budget.pending >= 0 ? "from" : "for"} {budget.pending_fills} trade{budget.pending_fills === 1 ? "" : "s"} you recorded that Fidelity's numbers
+          don't show yet
+        </>
+      ) : null}
+      .{" "}
     </>
   );
 }

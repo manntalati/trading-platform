@@ -16,6 +16,7 @@ from tp_api.app import QuoteMode, create_app
 from tp_broker.fake import FakeBroker
 from tp_broker.jobs import run_sync
 from tp_core.bars import load_bars
+from tp_core.fills import fills_path
 from tp_core.storage import Lake
 from tp_ingest.jobs.bars import run_backfill
 from tp_ingest.jobs.fundamentals import run_fundamentals
@@ -255,3 +256,34 @@ def test_models_before_any_check(client: tuple[TestClient, Any]) -> None:
     assert [m["model"] for m in body["models"]] == ["ml-rank", "rsi2-meta"]
     assert {m["status"] for m in body["models"]} == {"never run"}
     assert {m["versions"] for m in body["models"]} == {0}
+
+
+def test_a_trade_recorded_on_the_dashboard_counts_in_the_ideas(
+    client: tuple[TestClient, Any],
+) -> None:
+    c, app = client
+    lake = Lake(app.state.settings.data_root)
+    try:
+        before = c.get("/api/research").json()["budget"]["buying_power"]
+        empty = c.get("/api/fills").json()
+        assert empty["fills"] == []
+        assert {"key": "1234", "label": "Fidelity (demo) …1234"} in empty["accounts"]
+        sale = {"side": "sell", "symbol": "msft", "quantity": 25, "price": 400.0}
+        assert c.post("/api/fills", json=sale).status_code == 403  # needs the dashboard header
+        made = c.post("/api/fills", json=sale, headers=WRITE).json()
+        (fill,) = made["fills"]
+        assert (fill["status"], fill["account"], fill["cash"]) == (
+            "pending",
+            "Fidelity (demo) …1234",
+            10_000.0,
+        )
+        assert "baseline" not in fill  # nothing the page doesn't need
+        budget = c.get("/api/research").json()["budget"]  # a new run: the fills are an input
+        assert budget["buying_power"] == pytest.approx(before + 10_000.0)
+        assert budget["pending"] == pytest.approx(10_000.0)
+        assert c.delete(f"/api/fills/{fill['id']}", headers=WRITE).json()["fills"] == []
+        assert c.delete("/api/fills/99", headers=WRITE).status_code == 404
+        bad = c.post("/api/fills", json=sale | {"quantity": 0}, headers=WRITE)
+        assert bad.status_code == 422
+    finally:
+        fills_path(lake).unlink(missing_ok=True)  # the lake is shared with the other tests

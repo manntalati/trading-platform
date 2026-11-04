@@ -1,6 +1,6 @@
 ---
 name: log-trade
-description: Record in the decision journal (tp-journal) that the user took, passed on, or exited a trade from the platform's ideas. Use when the user says they bought, sold, opened, closed, passed on or skipped an idea.
+description: Record in the decision journal (tp-journal) that the user took, passed on, or exited a trade from the platform's ideas, or any other trade they made (selling something they held), so the ideas count it before the Fidelity sync does. Use when the user says they bought, sold, opened, closed, passed on or skipped an idea, or traded anything.
 ---
 
 # Writing a decision in the journal
@@ -23,6 +23,18 @@ shares, and the fill price per share (for options, the price per share of the co
    overridden trades separate, so the reason matters.
 4. If it was placed before checking, suggest `uv run tp-journal check SYMBOL --units N` before
    ordering next time: the gates can only help ahead of the order.
+
+**Any other trade** (selling something they already held, a buy that isn't one of the ideas):
+`uv run tp-journal trade sell SYMBOL QUANTITY PRICE --note "..."` (or `buy`), quantity in shares
+or contracts, price per share; an option goes by its OCC symbol. Add `--account NAME` if they have
+more than one account and it isn't the one holding it. This is what makes a sale's money count in
+the ideas' buying power right away: `uv run tp-recs run` makes ideas sized to it now (the
+scheduler and the dashboard make a new run by themselves within minutes).
+
+**When.** `take`, `close` and `trade` also record the fill, which the ideas count until a
+brokerage sync shows it. Ask whether the trade was today. If it was on an earlier day and Fidelity
+already shows it, add `--no-fill` to `take` and `close` (and skip `trade`), or it's counted
+twice. `uv run tp-journal pending` shows what's counted; `--drop ID` removes one entered wrong.
 
 **Passed on one.** `uv run tp-journal pass SYMBOL --note "why"`. Ask for a one-line why if they
 didn't give one; a pass is worth as much to the review as a trade.

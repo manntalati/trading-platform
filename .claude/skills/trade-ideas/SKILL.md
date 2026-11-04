@@ -10,7 +10,9 @@ place orders, and the ideas are rules applied to data, not advice. Say so if the
 be treating them as certain.
 
 1. `uv run tp-jobs status`: if the recommendations job or a data job has failed or is stale,
-   say that first. Old data means old ideas.
+   say that first. Old data means old ideas. If the user has traded since the last brokerage
+   sync (sold something, say), record it first with the `log-trade` skill so the sizes count
+   the money it freed; `uv run tp-journal pending` shows what's already recorded.
 2. `uv run tp-recs show` (add `--only swing` and similar if the user asked about one list). Start
    with the ideas starred ★ (new since the previous session), then anything listed under
    "On what you hold".

@@ -127,7 +127,32 @@ Ideas only use contracts you can actually buy, from the latest brokerage sync
 - Setups that fired where nothing fits are listed under each list as **out of reach**, with what
   the cheapest fit would need.
 
-A new sync (hourly on trading days) makes a new set of ideas, so they follow your cash.
+A new sync (hourly on trading days, or **Refresh from Fidelity** on the Portfolio page) makes a
+new set of ideas, so they follow your cash.
+
+### Trades the sync doesn't show yet
+
+Between a trade and the sync that shows it (and on the days SnapTrade serves a cached copy), the
+ideas would still treat a stock you sold as held and its money as not there. So write the trade
+down as you make it, and the ideas count it at once (`tp_core.fills`):
+
+- **On the dashboard**: Research → Ideas, **Traded just now?**: sold or bought, the symbol (or an
+  option's OCC symbol), the quantity and your fill per share. The account is the one holding it
+  (a sale of something you held), else the ideas' account; pick another if you have several.
+- **In the terminal**: `tp-journal trade sell XYZ 40 52.10`; `tp-journal take` and `close` record
+  theirs by themselves. `tp-journal pending` lists them, `--drop ID` removes one entered wrong.
+- **What counts**: a sale's proceeds are buying power straight away, before they settle (in a
+  cash account Fidelity lets you buy with them; selling what you bought with them before they
+  settle is a good-faith violation, so hold those a day). The holding is gone, so it isn't
+  "already held" and its setups don't alert. A purchase is the other way round.
+- **Until the sync has it**: a recorded trade stops counting once a sync shows the account's
+  quantity moved by it, and its money once Fidelity's buying power has moved by most of it too,
+  or the trade has settled (the next business day). One the sync still doesn't show after a week
+  is flagged and no longer counted. Writing down an older trade that Fidelity already shows? Add
+  `--no-fill`, or it's counted twice until then.
+
+Each trade you record makes a new set of ideas, sized to the money it freed: on the dashboard
+at once, from the scheduler within ten minutes, or now with `tp-recs run`.
 
 The defaults for drift and exits are rules of thumb until the backtest has run; then each setup
 gets the drift its signal actually had and the exits that held up best out of sample (below,
@@ -351,11 +376,15 @@ uv run tp-journal check XYZ                        # the gates, nothing written
 uv run tp-journal take XYZ --units 1 --price 1.45  # your size and fill (default: the idea's)
 uv run tp-journal pass KRE --list stocks --note "earnings next week"
 uv run tp-journal close 1 2.10                     # the exit, per share: P&L in dollars and in R
+uv run tp-journal trade sell XYZ 40 52.10          # any other trade (selling something you held)
+uv run tp-journal pending                          # what the brokerage sync doesn't show yet
 uv run tp-journal list
 uv run tp-journal review                           # taken vs passed; followed the gates vs overrode
 ```
 
-The journal is `<data root>/journal/journal.json` (`TP_JOURNAL_FILE`), out of git.
+The journal is `<data root>/journal/journal.json` (`TP_JOURNAL_FILE`), out of git. `take`,
+`close` and `trade` also write the fill to `<data root>/journal/fills.json`, which the ideas count
+until the sync shows it ([above](#trades-the-sync-doesnt-show-yet)).
 
 In Claude Code, the project's skills (`.claude/skills/`) drive this: `trade-ideas` goes over the
 day's ideas with their gates, `log-trade` writes down what you did, `trading-review` reads the

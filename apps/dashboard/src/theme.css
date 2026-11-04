@@ -1456,3 +1456,31 @@ button.more {
 .news-line {
   margin: 0;
 }
+
+/* -- trades recorded before Fidelity's sync shows them ------------------------------------- */
+
+details.fills summary {
+  cursor: pointer;
+  list-style-position: outside;
+}
+
+.fill-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.fill-form input {
+  width: 9em;
+  min-width: 0;
+  flex: 1 1 7em;
+}
+
+.fill-list {
+  margin: 10px 0 0;
+  padding-left: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+}

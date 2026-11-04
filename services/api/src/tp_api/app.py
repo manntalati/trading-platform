@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from tp_api import __version__, broker, paper, positions, queries, research, strategies
+from tp_api import __version__, broker, fills, paper, positions, queries, research, strategies
 from tp_api.broker import BrokerSync
 from tp_api.claude import ClaudeAdvisor
 from tp_api.dashboard import bundle_state
@@ -273,6 +273,7 @@ def create_app(
     app.include_router(strategies.router)
     app.state.broker_sync = BrokerSync(settings, on_done=lambda: update_hub_portfolio(app))
     app.include_router(broker.router)
+    app.include_router(fills.router)
 
     @app.websocket("/ws/live")
     async def live(websocket: WebSocket) -> None:
