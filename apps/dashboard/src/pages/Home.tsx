@@ -15,6 +15,7 @@ import {
   type Trades,
   type Validation,
 } from "../types";
+import { InstrumentBadge } from "./Playbook";
 import { PickLine } from "./Research";
 import { TradeTable } from "./Trades";
 
@@ -198,6 +199,7 @@ export default function Home({ live, pendingApprovals }: { live: LiveState; pend
             <div className="notes">
               {ideas.map((i) => (
                 <a key={`${i.kind}-${i.symbol}`} href={`#/research/lookup/${encodeURIComponent(i.symbol)}`} className={`note idea attention-item ${i.kind === "bearish" ? "attention" : "info"}`}>
+                  <InstrumentBadge pick={i.pick} />{" "}
                   <strong>
                     {i.symbol} · {i.play?.title ?? (i.kind === "swing" ? "swing" : i.kind === "leaps" ? "LEAPS" : i.kind === "income" ? "sell premium" : i.kind === "stocks" ? "shares" : i.kind)}
                   </strong>

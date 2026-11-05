@@ -33,7 +33,7 @@ from typing import Any
 import pandas as pd
 
 from tp_core.calendar import NEW_YORK, next_session, sessions
-from tp_core.occ import parse_occ
+from tp_core.occ import format_occ, parse_occ
 from tp_core.portfolio import PortfolioSnapshot
 from tp_core.storage import Lake, write_json
 
@@ -69,6 +69,43 @@ def is_option(symbol: str) -> bool:
 
 def multiplier(symbol: str) -> int:
     return MULTIPLIER if is_option(symbol) else 1
+
+
+def instrument_symbol(
+    symbol: str, kind: str = "stock", expiration: date | None = None, strike: float | None = None
+) -> str:
+    """The symbol a fill is kept under: the ticker for shares, the OCC contract for a ``call``
+    or ``put`` on ``symbol`` (its expiration and strike given, or ``symbol`` already OCC)."""
+    name = symbol.strip().upper().replace(" ", "")
+    if kind == "stock" or is_option(name):
+        return name
+    if kind not in ("call", "put"):
+        raise ValueError("the kind is stock, call or put")
+    if expiration is None or strike is None or strike <= 0:
+        raise ValueError(f"a {kind} needs its expiration and strike")
+    return format_occ(name, expiration, "C" if kind == "call" else "P", strike)
+
+
+def describe(symbol: str) -> dict[str, str]:
+    """What a leg is, in words: ``kind`` (stock, call or put), ``label`` ("XYZ shares", "XYZ Dec
+    18 '26 $25 Call") and ``unit`` (shares or contracts)."""
+    try:
+        occ = parse_occ(symbol)
+    except ValueError:
+        return {
+            "kind": "stock",
+            "label": f"{symbol} shares",
+            "unit": "shares",
+            "underlying": symbol,
+        }
+    e = occ.expiration
+    right = "Call" if occ.right == "C" else "Put"
+    return {
+        "kind": right.lower(),
+        "label": f"{occ.root} {e:%b} {e.day} '{e:%y} ${occ.strike:g} {right}",
+        "unit": "contracts",
+        "underlying": occ.root,
+    }
 
 
 def settles(at: datetime) -> date:

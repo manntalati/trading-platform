@@ -351,7 +351,7 @@ def test_a_sale_you_record_counts_in_the_ideas_until_the_sync_shows_it(synced: L
 
     out = runner.invoke(app, ["pending"])
     assert out.exit_code == 0, out.output
-    assert "pending  -25 MSFT  $+2,537.50 (counted)" in out.output
+    assert "pending  sold 25 shares of MSFT  $+2,537.50 (counted)" in out.output
     assert runner.invoke(app, ["pending", "--drop", "1"]).exit_code == 0
     again = budget_from_lake(synced, now=AT)
     assert again is not None
@@ -372,3 +372,17 @@ def test_taking_and_closing_an_idea_record_its_fills(synced: Lake) -> None:
     assert skipped.exit_code == 0, skipped.output
     assert "fill #" not in skipped.output
     assert len(load_fills(synced)) == 2
+
+
+def test_a_call_is_recorded_by_its_expiration_and_strike(synced: Lake) -> None:
+    args = ["trade", "sell", "aapl", "2", "3.10", "--call", "--expiration", "2026-12-18",
+            "--strike", "250"]  # fmt: skip
+    out = runner.invoke(app, args)
+    assert out.exit_code == 0, out.output
+    assert "sold 2 contracts of AAPL Dec 18 '26 $250 Call" in out.output
+    assert "fill #1: $620.00 received" in out.output  # 2 x 3.10 x 100
+    (fill,) = load_fills(synced)
+    assert fill["legs"][0]["symbol"] == "AAPL261218C00250000"
+    missing = runner.invoke(app, ["trade", "buy", "AAPL", "1", "2", "--put"])
+    assert missing.exit_code != 0
+    assert "needs its expiration and strike" in missing.output

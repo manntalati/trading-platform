@@ -27,7 +27,16 @@ import typer
 
 from tp_core.calendar import NEW_YORK
 from tp_core.config import Settings
-from tp_core.fills import assess, load_fills, multiplier, new_fill, save_fills, with_fills
+from tp_core.fills import (
+    assess,
+    describe,
+    instrument_symbol,
+    load_fills,
+    multiplier,
+    new_fill,
+    save_fills,
+    with_fills,
+)
 from tp_core.portfolio import Classifier, account_label, latest_snapshot
 from tp_core.storage import Lake
 from tp_risk.state import FileRiskState
@@ -301,6 +310,13 @@ def main() -> None:
     app()
 
 
+def said(quantity: float, symbol: str) -> str:
+    """ "sold 2 contracts of XYZ Dec 18 '26 $25 Call", "bought 40 shares of XYZ"."""
+    what = describe(symbol)
+    name = what["label"].removesuffix(" shares")
+    return f"{'bought' if quantity > 0 else 'sold'} {abs(quantity):g} {what['unit']} of {name}"
+
+
 class Side(StrEnum):
     buy = "buy"
     sell = "sell"
@@ -309,20 +325,38 @@ class Side(StrEnum):
 @app.command()
 def trade(
     side: Annotated[Side, typer.Argument(help="buy or sell.")],
-    symbol: Annotated[str, typer.Argument(help="Ticker, or an option's OCC symbol.")],
+    symbol: Annotated[str, typer.Argument(help="The ticker (an option's too), or its OCC symbol.")],
     quantity: Annotated[float, typer.Argument(help="Shares, or contracts for an option.")],
-    price: Annotated[float, typer.Argument(help="Your fill, per share.")],
+    price: Annotated[float, typer.Argument(help="Your fill, per share (an option's: 1.45).")],
+    call: Annotated[
+        bool, typer.Option("--call", help="A call: give --expiration and --strike.")
+    ] = False,
+    put: Annotated[
+        bool, typer.Option("--put", help="A put: give --expiration and --strike.")
+    ] = False,
+    expiration: Annotated[
+        datetime | None, typer.Option(formats=["%Y-%m-%d"], help="The option's expiration.")
+    ] = None,
+    strike: Annotated[float | None, typer.Option(help="The option's strike.")] = None,
     account: Account = None,
     note: Note = None,
 ) -> None:
     """Record any other trade you made at your broker (selling something you held, say), so the
     ideas count it at once: a sale's proceeds in the buying power and the holding gone, a
-    purchase the other way round, until a brokerage sync shows it. Nothing is ordered."""
+    purchase the other way round, until a brokerage sync shows it. Shares by default; --call or
+    --put with --expiration and --strike for an option. Nothing is ordered."""
     if quantity <= 0 or price < 0:
         raise typer.BadParameter("the quantity is more than 0 and the price isn't negative")
+    if call and put:
+        raise typer.BadParameter("a call or a put, not both")
+    kind = "call" if call else "put" if put else "stock"
+    try:
+        name = instrument_symbol(symbol, kind, expiration.date() if expiration else None, strike)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     settings = Settings()
-    name = symbol.strip().upper()
     signed = quantity if side == Side.buy else -quantity
+    typer.echo(said(signed, name))
     cash = -signed * price * multiplier(name)
     _record_fill(settings, [{"symbol": name, "quantity": signed, "price": price}], cash,
                  symbol=name, account=account, note=note)  # fmt: skip
@@ -356,7 +390,7 @@ def pending(
     for st in reversed(states):
         f = st.fill
         at = datetime.fromisoformat(str(f["at"])).astimezone(NEW_YORK)
-        legs = ", ".join(f"{x['quantity']:+g} {x['symbol']}" for x in f["legs"])
+        legs = ", ".join(said(float(x["quantity"]), str(x["symbol"])) for x in f["legs"])
         money = f"${float(f['cash']):+,.2f}"
         counted = " (counted)" if st.counts_cash else ""
         typer.echo(f"#{f['id']:<3} {at:%Y-%m-%d %H:%M} {st.status:<8} {legs}  {money}{counted}")

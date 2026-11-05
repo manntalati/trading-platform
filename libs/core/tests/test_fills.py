@@ -9,6 +9,8 @@ import pytest
 from tp_core.fills import (
     FillState,
     assess,
+    describe,
+    instrument_symbol,
     load_fills,
     new_fill,
     overlay,
@@ -145,3 +147,17 @@ def test_stored_under_the_data_root(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="a leg with a quantity"):
         new_fill([], base, source="snaptrade", account_id="a1",
                  legs=[{"symbol": "XYZ", "quantity": 0, "price": 1}], at=MON)  # fmt: skip
+
+
+def test_a_call_or_put_by_its_expiration_and_strike() -> None:
+    call = instrument_symbol("xyz", "call", date(2026, 12, 18), 25)
+    assert call == "XYZ261218C00025000"
+    assert instrument_symbol("XYZ261218C00025000") == call  # an OCC symbol stays one
+    assert instrument_symbol(" xyz ") == "XYZ"
+    assert instrument_symbol("abc", "put", date(2026, 12, 31), 7.5) == "ABC261231P00007500"
+    with pytest.raises(ValueError, match="needs its expiration and strike"):
+        instrument_symbol("XYZ", "call")
+    assert describe(call) == {"kind": "call", "label": "XYZ Dec 18 '26 $25 Call",
+                              "unit": "contracts", "underlying": "XYZ"}  # fmt: skip
+    assert describe("XYZ") == {"kind": "stock", "label": "XYZ shares", "unit": "shares",
+                               "underlying": "XYZ"}  # fmt: skip

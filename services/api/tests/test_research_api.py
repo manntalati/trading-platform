@@ -281,7 +281,29 @@ def test_a_trade_recorded_on_the_dashboard_counts_in_the_ideas(
         budget = c.get("/api/research").json()["budget"]  # a new run: the fills are an input
         assert budget["buying_power"] == pytest.approx(before + 10_000.0)
         assert budget["pending"] == pytest.approx(10_000.0)
-        assert c.delete(f"/api/fills/{fill['id']}", headers=WRITE).json()["fills"] == []
+        assert fill["legs"][0] | {"price": 0} == {"symbol": "MSFT", "quantity": -25, "price": 0,
+                                               "kind": "stock", "label": "MSFT shares",
+                                               "unit": "shares", "underlying": "MSFT"}  # fmt: skip
+        held = {h["label"]: h for h in made["holdings"]}
+        assert "MSFT shares" not in held  # sold, for the form too
+        assert held["AAPL shares"]["kind"] == "stock"
+        option = next(h for h in made["holdings"] if h["kind"] == "call")  # a demo call
+        assert option["unit"] == "contracts"
+        assert option["label"].endswith(" Call")
+        call = {"side": "sell", "kind": "call", "symbol": option["underlying"].lower(),
+                "expiration": option["expiration"], "strike": option["strike"],
+                "quantity": option["quantity"], "price": 3.1}  # fmt: skip
+        both = c.post("/api/fills", json=call, headers=WRITE).json()
+        newest = both["fills"][0]["legs"][0]
+        assert (newest["kind"], newest["symbol"]) == ("call", option["symbol"])
+        assert both["fills"][0]["cash"] == pytest.approx(option["quantity"] * 3.1 * 100)
+        assert option["symbol"] not in {h["symbol"] for h in both["holdings"]}  # sold too
+        no_strike = c.post("/api/fills", json=call | {"strike": None}, headers=WRITE)
+        assert no_strike.status_code == 422
+        assert "expiration and strike" in no_strike.json()["detail"]
+        for f in both["fills"]:
+            c.delete(f"/api/fills/{f['id']}", headers=WRITE)
+        assert c.get("/api/fills").json()["fills"] == []
         assert c.delete("/api/fills/99", headers=WRITE).status_code == 404
         bad = c.post("/api/fills", json=sale | {"quantity": 0}, headers=WRITE)
         assert bad.status_code == 422
