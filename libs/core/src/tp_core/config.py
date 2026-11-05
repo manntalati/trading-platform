@@ -178,6 +178,7 @@ class Universes:
     options_strike_window: tuple[float, float] | None = None
     watchlist: tuple[str, ...] = ()
     research: tuple[str, ...] = ()  # names the options research scans (beyond the options list)
+    late: tuple[str, ...] = ()  # snapshotted again 15 minutes before the close (strategy 16)
 
 
 def load_universes(path: Path, *, local: bool = True) -> Universes:
@@ -199,6 +200,7 @@ def load_universes(path: Path, *, local: bool = True) -> Universes:
     underlyings = list(options.get("underlyings", []))
     if len(set(underlyings)) != len(underlyings):
         raise ValueError(f"duplicate symbols in [options] of {path}")
+    late = [s for s in options.get("late", []) if s in underlyings]
     watchlist = list(raw.get("dashboard", {}).get("watchlist", []))
     research: list[str] = []
     mine = path.with_name(f"{path.stem}.local.toml")
@@ -226,4 +228,5 @@ def load_universes(path: Path, *, local: bool = True) -> Universes:
         options_strike_window=(float(window[0]), float(window[1])) if window else None,
         watchlist=tuple(dict.fromkeys(watchlist)),
         research=tuple(research),
+        late=tuple(dict.fromkeys(late)),
     )

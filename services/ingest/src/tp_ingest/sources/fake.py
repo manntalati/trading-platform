@@ -215,6 +215,12 @@ class FakeSource:
                     "ask": spot + 0.01,
                     "quote_at": pd.Timestamp(at),
                     "trade_at": pd.Timestamp(at),
+                    "day_open": spot * 1.005,
+                    "day_high": spot * 1.01,
+                    "day_low": spot * 0.99,
+                    "day_volume": 1_000_000.0,
+                    "day_at": pd.Timestamp(self.as_of, tz=NEW_YORK).tz_convert(UTC),
+                    "prev_close": spot * 1.002,
                 }
             )
         return pd.DataFrame(rows, columns=list(UNDERLYING_COLUMNS))

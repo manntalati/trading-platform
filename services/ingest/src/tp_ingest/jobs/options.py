@@ -18,7 +18,13 @@ import pandas as pd
 
 from tp_core.calendar import NEW_YORK, is_session
 from tp_core.occ import parse_occ
-from tp_core.schemas import RAW_OPTION_CHAIN_SCHEMA, RAW_OPTION_CHAIN_SNAPSHOTS, conform
+from tp_core.schemas import (
+    RAW_OPTION_CHAIN_SCHEMA,
+    RAW_OPTION_CHAIN_SNAPSHOTS,
+    RAW_STOCK_SNAPSHOT_SCHEMA,
+    RAW_STOCK_SNAPSHOTS,
+    conform,
+)
 from tp_core.storage import Lake, new_run_id, write_json, write_raw
 from tp_ingest.sources.base import OptionsSource, StrikeRange
 
@@ -83,10 +89,12 @@ def run_snapshot(
     max_dte: int = 365,
     strike_window: tuple[float, float] | None = None,
     whole: Collection[str] = (),
+    report: str = "options_snapshot",
 ) -> OptionsJobResult:
-    """Store each underlying's chain. ``strike_window`` (shares of the underlying's price) keeps
-    only the strikes in it, except for the ``whole`` underlyings (the ones you hold) and any
-    whose price isn't known."""
+    """Store each underlying's chain, and the underlyings' own snapshots (the last trade and the
+    session so far: today's provisional bar). ``strike_window`` (shares of the underlying's
+    price) keeps only the strikes in it, except for the ``whole`` underlyings (the ones you
+    hold) and any whose price isn't known. The summary goes to ``reports/<report>/``."""
     snapshot_date = now.astimezone(NEW_YORK).date()
     result = OptionsJobResult(run_id=new_run_id(now), snapshot_date=snapshot_date)
     if not is_session(snapshot_date):
@@ -100,6 +108,18 @@ def run_snapshot(
     except Exception:  # chains without the underlying's quote still beat no chains at all
         log.exception("underlying quotes failed; storing chains without them")
         spots = pd.DataFrame(columns=["price", "bid", "ask"])
+    if len(spots):
+        try:
+            write_raw(
+                lake,
+                RAW_STOCK_SNAPSHOTS,
+                conform(spots.reset_index().assign(snapshot_at=now), RAW_STOCK_SNAPSHOT_SCHEMA),
+                run_id=result.run_id,
+                partition={"snapshot_date": snapshot_date.isoformat()},
+                schema=RAW_STOCK_SNAPSHOT_SCHEMA,
+            )
+        except Exception:  # the chains matter more than the day's bar so far
+            log.exception("storing the underlyings' snapshots failed")
 
     for underlying in underlyings:
         snap = UnderlyingSnapshot(underlying)
@@ -134,7 +154,7 @@ def run_snapshot(
 
     write_json(
         {"generated_at": now.isoformat(), **result.to_dict()},
-        lake.reports_dir("options_snapshot") / f"{snapshot_date}-{result.run_id}.json",
+        lake.reports_dir(report) / f"{snapshot_date}-{result.run_id}.json",
     )
     log.info(result.summary())
     return result

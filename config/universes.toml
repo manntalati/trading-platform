@@ -65,6 +65,15 @@ max_dte = 800
 # in-the-money LEAPS to far out-of-the-money wings) without the strikes nobody trades. The names
 # you hold are always stored whole, so every contract you own is priced.
 strike_window = [0.5, 1.6]
+# Snapshotted again 15 minutes before the close (`tp-data options late`, on the scheduler), with
+# today's bar so far, for the setups that enter on the session they fire: strategy 16's index
+# funds (tier 1), and its sector funds and mega caps (tier 2, ideas only). Each must be in
+# underlyings above.
+late = [
+    "QQQ", "SPY", "IWM", "DIA",
+    "XLF", "XLK", "SMH", "XLE", "XLV", "GLD",
+    "NVDA", "AAPL", "AMZN", "MSFT", "GOOGL", "META", "AVGO", "AMD", "TSLA", "JPM",
+]
 
 [dashboard]
 # Always streamed live on the dashboard, alongside your market-priced holdings. Alpaca's free

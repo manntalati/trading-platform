@@ -80,6 +80,7 @@ data and the recommendations current. On trading days (New York time):
 | Fidelity sync | hourly, 07:30 to 22:30 (once linked) | `tp-broker sync --source snaptrade` |
 | Option chains, midday | from 12:30 | `tp-data options snapshot` |
 | Option chains, close | 15 minutes before the close | `tp-data options snapshot` |
+| Late snapshot (strategy 16), then recommendations at once | 15 minutes before the close | `tp-data options late` |
 | Daily bars | from 18:30 until the next open | `tp-data bars daily` |
 | News headlines | 07:30, 12:15 and from 18:45 | `tp-data news fetch` |
 | News sentiment | after each fetch, with `TP_NEWS_SCORING=on` | `tp-data news score` |

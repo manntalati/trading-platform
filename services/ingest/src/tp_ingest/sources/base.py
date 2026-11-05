@@ -78,7 +78,10 @@ class MarketDataSource(BarsSource, CorporateActionsSource, Protocol):
     """Everything the bars jobs need."""
 
 
-UNDERLYING_COLUMNS = ("symbol", "price", "bid", "ask", "quote_at", "trade_at")
+UNDERLYING_COLUMNS = (
+    "symbol", "price", "bid", "ask", "quote_at", "trade_at",
+    "day_open", "day_high", "day_low", "day_volume", "day_at", "prev_close",
+)  # fmt: skip
 
 OPTION_QUOTE_COLUMNS = (
     "contract",
@@ -116,7 +119,8 @@ class OptionsSource(Protocol):
     options_feed: str
 
     def underlying_snapshots(self, symbols: Sequence[str]) -> pd.DataFrame:
-        """Latest trade and quote per underlying; columns ``UNDERLYING_COLUMNS``."""
+        """Latest trade and quote per underlying, and the session so far (open, high, low,
+        volume) with the previous close; columns ``UNDERLYING_COLUMNS``."""
         ...
 
     def option_chain(

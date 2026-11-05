@@ -62,9 +62,10 @@ log = logging.getLogger(__name__)
 RUNS = "recommendations"
 LOG = "recommendations_log"
 KEEP_DAYS = 30
-LISTS = ("swing", "leaps", "bearish", "income", "volatility", "stocks")
+LISTS = ("swing", "leaps", "bearish", "income", "volatility", "stress", "stocks")
 LIST_NAMES = {
     "swing": "Swing calls",
+    "stress": "Stress-dip calls",
     "leaps": "LEAPS",
     "bearish": "Bearish",
     "income": "Premium selling",
@@ -165,6 +166,7 @@ def input_stamp(lake: Lake) -> dict[str, str | None]:
     return {
         "bars": _newest(lake.reports_dir("validation"), "stock_bars_1d-*.json"),
         "options": _newest(lake.reports_dir("options_snapshot"), "*.json"),
+        "options_late": _newest(lake.reports_dir("options_late"), "*.json"),
         "macro": _newest(lake.reports_dir("macro"), "*.json"),
         "fundamentals": _newest(lake.reports_dir("fundamentals"), "*.json"),
         "calibration": _newest(lake.reports_dir("playbook"), "calibration.json"),
