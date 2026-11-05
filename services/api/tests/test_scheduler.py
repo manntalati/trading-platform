@@ -41,7 +41,9 @@ class Runner:
         self.writes: dict[str, str] = {
             "tp-data bars daily": "reports/validation/stock_bars_1d-x.json",
             "tp-data macro daily": "reports/macro/x.json",
-            "tp-data options snapshot": "reports/options_snapshot/x.json",
+            "tp-data options snapshot --kind midday": "reports/options_snapshot/x.json",
+            "tp-data options snapshot --kind close": "reports/options_snapshot/y.json",
+            "tp-data options morning": "reports/options_morning/x.json",
         }
 
     def __call__(
@@ -93,6 +95,12 @@ def test_windows_follow_the_exchange_calendar() -> None:
     (w,) = [w for w in bars.windows_around(friday_evening) if w.start <= friday_evening < w.end]
     assert w.start == ny(FRIDAY, 18, 30)
     assert w.end == ny(date(2024, 7, 15), 9)  # Monday's open, minus 30 minutes
+    # the morning chains: 15 to 45 minutes after the open, on the exchange's clock
+    morning = next(j for j in sched.JOBS if j.name == "options-morning")
+    assert morning.command == ("tp-data", "options", "morning")
+    assert sched._options_morning(FRIDAY) == [(ny(FRIDAY, 9, 45), ny(FRIDAY, 10, 15))]
+    assert not [w for w in morning.windows_around(ny(FRIDAY, 10, 30))
+                if w.start <= ny(FRIDAY, 10, 30) < w.end]  # fmt: skip
     midday = next(j for j in sched.JOBS if j.name == "options-midday")
     half_day = date(2024, 11, 29)  # the day after Thanksgiving closes at 13:00
     assert sched._options_midday(half_day) == []
@@ -135,7 +143,8 @@ def test_fresh_data_from_cron_is_not_fetched_again(tmp_path: Path) -> None:
     os.utime(report, (at.timestamp(), at.timestamp()))
     s.step()
     assert "tp-data bars daily" not in runner.calls
-    assert s.status()["jobs"][4]["last"]["status"] == "fresh"
+    status = {j["name"]: j for j in s.status()["jobs"]}
+    assert status["bars"]["last"]["status"] == "fresh"
 
 
 def test_failures_retry_later_and_sooner_when_offline(tmp_path: Path) -> None:
@@ -195,7 +204,11 @@ def test_recommendations_follow_new_data(tmp_path: Path) -> None:
     runner.calls.clear()
     clock.at = ny(FRIDAY, 13)  # the midday option snapshot and headlines land
     s.step()
-    assert runner.calls == ["tp-data options snapshot", "tp-data news fetch", "tp-recs run"]
+    assert runner.calls == [
+        "tp-data options snapshot --kind midday",
+        "tp-data news fetch",
+        "tp-recs run",
+    ]
     runner.calls.clear()
     clock.at += timedelta(minutes=30)
     s.step()

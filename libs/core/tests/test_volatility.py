@@ -12,11 +12,13 @@ from tp_core.storage import Lake, write_raw
 from tp_core.testing import synthetic_chain
 from tp_core.volatility import (
     atm_term,
+    call_put_spread,
     event_expiry,
     iv_at,
     iv_history,
     iv_rank,
     latest_chains,
+    skew,
 )
 
 AT = datetime(2026, 1, 12, 20, 45, tzinfo=UTC)
@@ -27,12 +29,12 @@ def expiries(*days: int) -> list[date]:
     return [DAY + timedelta(days=d) for d in days]
 
 
-def store(lake: Lake, chain: pd.DataFrame, day: date, underlying: str) -> None:
+def store(lake: Lake, chain: pd.DataFrame, day: date, underlying: str, run: str = "") -> None:
     write_raw(
         lake,
         RAW_OPTION_CHAIN_SNAPSHOTS,
         chain,
-        run_id=f"r-{day}-{underlying}",
+        run_id=f"r-{day}-{underlying}{run}",
         partition={"snapshot_date": day.isoformat(), "underlying": underlying},
         schema=RAW_OPTION_CHAIN_SCHEMA,
     )
@@ -106,6 +108,59 @@ def test_history_is_derived_once_and_extended(tmp_path: Path) -> None:
     xyz = third[third["underlying"] == "XYZ"]["iv30"].tolist()
     assert xyz == pytest.approx([0.2, 0.3, 0.45], abs=1e-6)
     assert latest_chains(lake, since=DAY + timedelta(days=1)).keys() == {"XYZ"}
+
+
+def test_skew_from_the_25_delta_put_and_call() -> None:
+    flat = synthetic_chain("XYZ", 100.0, AT, expirations=expiries(30), iv=0.3)
+    s = skew(flat)
+    assert s["put25_iv30"] == pytest.approx(0.3, abs=1e-6)
+    assert s["skew25"] == pytest.approx(0.0, abs=1e-6)
+    smirk = synthetic_chain("XYZ", 100.0, AT, expirations=expiries(20, 40), iv=0.3, skew=-0.5,
+                            strikes=[float(k) for k in range(60, 141)])  # fmt: skip
+    s = skew(smirk)
+    assert s["put25_iv30"] > 0.3 > s["call25_iv30"]  # puts dearer
+    assert s["skew25"] == pytest.approx(s["put25_iv30"] - s["call25_iv30"])
+    assert skew(smirk.iloc[0:0])["skew25"] is None
+
+
+def test_call_minus_put_iv_at_matched_strikes() -> None:
+    chain = synthetic_chain("XYZ", 100.0, AT, expirations=expiries(5, 30, 90), iv=0.3)
+    assert call_put_spread(chain)["cp_spread"] == pytest.approx(0.0, abs=1e-9)
+    calls = chain["right"] == "C"
+    chain.loc[calls, "implied_volatility"] += 0.02
+    out = call_put_spread(chain)
+    assert out["cp_spread"] == pytest.approx(0.02)
+    # near the money (within 10%) and 10-60 days out only: 90 to 110 at 30 days
+    assert out["cp_pairs"] == 5
+    chain["open_interest"] = float("nan")
+    assert call_put_spread(chain)["cp_spread"] == pytest.approx(0.02)  # equal weights
+
+
+def test_history_carries_skew_columns(tmp_path: Path) -> None:
+    lake = Lake(tmp_path)
+    store(lake, synthetic_chain("XYZ", 100.0, AT, expirations=expiries(30, 60), iv=0.3), DAY,
+          "XYZ")  # fmt: skip
+    row = iv_history(lake).iloc[0]
+    assert row["skew25"] == pytest.approx(0.0, abs=1e-6)
+    assert row["cp_spread"] == pytest.approx(0.0, abs=1e-9)
+    assert row["cp_pairs"] > 0
+    assert row["research_at"] == pd.Timestamp(AT)
+
+
+def test_skew_columns_skip_snapshots_after_the_close(tmp_path: Path) -> None:
+    """An evening snapshot's implied volatilities use the after-hours price: iv30 reads it, the
+    skew and the call-minus-put spread keep to the session's last snapshot."""
+    lake = Lake(tmp_path)
+    store(lake, synthetic_chain("XYZ", 100.0, AT, expirations=expiries(30, 60), iv=0.3), DAY,
+          "XYZ")  # fmt: skip
+    evening = AT + timedelta(hours=5)  # 20:45 New York
+    late = synthetic_chain("XYZ", 100.0, evening, expirations=expiries(30, 60), iv=0.4)
+    late.loc[late["right"] == "C", "implied_volatility"] += 0.05  # calls look rich
+    store(lake, late, DAY, "XYZ", run="-evening")
+    row = iv_history(lake).iloc[0]
+    assert row["iv30"] > 0.35  # the day's last snapshot
+    assert row["research_at"] == pd.Timestamp(AT)
+    assert row["cp_spread"] == pytest.approx(0.0, abs=1e-9)
 
 
 def test_iv_rank_needs_some_history() -> None:

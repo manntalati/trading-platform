@@ -23,6 +23,7 @@ from tp_core.bars import load_bars
 from tp_core.calendar import last_completed_session
 from tp_core.config import Settings
 from tp_core.fundamentals import load_events
+from tp_core.gamma import GAMMA_HISTORY
 from tp_core.intraday import load_intraday
 from tp_core.macro import load_macro
 from tp_core.portfolio import connection_problems, latest_snapshot
@@ -126,6 +127,23 @@ def data(settings: Settings, now: datetime) -> list[Check]:
         out.append(Check(area, "Option chains", "ok" if age <= 4 else "warn",
                          f"{len(days)} days stored, latest {days[-1]}",
                          "tp-data options snapshot (while the market is open)"))  # fmt: skip
+
+    # Research data (the market-maker plan): optional, nothing acts on it.
+    mornings = sorted(lake.reports_dir("options_morning").glob("*.json"))
+    if not mornings:
+        out.append(Check(area, "Morning chains (09:45)", "optional",
+                         "none yet: SPY/QQQ/IWM at 09:45, for overnight option decay research",
+                         "tp-data options morning (tp-api runs it at 09:45)"))  # fmt: skip
+    else:
+        last_m = date.fromisoformat(mornings[-1].name[:10])
+        age = _age(last_m, today) or 0
+        out.append(Check(area, "Morning chains (09:45)", "ok" if age <= 4 else "warn",
+                         f"{len({p.name[:10] for p in mornings})} mornings, latest {last_m}",
+                         "tp-data options morning (09:45 to 10:15 New York)"))  # fmt: skip
+    gamma = lake.clean_dir(GAMMA_HISTORY) / "part.parquet"
+    out.append(Check(area, "Dealer gamma (unvalidated)", "ok" if gamma.exists() else "optional",
+                     "kept daily from the chain snapshots" if gamma.exists()
+                     else "not worked out yet", "tp-data options derive"))  # fmt: skip
 
     snap = latest_snapshot(lake)
     if snap.accounts.empty:

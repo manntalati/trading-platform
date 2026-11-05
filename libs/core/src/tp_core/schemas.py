@@ -126,8 +126,15 @@ RAW_OPTION_CHAIN_SCHEMA = pa.schema(
         ("feed", pa.string()),
         ("ingested_at", _TS),
         ("run_id", pa.string()),
+        # Which of the day's snapshots this is (SNAPSHOT_KINDS). Added later: older files don't
+        # have it, and tp_core.chains.load_chain_snapshots works it out for them.
+        ("snapshot_kind", pa.string()),
     ]
 )
+# morning: ~09:45 (SPY/QQQ/IWM only); midday: from 12:30; close: 15 minutes before the close;
+# late: strategy 16's quick snapshot at the same time; before_open / after_close: run by hand or by
+# a timer outside the session (their quotes are the last session's).
+SNAPSHOT_KINDS = ("before_open", "morning", "midday", "close", "late", "after_close")
 
 
 # The underlyings' snapshots taken with each option chain snapshot: the last trade and quote, and

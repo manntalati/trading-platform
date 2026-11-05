@@ -12,6 +12,8 @@ uv run tp-data bars daily                  # scheduled: latest sessions (+ new s
 uv run tp-data bars rebuild                # re-derive clean/ from raw/ (no network)
 uv run tp-data bars backfill --source fake # the whole pipeline on synthetic data, no keys
 uv run tp-data options snapshot            # today's chains: [options] universe + holdings
+uv run tp-data options morning             # SPY/QQQ/IWM chains at ~09:45 (research data)
+uv run tp-data options derive              # implied volatility, skew and dealer gamma per day
 uv run tp-data macro backfill               # one-off: VIX and Treasury yields from FRED since 1990
 uv run tp-data macro daily                  # scheduled: the last 30 days
 uv run tp-data fundamentals                 # SEC filings: company facts and earnings dates
@@ -47,10 +49,14 @@ data/
     stock_bars_1d_quarantine/part.parquet
     macro_1d/part.parquet
     stock_bars_5m/symbol=<SYM>/part.parquet
+    option_iv_daily/part.parquet        30-day IV, skew, call-minus-put IV per underlying per day
+    dealer_gamma_daily/part.parquet     dealer gamma (GEX), flip level, OI strikes (unvalidated)
     sec_facts/part.parquet
     earnings_events/part.parquet
   reports/validation/stock_bars_1d-<UTC time>.json
   reports/options_snapshot/<date>-<run id>.json
+  reports/options_late/<date>-<run id>.json     the 15:45 strategy 16 snapshot
+  reports/options_morning/<date>-<run id>.json  the 09:45 SPY/QQQ/IWM snapshot
   reports/macro/<date>.json
   reports/fundamentals/<date>.json
   features/<name>/<version>/part.parquet  derived: ML feature sets (`tp-ml features`, docs/ml.md)
@@ -140,6 +146,34 @@ and keeps a snapshot of the whole list to a few megabytes; the names you hold ar
 every contract you own is priced. Every options name also gets daily bars. The 30-day implied
 volatility of each snapshot is kept in `clean/option_iv_daily` for the options research's IV rank
 ([research.md](research.md)).
+
+**Which snapshot a row is.** Since 2026-11-05 each row carries `snapshot_kind`: `morning` (~09:45,
+`tp-data options morning`, SPY/QQQ/IWM only), `midday` (from 12:30), `close` (15 minutes before
+the close), `late` (strategy 16's quick snapshot at the same time), or `before_open` /
+`after_close` (a run outside the session, whose quotes are the last session's). Older rows don't
+have it; `load_chain_snapshots` works it out from the clock and the `options_late` reports. The
+morning snapshot exists so a contract's 15:45 quote can be matched with the next morning's (by
+OCC symbol): overnight option decay, and strategy 16's 15:45 entry against the next open. It
+doesn't store the underlyings' own snapshots, so nothing that reads today's bar sees it.
+
+**Derived daily tables** (`tp-data options derive`; every snapshot run also brings them up to
+date, and the first run backfills them from 2026-10-07, when the snapshots start). Research data
+that no idea or filter reads:
+
+- `clean/option_iv_daily` (`tp_core.volatility`): `iv30` from the day's last snapshot, plus
+  `put25_iv30`, `call25_iv30` and `skew25` (25-delta put minus 25-delta call IV, ~30 days; the
+  put minus the at-the-money IV is `put25_iv30 - iv30`), and `cp_spread` (call minus put IV at
+  matched strikes within 10% of the spot, 10 to 60 days out, open-interest weighted; Cremers and
+  Weinbaum). The skew and spread come from the last snapshot **during the session**
+  (`research_at`): after the close the vendor's IVs use the after-hours stock price against
+  16:00's option quotes, which moved QQQ's spread by up to 10 points.
+- `clean/dealer_gamma_daily` (`tp_core.gamma`, **unvalidated**): per underlying per New York date,
+  from the day's last snapshot, `gamma × open interest × 100 × spot² × 1%` summed in $bn of
+  delta hedging per 1% move, **calls counted positive and puts negative. That sign is an
+  assumption** ("customers sell calls and buy puts"); who holds what isn't in our data. Also the
+  gamma-flip level (where the total, recomputed from IV across ±10% of the spot, crosses zero),
+  the strikes with the most call and put open interest (all expirations, and the next 7 days').
+  Shown on the dashboard's market panel, marked unvalidated.
 
 Each row is one contract at one moment (`RAW_OPTION_CHAIN_SCHEMA`): OCC symbol plus parsed
 `expiration`/`right`/`strike`/`dte`; the underlying's last trade and quote; the option's bid/ask

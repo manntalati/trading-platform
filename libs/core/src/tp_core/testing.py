@@ -100,6 +100,7 @@ def synthetic_chain(
                         "ask": round(max(price * (1 + half_spread), 0.01), 2),
                         "implied_volatility": smile,
                         "delta": g.delta,
+                        "gamma": g.gamma,
                         "open_interest": open_interest,
                         "feed": "synthetic",
                         "ingested_at": pd.Timestamp(snapshot_at),

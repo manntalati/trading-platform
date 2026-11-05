@@ -23,6 +23,7 @@ from tp_api import queries
 from tp_api.deps import Ctx, require_dashboard_client, require_token
 from tp_core.bars import close_matrix, load_bars
 from tp_core.config import Settings
+from tp_core.gamma import INDEX_FUNDS, UNVALIDATED, current_gamma, gamma_history
 from tp_core.macro import load_macro
 from tp_core.portfolio import Classifier
 from tp_core.regime import DIMENSIONS, current, market_regimes
@@ -151,17 +152,34 @@ def start_validation(request: Request, body: ValidateRequest) -> dict[str, Any]:
     return dict(job.state)
 
 
+def dealer_gamma_view(ctx: queries.Context) -> dict[str, Any]:
+    """The index funds' latest dealer gamma (``tp_core.gamma``): research data, unvalidated, and
+    read by no idea or filter."""
+    try:
+        latest = current_gamma(gamma_history(ctx.lake, list(INDEX_FUNDS)))
+    except Exception:  # a research field must never take the regime panel down
+        log.exception("dealer gamma failed")
+        latest = []
+    return {"validated": False, "note": UNVALIDATED, "latest": latest}
+
+
 def regime_view(ctx: queries.Context) -> dict[str, Any]:
+    gamma = dealer_gamma_view(ctx)
     bars = load_bars(ctx.lake)
     if bars.empty or "SPY" not in set(bars["symbol"]):
-        return {"current": None, "history": []}
+        empty: dict[str, Any] = queries.clean(
+            {"current": None, "history": [], "dealer_gamma": gamma}
+        )
+        return empty
     regimes = market_regimes(close_matrix(bars), macro=load_macro(ctx.lake))
     recent = regimes.dropna(subset=["trend"]).tail(252)
     history = [
         {"date": pd.Timestamp(str(idx)).date().isoformat(), **{k: row[k] for k in DIMENSIONS}}
         for idx, row in recent.iterrows()
     ]
-    out: dict[str, Any] = queries.clean({"current": current(regimes), "history": history})
+    out: dict[str, Any] = queries.clean(
+        {"current": current(regimes), "history": history, "dealer_gamma": gamma}
+    )
     return out
 
 
