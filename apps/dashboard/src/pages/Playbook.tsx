@@ -17,6 +17,28 @@ import {
 
 /** One playbook idea: the setup that fired, the position that expresses it best under the volatility
  * forecast, what the model expects of it, and how to get in and out. */
+/** Whether an idea is shares or an option, and which: "Stock", "Call", "LEAPS call", "Put spread",
+ * "Iron condor". */
+export function instrumentOf(pick: unknown): { kind: "stock" | "call" | "put" | "option"; label: string } | null {
+  if (isShares(pick)) return { kind: "stock", label: "Stock" };
+  if (!isPlay(pick)) return null;
+  const s = pick.structure;
+  const label = (s.charAt(0).toUpperCase() + s.slice(1)).replace(" debit spread", " spread");
+  const kind = /call/i.test(s) ? "call" : /put/i.test(s) ? "put" : "option";
+  return { kind, label };
+}
+
+export function InstrumentBadge({ pick }: { pick: unknown }) {
+  const what = instrumentOf(pick);
+  if (!what) return null;
+  const title = what.kind === "stock" ? "buy the shares" : `an options trade: ${what.label.toLowerCase()}`;
+  return (
+    <span className={`pill instrument ${what.kind}`} title={title}>
+      {what.label}
+    </span>
+  );
+}
+
 export function IdeaCard({ idea }: { idea: ResearchIdea }) {
   const pick = isPlay(idea.pick) ? idea.pick : null;
   const shares = isShares(idea.pick) ? idea.pick : null;
@@ -28,6 +50,7 @@ export function IdeaCard({ idea }: { idea: ResearchIdea }) {
         <a href={`#/research/lookup/${encodeURIComponent(idea.symbol)}`} className="idea-symbol">
           {idea.symbol}
         </a>
+        <InstrumentBadge pick={idea.pick} />
         {idea.new && <span className="pill new">new</span>}
         <span className="muted">{money(idea.spot, true)}</span>
         <span className="spacer" />

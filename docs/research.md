@@ -136,11 +136,16 @@ Between a trade and the sync that shows it (and on the days SnapTrade serves a c
 ideas would still treat a stock you sold as held and its money as not there. So write the trade
 down as you make it, and the ideas count it at once (`tp_core.fills`):
 
-- **On the dashboard**: Research → Ideas, **Traded just now?**: sold or bought, the symbol (or an
-  option's OCC symbol), the quantity and your fill per share. The account is the one holding it
-  (a sale of something you held), else the ideas' account; pick another if you have several.
-- **In the terminal**: `tp-journal trade sell XYZ 40 52.10`; `tp-journal take` and `close` record
-  theirs by themselves. `tp-journal pending` lists them, `--drop ID` removes one entered wrong.
+- **On the dashboard**: Research → Ideas, **Traded just now?**: sold or bought, then **Stock**,
+  **Call** or **Put**. A stock takes the symbol, the shares and your price; a call or put takes the
+  underlying, the expiration, the strike, the contracts and the price per share as quoted (1.45 is
+  $145 a contract). For a sale, **Pick from what you hold** fills it all in. A line under the form
+  says the trade in words with the money, so a call can't be taken for shares: "Sold 2 contracts of
+  XYZ Dec 18 '26 $25 Call at $1.45 a share ($145.00 a contract): $290.00 received." The account is
+  the one holding it, else the ideas' account; pick another if you have several.
+- **In the terminal**: `tp-journal trade sell XYZ 40 52.10` for shares, `tp-journal trade sell XYZ
+  2 1.45 --call --expiration 2026-12-18 --strike 25` for an option; `tp-journal take` and `close`
+  record theirs by themselves. `tp-journal pending` lists them, `--drop ID` removes one entered wrong.
 - **What counts**: a sale's proceeds are buying power straight away, before they settle (in a
   cash account Fidelity lets you buy with them; selling what you bought with them before they
   settle is a good-faith violation, so hold those a day). The holding is gone, so it isn't
@@ -188,6 +193,10 @@ not (`playbook.stock_ideas_for`):
 
 The track record follows stock ideas too, on the daily bars, the same way an order would have
 filled.
+
+Every idea card (and the home page's list) carries a badge for what it is: **Stock**, or the
+option (**Call**, **LEAPS call**, **Call spread**, **Put**, **Cash-secured put**, **Iron condor**,
+...), green for calls, red for puts.
 
 ### News in the ideas
 

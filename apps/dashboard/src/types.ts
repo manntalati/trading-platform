@@ -741,11 +741,36 @@ export interface Budget {
 }
 
 // /api/fills (services/api/src/tp_api/fills.py): trades recorded before the sync shows them
+export type Instrument = "stock" | "call" | "put";
+
+export interface FillLeg {
+  symbol: string; // the ticker, or an option's OCC symbol
+  quantity: number; // + bought, - sold
+  price: number; // per share
+  kind?: Instrument;
+  label?: string; // "XYZ shares", "XYZ Dec 18 '26 $25 Call"
+  unit?: "shares" | "contracts";
+  underlying?: string;
+}
+
+export interface HeldForFill {
+  symbol: string;
+  quantity: number;
+  price: Num;
+  account: string | null; // the form's key for it
+  kind: Instrument;
+  label: string;
+  unit: "shares" | "contracts";
+  underlying: string;
+  expiration?: string;
+  strike?: number;
+}
+
 export interface RecordedFill {
   id: number;
   at: string;
   account: string;
-  legs: { symbol: string; quantity: number; price: number }[];
+  legs: FillLeg[];
   cash: number; // + received, - paid
   settles: string;
   note: string | null;
@@ -757,6 +782,7 @@ export interface RecordedFill {
 export interface FillsView {
   fills: RecordedFill[];
   accounts: { key: string; label: string }[];
+  holdings?: HeldForFill[]; // what you hold now, to pick a sale from
   synced: boolean; // a brokerage sync exists to count them against
 }
 

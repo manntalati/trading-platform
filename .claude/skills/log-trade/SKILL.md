@@ -25,9 +25,12 @@ shares, and the fill price per share (for options, the price per share of the co
    ordering next time: the gates can only help ahead of the order.
 
 **Any other trade** (selling something they already held, a buy that isn't one of the ideas):
-`uv run tp-journal trade sell SYMBOL QUANTITY PRICE --note "..."` (or `buy`), quantity in shares
-or contracts, price per share; an option goes by its OCC symbol. Add `--account NAME` if they have
-more than one account and it isn't the one holding it. This is what makes a sale's money count in
+`uv run tp-journal trade sell SYMBOL QUANTITY PRICE --note "..."` (or `buy`). Ask whether it was
+shares or an option, never assume. Shares: the quantity in shares, the price per share. An option:
+add `--call` or `--put` with `--expiration YYYY-MM-DD --strike K`; the quantity is contracts and
+the price is per share as quoted (1.45, not the $145 a contract). Repeat back what the tool prints
+("sold 2 contracts of XYZ Dec 18 '26 $25 Call") so the user can catch a mix-up. Add
+`--account NAME` if they have more than one account and it isn't the one holding it. This is what makes a sale's money count in
 the ideas' buying power right away: `uv run tp-recs run` makes ideas sized to it now (the
 scheduler and the dashboard make a new run by themselves within minutes).
 
