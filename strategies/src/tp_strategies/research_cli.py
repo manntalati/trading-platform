@@ -332,8 +332,10 @@ def _ud_row(name: str, st: dict[str, Any]) -> str:
 
 def stress_dip_report(out: dict[str, Any]) -> str:
     """The study in words and tables (``stress_dip.study``)."""
+    cfg = out.get("config") or {}
     lines = [
         "Stress-dip calls (strategy 16): " + out["rule"],
+        f"Exits: {cfg.get('exits')}; VIX timing: {cfg.get('vix_timing')} (config/stress_dip.toml)",
         f"{out['symbols']} symbols, {out['start']} to {out['end']}; test: the sessions from "
         f"{out['test_from']} (no choice below looked at them)",
         "",
@@ -366,10 +368,10 @@ def stress_dip_report(out: dict[str, Any]) -> str:
     lines += ["", f"Expiry and delta, exits chosen on train, after {m['cost']:.0%} (test)", SD_HEAD]
     for label, g in m["grid"].items():
         lines.append(_sd_row(f"{label}: chosen", g["test"]))
-        lines.append(_sd_row(f"{label}: spec exits", g["spec_test"]))
+        lines.append(_sd_row(f"{label}: strategy's exits", g["spec_test"]))
         lines.append(_sd_row(f"{label}: every day (control)", g["control_test"]))
         lines.append(f"    chosen on train: {g['chosen']}")
-    lines += ["", "Profit targets on top of the spec's exits (21 days, delta 0.70, 2%)", SD_HEAD]
+    lines += ["", "Other profit targets, the rest as configured (21 days, delta 0.70, 2%)", SD_HEAD]
     for label, parts in m["targets"].items():
         lines += [
             _sd_row(f"{label}, train", parts["train"]),
@@ -380,7 +382,7 @@ def stress_dip_report(out: dict[str, Any]) -> str:
         lines += [
             "",
             f"Calls, real prices (option_bars_1d trades, {real['start']} to {real['end']}; strike "
-            "93-100% of spot, 10-60 days; spec's exits; one row per fund and session)",
+            "93-100% of spot, 10-60 days; the strategy's exits; one row per fund and session)",
             SD_HEAD,
         ]
         for group, table in real["groups"].items():
@@ -392,6 +394,23 @@ def stress_dip_report(out: dict[str, Any]) -> str:
             if real.get(label):
                 lines += ["", f"Index funds, stressed dips, by {label.split('_')[-1]} (gross)"]
                 lines += [_sd_row(k, v) for k, v in real[label].items()]
+    by_vix = out.get("real_by_vix") or {}
+    if by_vix:
+        lines += [
+            "",
+            "Real prices by VIX timing, the strategy's exits, after 2% (live: the session's VIX "
+            "close standing in for 15:45; prev: the previous close)",
+            SD_HEAD,
+        ]
+        for timing, table in by_vix.items():
+            for group in ("index (QQQ, SPY, IWM, DIA)", "every fund"):
+                for sig in ("dip, stressed", "every day (control)"):
+                    parts = ((table.get("groups") or {}).get(group) or {}).get(sig)
+                    if parts:
+                        for part in ("all", "test"):
+                            lines.append(
+                                _sd_row(f"{timing}: {group}, {sig}, {part}", parts[part]["2%"])
+                            )
     late = out.get("at_1545")
     if late:
         a = late["agreement"]
@@ -421,7 +440,7 @@ def stress_dip_report(out: dict[str, Any]) -> str:
                         f"{label + ', ' + part:52}{st['n']:>6}{st['mean1']:>+8.2%}"
                         f"{st['mean2']:>+8.2%}{st['mean3']:>+8.2%}{st['hit3']:>7.0%}"
                     )
-    lines += ["", "By year (modeled, spec, 2%)", SD_HEAD]
+    lines += ["", "By year (modeled, the strategy's exits, 2%)", SD_HEAD]
     lines += [_sd_row(k, v) for k, v in out["by_year"].items()]
     lines += [
         "",
@@ -440,7 +459,8 @@ def research_stress_dip(
     ] = True,
 ) -> None:
     """Strategy 16: calls 14-30 days out bought in the last 15 minutes when an index fund dips in
-    an uptrend and the VIX says the market is stressed, sold within 3 sessions. The underlying
+    an uptrend and the VIX says the market is stressed, sold by the exits and with the VIX timing
+    in config/stress_dip.toml (default: +20%, -40%, by session 5; the live VIX). The underlying
     against every day, with and without the stress filter; modeled calls across expiries and
     deltas, exits chosen on the earlier sessions; real option prices; costs; and the trigger
     worked out again at 15:45. Needs daily bars and the VIX; the real-price check needs
@@ -494,6 +514,7 @@ def research_stress_dip(
         option_bars=option_history.load_bars(lake),
         contracts=option_history.load_matches(lake),
         intraday=bars_5m,
+        config=stress_dip.load_config(settings.stress_dip_file),
     )
     path = write_json(
         out, lake.reports_dir("research") / f"stress_dip-{datetime.now(UTC):%Y%m%d-%H%M}.json"

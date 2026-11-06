@@ -53,6 +53,7 @@ from tp_core.storage import Lake, new_run_id, read_parquet_dir, write_json, writ
 from tp_core.volatility import latest_chains, snapshot_partitions
 from tp_strategies.budget import Budget
 from tp_strategies.ideas import ideas_from_lake
+from tp_strategies.library import stress_dip as sd
 from tp_strategies.options_research import CHAIN_MAX_AGE_DAYS, DISCLAIMER
 from tp_strategies.playbook import load_calibration, scan
 from tp_strategies.setups import exit_signal, indicators
@@ -204,9 +205,10 @@ def make_run(
     now: datetime,
     default_rate: float = 0.04,
     budget: Budget | None = None,
+    stress: sd.Config | None = None,
 ) -> dict[str, Any]:
-    """Scan for ideas (fitted to ``budget``: the account's buying power) and check the
-    portfolio, as of ``now``."""
+    """Scan for ideas (fitted to ``budget``: the account's buying power; strategy 16 by
+    ``stress``, ``config/stress_dip.toml``) and check the portfolio, as of ``now``."""
     today = now.astimezone(NEW_YORK).date()
     chains = latest_chains(lake, since=today - timedelta(days=CHAIN_MAX_AGE_DAYS))
     research = scan(
@@ -219,6 +221,7 @@ def make_run(
         held=held_summary(lake, classifier, now),
         calibration=load_calibration(lake),
         budget=budget,
+        stress=stress,
     )
     portfolio = ideas_from_lake(lake, classifier).to_dict()
     bars = load_bars(lake, ["SPY"])
@@ -241,6 +244,7 @@ def run_recommendations(
     now: datetime,
     default_rate: float = 0.04,
     budget: Budget | None = None,
+    stress: sd.Config | None = None,
 ) -> RunResult:
     """Make a run, mark what's new, store it and add it to the log."""
     run = make_run(
@@ -250,6 +254,7 @@ def run_recommendations(
         now=now,
         default_rate=default_rate,
         budget=budget,
+        stress=stress,
     )
     return store_run(lake, run, now=now)
 
@@ -461,6 +466,8 @@ def _plan(pick: Mapping[str, Any] | None) -> str | None:
         return json.dumps({k: pick["exit"].get(k) for k in held} | {"shares": True})
     keep = ("take_profit", "stop", "sell_by", "out_by", "stock")
     plan = {k: pick["exit"].get(k) for k in keep}
+    if pick["exit"].get("floor") is not None:  # strategy 16's floor, when it's turned on
+        plan |= {k: pick["exit"].get(k) for k in ("floor_trigger", "floor")}
     return json.dumps(plan | {"credit": pick.get("credit") is not None})
 
 
@@ -770,12 +777,15 @@ def follow_plan(
 ) -> dict[str, Any] | None:
     """Walk the sessions after the recommendation and close where the exit plan says: the
     profit target or the stop on the position's value (per share; for a credit, what it costs
-    to buy back), the stock-side rule, the time stop, the days-to-expiry limit, or expiry. Marks
-    are the middle of the bid and ask at each session's last snapshot."""
+    to buy back), the floor (debits: once a mark reached ``floor_trigger``, a later mark at or
+    under ``floor``), the stock-side rule, the time stop, the days-to-expiry limit, or expiry.
+    Marks are the middle of the bid and ask at each session's last snapshot."""
     if entry is None or not found:
         return None
     credit = bool(plan.get("credit"))
     target, stop = _float(plan.get("take_profit")), _float(plan.get("stop"))
+    trigger, floor = _float(plan.get("floor_trigger")), _float(plan.get("floor"))
+    armed = False
     sell_by = date.fromisoformat(str(plan["sell_by"])) if plan.get("sell_by") else None
     out_by = date.fromisoformat(str(plan["out_by"])) if plan.get("out_by") else None
     expiry = min(date.fromisoformat(str(leg["expiration"])[:10]) for leg in found)
@@ -792,6 +802,9 @@ def follow_plan(
             value += (1.0 if leg["side"] == "buy" else -1.0) * float(series[day])
         else:
             reason = _exit_reason(value, credit, target, stop)
+            if reason is None and armed and floor is not None and not credit and value <= floor:
+                reason = "floor"
+            armed = armed or (trigger is not None and not credit and value >= trigger)
             if reason is None and stock_exit is not None:
                 hit = stock_exit.get(pd.Timestamp(day))
                 reason = "stock" if bool(hit) else None

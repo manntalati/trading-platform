@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -12,6 +15,7 @@ from tp_core.calendar import NEW_YORK, session_close
 from tp_core.indicators import wilder_rsi
 from tp_strategies import playbook
 from tp_strategies.library import stress_dip as sd
+from tp_strategies.setups import SETUPS, STRESS_SETUPS
 
 
 def walk(n: int = 400, seed: int = 0, drift: float = 0.0005) -> pd.DataFrame:
@@ -26,7 +30,7 @@ def walk(n: int = 400, seed: int = 0, drift: float = 0.0005) -> pd.DataFrame:
     )
 
 
-def vix_series(days: pd.DatetimeIndex, level: float = 15.0) -> pd.Series:
+def vix_series(days: pd.Index, level: float = 15.0) -> pd.Series:
     return pd.Series(level, index=days)
 
 
@@ -110,11 +114,12 @@ def test_simulate_exits_on_the_stop_the_average_or_the_third_session() -> None:
         [[100, 90, 90, 90], [100, 101, 102, 103], [100, 100.5, 100.5, 100.5]],
         [[False] * 4, [False, True, False, False], [False] * 4],
     )
-    ret, held = sd.simulate(p, 21, 0.7, sd.SPEC_EXITS)
+    first = sd.FIRST_SPEC_EXITS  # the first spec's: SMA5 exit, -40%, 3 sessions
+    ret, held = sd.simulate(p, 21, 0.7, first)
     assert held.tolist() == [1, 1, 3]
     assert ret[0] <= -0.4  # a 10% drop takes a 0.70-delta call through the 40% stop
     assert ret[1] > 0
-    costed, _ = sd.simulate(p, 21, 0.7, sd.SPEC_EXITS, cost=0.02)
+    costed, _ = sd.simulate(p, 21, 0.7, first, cost=0.02)
     assert costed == pytest.approx(ret - 0.02)
 
 
@@ -283,3 +288,215 @@ def test_one_entry_a_day_goes_to_the_lowest_rsi() -> None:
     assert ranked[0]["play"]["todays_entry"]
     assert not ranked[1]["play"]["todays_entry"]
     assert "QQQ has the lowest RSI(2)" in ranked[1]["risks"][0]
+
+
+# -- the settings (config/stress_dip.toml) --------------------------------------------------------
+
+REPO_CONFIG = Path(__file__).resolve().parents[2] / "config" / "stress_dip.toml"
+
+
+def test_the_defaults_are_the_approved_exits_and_the_live_vix() -> None:
+    for cfg in (sd.load_config(REPO_CONFIG, local=False), sd.Config(), sd.config_from({})):
+        x = cfg.exits
+        assert (x.target, x.stop, x.hold) == (0.2, -0.4, 5)
+        assert x.floor_trigger is None  # no floor
+        assert not x.ma5  # no SMA5 exit
+        assert cfg.vix_timing == "live"
+    assert sd.load_config(Path("/nonexistent/stress_dip.toml")) == sd.Config()
+    # the setups' own defaults match, and the playbook maps the config onto both
+    mapped = playbook.stress_exits(sd.Config())
+    assert (mapped.take_profit, mapped.stop_loss, mapped.time_stop) == (0.2, -0.4, 5)
+    assert mapped.underlying is None
+    assert mapped.floor_trigger is None
+    for name in STRESS_SETUPS:
+        assert SETUPS[name].exits == mapped
+
+
+def test_false_turns_an_exit_off_and_the_local_file_wins(tmp_path: Path) -> None:
+    path = tmp_path / "stress_dip.toml"
+    path.write_text(
+        "[stress_dip]\ntake_profit_pct = false\nstop_pct = false\nuse_sma5_exit = true\n"
+        'floor_trigger_pct = 0.15\nvix_timing = "prev"\n'
+    )
+    cfg = sd.load_config(path)
+    x = cfg.exits
+    assert (x.target, x.stop, x.ma5, x.floor_trigger, x.floor) == (None, None, True, 0.15, 0.10)
+    assert cfg.vix_timing == "prev"
+    setups = playbook.with_stress_config(SETUPS, cfg)
+    for name in STRESS_SETUPS:
+        e = setups[name].exits
+        assert (e.take_profit, e.stop_loss, e.underlying) == (None, None, "above_ma5")
+        assert (e.floor_trigger, e.floor) == (0.15, 0.10)
+    assert setups["pullback"] == SETUPS["pullback"]
+    words = playbook.stress_exit_words(setups["stress_dip"].exits)
+    assert "back at +10% once it has been up 15%" in words
+    assert "no profit target" in words
+    (tmp_path / "stress_dip.local.toml").write_text("[stress_dip]\nmax_sessions = 3\n")
+    assert sd.load_config(path).exits.hold == 3
+    assert sd.load_config(path, local=False).exits.hold == 5
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "take_profit = 0.2",  # unknown key (a typo)
+        "max_sessions = 0",
+        "max_sessions = false",
+        "stop_pct = 0.4",  # a stop is a loss
+        "floor_trigger_pct = 0.08",  # under the floor
+        "use_sma5_exit = 1",
+        'vix_timing = "close"',
+    ],
+)
+def test_a_bad_setting_is_refused(tmp_path: Path, line: str) -> None:
+    path = tmp_path / "stress_dip.toml"
+    path.write_text(f"[stress_dip]\n{line}\n")
+    with pytest.raises(ValueError, match="stress_dip"):
+        sd.load_config(path)
+
+
+def test_the_floor_sells_a_call_that_gave_back_its_gain() -> None:
+    spot = [[100, 101.5, 100.2, 100.2, 100.2, 100.2]]
+    n = len(spot[0])
+    p = sd.Paths(
+        keys=pd.DataFrame({"symbol": ["SPY"], "session": [pd.Timestamp("2024-01-02")]}),
+        spot=np.asarray(spot, dtype=float),
+        above5=np.zeros((1, n), dtype=bool),
+        vix=np.full((1, n), 0.2),
+        days=np.arange(n, dtype=float)[None, :],
+        ratio=np.ones(1),
+        rate=np.full(1, 0.04),
+    )
+    plain = sd.Exits(hold=5, target=None)
+    floored = replace(plain, floor_trigger=0.15)
+    ret, held = sd.simulate(p, 21, 0.7, plain)
+    assert held.tolist() == [5]
+    ret, held = sd.simulate(p, 21, 0.7, floored)
+    assert held.tolist() == [2]  # up 15%+ on session 1, back under +10% on session 2
+    assert ret[0] <= 0.10
+    # the default target takes the first session's gain instead
+    _, held = sd.simulate(p, 21, 0.7, sd.SPEC_EXITS)
+    assert held.tolist() == [1]
+
+
+def test_real_prices_take_the_target_and_the_floor() -> None:
+    frame = sd.daily(walk(260))
+    ev = sd.events({"SPY": frame}, vix_series(frame.index))
+    days = list(ev["session"].iloc[-8:-1])
+    spot = float(ev.loc[ev["session"] == days[0], "raw_close"].iloc[0])
+    contracts = pd.DataFrame(
+        {
+            "contract": ["C1"],
+            "underlying": ["SPY"],
+            "right": ["C"],
+            "expiration": [days[0] + timedelta(days=30)],
+            "strike": [spot * 0.97],
+        }
+    )
+    closes = [5.0, 5.5, 6.25, 5.4, 5.0, 5.0, 5.0]
+    bars = pd.DataFrame({"contract": "C1", "session": days, "close": closes, "volume": 100})
+    obs = sd.real_prices(bars, contracts, ev).set_index("session")  # the approved defaults
+    assert obs.loc[days[0], "ret"] == pytest.approx(0.25)  # +20% target on session 2
+    assert obs.loc[days[0], "held"] == 2
+    floor = sd.Exits(target=None, floor_trigger=0.2)
+    obs = sd.real_prices(bars, contracts, ev, floor).set_index("session")
+    assert obs.loc[days[0], "ret"] == pytest.approx(0.08)  # armed at +25%, out at +8%
+    assert obs.loc[days[0], "held"] == 3
+
+
+# -- which VIX the stress filter reads ------------------------------------------------------------
+
+
+def test_the_live_timing_reads_the_sessions_own_vix() -> None:
+    days = pd.bdate_range("2024-01-01", periods=15)
+    vix = pd.Series([15.0] * 14 + [40.0], index=days)
+    prev, live = sd.stress(vix, days, "prev"), sd.stress(vix, days, "live")
+    assert not prev["stressed"].iloc[-1]
+    assert prev["vix"].iloc[-1] == 15.0
+    assert live["stressed"].iloc[-1]
+    assert live["vix"].iloc[-1] == 40.0
+    assert live["vix_prev"].iloc[-1] == 15.0
+    later = days.append(pd.DatetimeIndex([days[-1] + timedelta(days=3)]))
+    gap = sd.stress(vix, later, "live")  # no value for that session: the previous close
+    assert gap["vix"].iloc[-1] == 40.0
+    assert gap["vix_date"].iloc[-1] == days[-1]
+
+
+def quote(price: float, at: str) -> bytes:
+    return json.dumps(
+        {"timestamp": "x", "data": {"current_price": price, "last_trade_time": at}}
+    ).encode()
+
+
+def test_the_live_vix_comes_from_cboes_delayed_quote_or_not_at_all() -> None:
+    now = datetime(2024, 7, 12, 15, 45, tzinfo=NEW_YORK)
+    got = sd.live_vix(now, lambda url: quote(23.4, "2024-07-12T15:30:02"))
+    assert got is not None
+    assert got[0] == 23.4
+    assert got[1] == datetime(2024, 7, 12, 15, 30, 2, tzinfo=NEW_YORK)
+    assert sd.live_vix(now, lambda url: quote(23.4, "2024-07-11T16:15:00")) is None  # yesterday
+    assert sd.live_vix(now, lambda url: quote(23.4, "2024-07-12T14:00:00")) is None  # stale
+
+    def down(url: str) -> bytes:
+        raise OSError("unreachable")
+
+    assert sd.live_vix(now, down) is None
+    assert sd.live_vix(now, lambda url: b'{"data": {}}') is None
+
+
+def test_the_late_frame_reads_the_live_vix_and_labels_the_fallback() -> None:
+    bars = walk(300)[["open", "high", "low", "close"]]
+    today = (bars.index[-1] + timedelta(days=3)).date()  # the Monday after
+    bar = pd.Series({"open": 100.0, "high": 101.0, "low": 95.0, "close": 95.5})
+    vix = vix_series(bars.index, 15.0)  # calm closes
+    at = datetime.combine(today, datetime.min.time(), NEW_YORK).replace(hour=15, minute=30)
+    live = playbook.late_frame(bars, bar, vix, today, timing="live", live=(30.0, at))
+    assert live is not None
+    last = live.iloc[-1]
+    assert (last["vix"], last["vix_source"], last["vix_fallback"]) == (30.0, "live", False)
+    assert last["stressed"]  # the spike today counts
+    assert "live VIX (Cboe's delayed quote, 15:30) 30.0" in playbook.vix_words(last)
+    fallback = playbook.late_frame(bars, bar, vix, today, timing="live", live=None)
+    assert fallback is not None
+    last = fallback.iloc[-1]
+    assert (last["vix"], last["vix_source"], last["vix_fallback"]) == (15.0, "prev", True)
+    assert not last["stressed"]
+    assert last["vix_at"] == str(bars.index[-1].date())
+    assert "couldn't be had" in playbook.vix_words(last)
+    asked = playbook.late_frame(bars, bar, vix, today, timing="prev", live=(30.0, at))
+    assert asked is not None
+    last = asked.iloc[-1]
+    assert (last["vix_source"], last["vix_fallback"], last["stressed"]) == ("prev", False, False)
+    assert "couldn't be had" not in playbook.vix_words(last)
+
+
+def test_the_study_reports_the_real_check_under_both_timings() -> None:
+    frames = {s: sd.daily(walk(700, seed=i)) for i, s in enumerate(["QQQ", "SPY", "IWM"])}
+    days = frames["SPY"].index
+    vix = pd.Series(18 + 6 * np.sin(np.arange(len(days)) / 7), index=days)
+    spot = frames["SPY"]["raw_close"]
+    contracts, rows = [], []
+    for i, day in enumerate(days[300:-10]):
+        c = f"C{i}"
+        contracts.append((c, "SPY", "C", day + timedelta(days=30), float(spot[day]) * 0.97))
+        for j, d in enumerate(days[300 + i : 300 + i + 7]):
+            rows.append((c, d, 5.0 * (1 + 0.03 * np.sin(i + j)), 100))
+    out = sd.study(
+        frames,
+        vix,
+        ratios={"SPY": 1.0},
+        option_bars=pd.DataFrame(rows, columns=["contract", "session", "close", "volume"]),
+        contracts=pd.DataFrame(
+            contracts, columns=["contract", "underlying", "right", "expiration", "strike"]
+        ),
+        config=sd.Config(),
+    )
+    assert out["config"] == {"exits": sd.SPEC_EXITS.describe(), "vix_timing": "live"}
+    assert set(out["real_by_vix"]) == {"live", "prev"}
+    index = "index (QQQ, SPY, IWM, DIA)"
+    control = [
+        out["real_by_vix"][t]["groups"][index]["every day (control)"]["all"]["2%"]["n"]
+        for t in ("live", "prev")
+    ]
+    assert control[0] == control[1] > 0  # the timing changes the signal, not the sample
+    assert out["real"] == out["real_by_vix"]["live"]

@@ -1,19 +1,23 @@
-"""Strategy 16: stress-dip calls, 1-3 session swing calls on the index funds.
+"""Strategy 16: stress-dip calls, swing calls held a few sessions on the index funds.
 
 Spec: docs/strategies/16-stress-dip-calls.md. When QQQ, SPY or IWM is above its 200-day average
 and dips (RSI(2) under 10 with the 50-day above the 200-day, or a down day closing in the bottom
-fifth of its range), **and the market is stressed** (the previous VIX close above its 10-day
-average, or at least 20), buy a call about 21 days out at about 0.70 delta in the last fifteen
-minutes of the session; sell it on the first close above the 5-day average, at a 40% loss, or
-on the third session.
+fifth of its range), **and the market is stressed** (the VIX above its 10-day average, or at
+least 20), buy a call about 21 days out at about 0.70 delta in the last fifteen minutes of the
+session. The exits and which VIX the filter reads come from ``config/stress_dip.toml``
+(``load_config``); the defaults the user approved on 2026-11-04 are a +20% profit target, a 40%
+stop and a sale on the fifth session at the latest, no floor and no stock-side exit, and the
+live VIX at about 15:45 (``vix_timing = "live"``; ``"prev"`` reads the previous close instead).
 
 The rule (``daily``, ``dip``, ``stress``) is shared with the playbook's ``stress_dip`` setup
 (``tp_strategies.setups``), which evaluates it at 15:45 with the live price as a provisional
-close. The research study (``study``) works on the lake:
+close and the VIX from Cboe's delayed quote (``live_vix``), falling back to the previous close
+when the quote can't be had. The research study (``study``) works on the lake:
 
 - **The underlying**: 1, 2 and 3-session returns after the signal close against every day (the
   control), with and without the stress filter, on the earlier ``TRAIN`` share of the sessions
-  and the later rest. The stress filter reads the VIX up to the previous session only.
+  and the later rest. With ``"live"`` the session's own VIX close stands in for the 15:45 value
+  (the lake has no intraday VIX); with ``"prev"`` the filter reads up to the previous session.
 - **Calls, modeled**: Black-Scholes at an implied volatility that moves with the VIX (each
   fund's 30-day IV as a multiple of the VIX, from the lake's snapshots), so a bounce that calms
   the VIX also cheapens the call. Every expiry and delta in ``DTES`` x ``DELTAS``, the exits
@@ -21,7 +25,7 @@ close. The research study (``study``) works on the lake:
   same model on every day as the control (the model is generous: read the signal minus it).
 - **Calls, real prices**: the daily bars of the contracts the lake has (``option_bars_1d``:
   trades, not quotes), slightly in the money, 10 to 60 days out, followed with the strategy's
-  exits; one observation per fund and session.
+  exits; one observation per fund and session; reported under both VIX timings.
 - **Costs**: 1, 2 and 5% of the premium a round trip.
 - **At 15:45**: the trigger worked out again from the 5-minute bars, with the 15:45 price as the
   close and the day's high and low so far, entered and exited at 15:45 prices; does the signal
@@ -31,10 +35,16 @@ close. The research study (``study``) works on the lake:
 from __future__ import annotations
 
 import itertools
+import json
+import logging
 import math
-from collections.abc import Mapping, Sequence
+import tomllib
+import urllib.request
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import Any
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -42,6 +52,8 @@ from scipy import special
 from scipy.stats import norm
 
 from tp_core.calendar import NEW_YORK
+
+log = logging.getLogger(__name__)
 
 TIER1 = ("QQQ", "SPY", "IWM")  # tradeable: the tightest call markets in the lake
 OPTIONAL = ("DIA",)  # tradeable too, wider spreads
@@ -65,9 +77,9 @@ SKIP = (  # leveraged, bond and cash funds: not what the rule is about
 
 RSI_BELOW = 10.0
 IBS_BELOW = 0.2
-VIX_HIGH = 20.0  # the previous VIX close at least this is stress on its own
-VIX_DAYS = 10  # ... or above its average over this many closes
-TIER2_VIX = 25.0  # single stocks only when the previous VIX close is at least this
+VIX_HIGH = 20.0  # the VIX at least this is stress on its own
+VIX_DAYS = 10  # ... or above its average over this many closes (the last one the VIX read)
+TIER2_VIX = 25.0  # single stocks only when the VIX the filter read is at least this
 EARNINGS_SESSIONS = 5  # single stocks: no results within this many sessions
 TRAIN = 0.6
 HORIZONS = (1, 2, 3)
@@ -76,7 +88,7 @@ DELTAS = (0.5, 0.6, 0.7, 0.8)
 COSTS = (0.01, 0.02, 0.05)  # of the premium, a round trip
 MIN_TRADES = 30  # a choice of exits on fewer training trades keeps the spec's
 EXIT_GRID: dict[str, tuple[Any, ...]] = {
-    "hold": (1, 2, 3),
+    "hold": (1, 2, 3, 5),
     "stop": (None, -0.25, -0.4),
     "target": (None, 0.2, 0.3, 0.5),
     "ma5": (False, True),
@@ -88,26 +100,192 @@ REAL_MIN_VOLUME = 10
 
 @dataclass(frozen=True)
 class Exits:
-    """When to sell: the session count, a stop on the premium, an optional profit target, and
-    the stock-side exit (a close above the 5-day average)."""
+    """When to sell, each checked on the call's mark once a session after entry: a stop and a
+    profit target on the premium, a floor (once the mark has been up ``floor_trigger``, sell if
+    a later mark is back to ``floor``), the stock-side exit (a close above the 5-day average),
+    and the session count. ``None`` (or ``False`` for ``ma5``) turns one off. The defaults are
+    the ones the user approved on 2026-11-04."""
 
-    hold: int = 3
+    hold: int = 5
     stop: float | None = -0.4
-    target: float | None = None
-    ma5: bool = True
+    target: float | None = 0.2
+    ma5: bool = False
+    floor_trigger: float | None = None
+    floor: float = 0.10
 
     def describe(self) -> str:
-        parts = [f"{self.hold} session{'s' * (self.hold > 1)}"]
-        if self.stop is not None:
-            parts.append(f"stop {self.stop:.0%}")
+        parts = []
         if self.target is not None:
             parts.append(f"target +{self.target:.0%}")
+        if self.stop is not None:
+            parts.append(f"stop {self.stop:.0%}")
+        if self.floor_trigger is not None:
+            parts.append(f"floor +{self.floor:.0%} once up {self.floor_trigger:.0%}")
         if self.ma5:
             parts.append("out on a close above the 5-day average")
+        parts.append(f"by session {self.hold}")
         return ", ".join(parts)
 
+    def check(self, r: Any, armed: Any, above5: Any) -> Any:
+        """Whether a mark ``r`` (return on the premium) sells, given whether the floor was armed
+        by an earlier mark and whether the close is above the 5-day average (scalars or arrays).
+        The session count is the caller's."""
+        hit = np.zeros(np.shape(r), dtype=bool)
+        if self.stop is not None:
+            hit = hit | (r <= self.stop)
+        if self.target is not None:
+            hit = hit | (r >= self.target)
+        if self.floor_trigger is not None:
+            hit = hit | (armed & (r <= self.floor))
+        if self.ma5:
+            hit = hit | above5
+        return hit
 
-SPEC_EXITS = Exits()
+    def arms(self, r: Any) -> Any:
+        """Whether a mark ``r`` arms the floor for the marks after it."""
+        if self.floor_trigger is None:
+            return np.zeros(np.shape(r), dtype=bool)
+        return np.asarray(r >= self.floor_trigger)
+
+
+SPEC_EXITS = Exits()  # the approved defaults
+FIRST_SPEC_EXITS = Exits(
+    hold=3, stop=-0.4, target=None, ma5=True
+)  # the first spec's, for reference
+VixTiming = Literal["live", "prev"]
+VIX_TIMINGS: tuple[VixTiming, ...] = ("live", "prev")
+
+
+# -- the settings ---------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Config:
+    """``config/stress_dip.toml``: the exits and which VIX the stress filter reads."""
+
+    exits: Exits = SPEC_EXITS
+    vix_timing: VixTiming = "live"
+
+    def describe(self) -> str:
+        vix = "the live VIX at ~15:45" if self.vix_timing == "live" else "the previous VIX close"
+        return f"{self.exits.describe()}; stress from {vix}"
+
+
+CONFIG_KEYS = (
+    "take_profit_pct",
+    "stop_pct",
+    "max_sessions",
+    "floor_trigger_pct",
+    "floor_pct",
+    "use_sma5_exit",
+    "vix_timing",
+)
+
+
+def load_config(path: Path, *, local: bool = True) -> Config:
+    """Read the ``[stress_dip]`` table of ``path`` and, unless ``local`` is False, of
+    ``<name>.local.toml`` next to it (git-ignored), whose keys win. A missing file or key keeps
+    the default; ``false`` turns an exit off. Raises ``ValueError`` on an unknown key or a value
+    out of range."""
+    raw: dict[str, Any] = {}
+    for candidate in (path, path.with_name(f"{path.stem}.local.toml")):
+        if candidate != path and not local:
+            continue
+        if not candidate.exists():
+            continue
+        with candidate.open("rb") as f:
+            table = tomllib.load(f).get("stress_dip", {})
+        unknown = sorted(set(table) - set(CONFIG_KEYS))
+        if unknown:
+            raise ValueError(f"unknown keys in [stress_dip] of {candidate}: {unknown}")
+        raw.update(table)
+    return config_from(raw)
+
+
+def _pct(raw: Mapping[str, Any], key: str, default: float | None, low: float, high: float) -> Any:
+    value = raw.get(key, default)
+    if value is False or value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError(f"[stress_dip] {key} must be a number or false, got {value!r}")
+    if not low < float(value) < high:
+        raise ValueError(f"[stress_dip] {key} must be between {low:g} and {high:g}: {value}")
+    return float(value)
+
+
+def config_from(raw: Mapping[str, Any]) -> Config:
+    """``Config`` from the keys of a ``[stress_dip]`` table (``CONFIG_KEYS``)."""
+    d = SPEC_EXITS
+    hold = raw.get("max_sessions", d.hold)
+    if isinstance(hold, bool) or not isinstance(hold, int) or not 1 <= hold <= 10:
+        raise ValueError(f"[stress_dip] max_sessions must be a whole number 1-10: {hold!r}")
+    floor = _pct(raw, "floor_pct", d.floor, 0.0, 1.0)
+    trigger = _pct(raw, "floor_trigger_pct", d.floor_trigger, 0.0, 10.0)
+    if trigger is not None and (floor is None or floor >= trigger):
+        raise ValueError("[stress_dip] floor_pct must be set and below floor_trigger_pct")
+    sma5 = raw.get("use_sma5_exit", d.ma5)
+    if not isinstance(sma5, bool):
+        raise ValueError(f"[stress_dip] use_sma5_exit must be true or false: {sma5!r}")
+    timing = raw.get("vix_timing", "live")
+    if timing not in VIX_TIMINGS:
+        raise ValueError(f'[stress_dip] vix_timing must be "live" or "prev": {timing!r}')
+    exits = Exits(
+        hold=hold,
+        stop=_pct(raw, "stop_pct", d.stop, -1.0, 0.0),
+        target=_pct(raw, "take_profit_pct", d.target, 0.0, 10.0),
+        ma5=sma5,
+        floor_trigger=trigger,
+        floor=floor if floor is not None else d.floor,
+    )
+    return Config(exits=exits, vix_timing=timing)
+
+
+# -- the live VIX ---------------------------------------------------------------------------------
+
+CBOE_QUOTE = "https://cdn-api.cboe.com/api/global/delayed_quotes/quotes/_VIX.json"
+LIVE_MAX_AGE = timedelta(minutes=30)  # Cboe's quote is delayed 15 minutes; older is stale
+QUOTE_TIMEOUT = 10.0
+USER_AGENT = "trading-platform/0.1 (personal research)"
+
+Fetch = Callable[[str], bytes]
+
+
+def _get(url: str) -> bytes:
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(request, timeout=QUOTE_TIMEOUT) as response:
+        body: bytes = response.read()
+    return body
+
+
+def parse_vix_quote(payload: Mapping[str, Any]) -> tuple[float, datetime]:
+    """The VIX and when it traded (New York time) from Cboe's delayed-quote JSON
+    (``data.current_price``, ``data.last_trade_time`` in exchange time)."""
+    data = payload.get("data") or {}
+    price, at = data.get("current_price"), data.get("last_trade_time")
+    if price is None or not at:
+        raise ValueError("no current_price or last_trade_time in the Cboe quote")
+    value = float(price)
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"the Cboe quote's VIX is not a level: {price!r}")
+    when = datetime.fromisoformat(str(at))
+    when = when.replace(tzinfo=NEW_YORK) if when.tzinfo is None else when.astimezone(NEW_YORK)
+    return value, when
+
+
+def live_vix(now: datetime, fetch: Fetch | None = None) -> tuple[float, datetime] | None:
+    """The VIX now from Cboe's delayed quote, with when it traded; ``None`` when the quote can't
+    be had, isn't from today's session, or is more than ``LIVE_MAX_AGE`` old (the caller falls
+    back to the previous close and says so)."""
+    try:
+        value, at = parse_vix_quote(json.loads((fetch or _get)(CBOE_QUOTE)))
+    except Exception:  # any failure means the fallback, which is labelled
+        log.warning("the live VIX quote couldn't be had; the previous close stands in")
+        return None
+    here = now.astimezone(NEW_YORK)
+    if at.date() != here.date() or not timedelta(0) <= here - at <= LIVE_MAX_AGE:
+        log.warning("the live VIX quote is from %s; the previous close stands in", at)
+        return None
+    return value, at
 
 
 # -- the rule -------------------------------------------------------------------------------------
@@ -155,24 +333,45 @@ def dip(ind: pd.DataFrame) -> pd.Series:
     return out
 
 
-def stress(vix: pd.Series, sessions: Sequence[Any] | pd.Index) -> pd.DataFrame:
-    """Per session: the previous VIX close (``vix_prev``, the last one dated before the
-    session), its average over ``VIX_DAYS`` closes ending then (``vix_avg``), and ``stressed``:
-    above that average or at least ``VIX_HIGH``. Nothing from the session itself, so it's known
-    at 15:45."""
+def stress(
+    vix: pd.Series, sessions: Sequence[Any] | pd.Index, timing: VixTiming = "prev"
+) -> pd.DataFrame:
+    """Per session: the VIX the filter reads (``vix``) and when it was (``vix_date``), its average
+    over ``VIX_DAYS`` closes ending there (``vix_avg``), the previous close (``vix_prev``, the
+    last one dated before the session), and ``stressed``: above that average or at least
+    ``VIX_HIGH``. ``timing="prev"`` reads the previous close: nothing from the session itself.
+    ``"live"`` reads the session's own value (in the playbook the 15:45 quote, dated the session;
+    in the study the session's close stands in for it), and the previous close when the series
+    has none for the session (``vix_date`` then says so)."""
     v = vix.dropna().astype(float).sort_index()
     v.index = pd.DatetimeIndex(v.index)
     avg = v.rolling(VIX_DAYS).mean()
     days = pd.DatetimeIndex(pd.to_datetime(list(sessions)))
-    at = np.searchsorted(v.index.to_numpy(), days.to_numpy(), side="left") - 1
-    ok = at >= 0
-    prev = np.where(ok, v.to_numpy()[np.maximum(at, 0)], np.nan)
-    mean = np.where(ok, avg.to_numpy()[np.maximum(at, 0)], np.nan)
-    when = np.where(ok, v.index.to_numpy()[np.maximum(at, 0)], np.datetime64("NaT", "ns"))
+    stamps = v.index.to_numpy()
+
+    def at(side: Literal["left", "right"]) -> tuple[Any, Any, Any, Any]:
+        i = np.searchsorted(stamps, days.to_numpy(), side=side) - 1
+        ok = i >= 0
+        j = np.maximum(i, 0)
+        value = np.where(ok, v.to_numpy()[j], np.nan)
+        mean = np.where(ok, avg.to_numpy()[j], np.nan)
+        when = np.where(ok, stamps[j], np.datetime64("NaT", "ns"))
+        return value, mean, when, ok
+
+    prev, prev_mean, prev_when, prev_ok = at("left")
+    value, mean, when, ok = (
+        (prev, prev_mean, prev_when, prev_ok) if timing == "prev" else at("right")
+    )
     with np.errstate(invalid="ignore"):
-        stressed = (prev > mean) | (prev >= VIX_HIGH)
+        stressed = (value > mean) | (value >= VIX_HIGH)
     return pd.DataFrame(
-        {"vix_prev": prev, "vix_avg": mean, "vix_date": when, "stressed": stressed & ok},
+        {
+            "vix": value,
+            "vix_avg": mean,
+            "vix_date": when,
+            "vix_prev": prev,
+            "stressed": stressed & ok,
+        },
         index=days,
     )
 
@@ -208,19 +407,22 @@ def events(
     frames: Mapping[str, pd.DataFrame],
     vix: pd.Series,
     earnings: Mapping[str, Sequence[Any]] | None = None,
+    timing: VixTiming = "prev",
 ) -> pd.DataFrame:
     """One row per (symbol, session) with 200 sessions behind it: the rule's inputs, ``dip``,
-    the stress columns, the forward returns ``fwd1``..``fwd3`` (close to close) and the same in
-    units of the name's daily volatility at the signal less its average day (``z1``..``z3``),
-    and ``earnings_near`` (results within ``EARNINGS_SESSIONS`` sessions either way)."""
+    the stress columns (``stress`` with ``timing``), the forward returns ``fwd1``..``fwd3``
+    (close to close) and the same in units of the name's daily volatility at the signal less its
+    average day (``z1``..``z3``), and ``earnings_near`` (results within ``EARNINGS_SESSIONS``
+    sessions either way)."""
     rows = []
     for symbol, ind in frames.items():
         if len(ind) < 210:
             continue
         f = ind.copy()
         f["dip"] = dip(f)
-        s = stress(vix, f.index)
-        f[["vix_prev", "vix_avg", "stressed"]] = s[["vix_prev", "vix_avg", "stressed"]].to_numpy()
+        s = stress(vix, f.index, timing)
+        cols = ["vix", "vix_prev", "vix_avg", "stressed"]
+        f[cols] = s[cols].to_numpy()
         f["stressed"] = f["stressed"].astype(bool)
         mean = float(f["ret1"].mean())
         for k in HORIZONS:
@@ -279,7 +481,7 @@ def _signals(ev: pd.DataFrame) -> dict[str, pd.Series]:
 
 
 def underlying_study(ev: pd.DataFrame, groups: Mapping[str, Sequence[str]]) -> dict[str, Any]:
-    """Each group of names (and, for single stocks, only when the previous VIX close is at least
+    """Each group of names (and, for single stocks, only when the VIX the filter read is at least
     ``TIER2_VIX`` with no results near) by signal, on the training and test sessions."""
     cut = cut_of(ev)
     out: dict[str, Any] = {}
@@ -290,8 +492,8 @@ def underlying_study(ev: pd.DataFrame, groups: Mapping[str, Sequence[str]]) -> d
         table: dict[str, Any] = {}
         variants = {name: mine}
         if set(symbols) <= set(TIER2_STOCKS):
-            calm = mine[(mine["vix_prev"] >= TIER2_VIX) & ~mine["earnings_near"]]
-            variants[f"{name}, VIX(t-1) >= {TIER2_VIX:g}, no results near"] = calm
+            calm = mine[(mine["vix"] >= TIER2_VIX) & ~mine["earnings_near"]]
+            variants[f"{name}, VIX >= {TIER2_VIX:g}, no results near"] = calm
         for label, frame in variants.items():
             table[label] = {}
             for part, rows in (
@@ -315,9 +517,9 @@ def underlying_study(ev: pd.DataFrame, groups: Mapping[str, Sequence[str]]) -> d
 
 @dataclass
 class Paths:
-    """Each signal's next ``HOLD`` sessions: closes (``spot``, entry first), whether each close
-    is above its 5-day average (``above5``), the VIX (``vix``), calendar days since entry
-    (``days``), the fund's IV over the VIX (``ratio``), the rate and the session."""
+    """Each signal's next sessions (``HOLD`` by default): closes (``spot``, entry first),
+    whether each close is above its 5-day average (``above5``), the VIX (``vix``), calendar days
+    since entry (``days``), the fund's IV over the VIX (``ratio``), the rate and the session."""
 
     keys: pd.DataFrame
     spot: np.ndarray[Any, np.dtype[np.float64]]
@@ -352,10 +554,11 @@ def paths(
     vix: pd.Series,
     ratios: Mapping[str, float],
     rate: pd.Series | float,
+    hold: int = HOLD,
 ) -> Paths:
     """``keys``: rows with ``symbol`` and ``session``; ``prices``: each symbol's price per
     session (the close, or the 15:45 price), ``above5``: whether it was above the 5-day average
-    then. Signals without ``HOLD`` sessions after them are dropped."""
+    then. Signals without ``hold`` sessions after them are dropped."""
     v = vix.dropna().astype(float).sort_index()
     v.index = pd.DatetimeIndex(v.index)
     out_keys, spot, up, vx, days, ratio, rates = [], [], [], [], [], [], []
@@ -368,19 +571,19 @@ def paths(
         values, above = s.to_numpy(dtype=float), above5[str(symbol)].reindex(index).to_numpy()
         for _, row in g.iterrows():
             i = where.get(pd.Timestamp(row["session"]))
-            if i is None or i + HOLD >= len(index):
+            if i is None or i + hold >= len(index):
                 continue
-            span = index[i : i + HOLD + 1]
+            span = index[i : i + hold + 1]
             out_keys.append(row)
-            spot.append(values[i : i + HOLD + 1])
-            up.append(above[i : i + HOLD + 1].astype(bool))
+            spot.append(values[i : i + hold + 1])
+            up.append(above[i : i + hold + 1].astype(bool))
             vx.append(v.reindex(span, method="ffill").to_numpy() / 100)
             days.append(np.asarray((span - span[0]).days, dtype=float))
             ratio.append(float(ratios.get(str(symbol), 1.0)))
             r = rate if isinstance(rate, float) else float(rate.asof(span[0]))  # type: ignore[arg-type]
             rates.append(r if math.isfinite(r) else 0.04)
     if not out_keys:
-        empty = np.zeros((0, HOLD + 1))
+        empty = np.zeros((0, hold + 1))
         return Paths(
             pd.DataFrame(columns=keys.columns),
             empty,
@@ -413,7 +616,8 @@ def simulate(
     """The call's return on the premium for each path (after ``cost``, a share of the premium a
     round trip) and the sessions it was held. Bought at the entry price at ``delta``, ``dte``
     days out; marked at each later price, at the IV the VIX then implies. Exits are checked on
-    each mark in order: the stop, the target, the stock-side exit, the session count."""
+    each mark (``Exits.check``): the stop, the target, the floor, the stock-side exit, then the
+    session count. ``p`` needs ``exits.hold`` sessions after entry."""
     n = len(p)
     if n == 0:
         return np.zeros(0), np.zeros(0)
@@ -424,20 +628,18 @@ def simulate(
     ret = np.full(n, np.nan)
     held = np.zeros(n)
     done = np.zeros(n, dtype=bool)
+    armed = np.zeros(n, dtype=bool)
+    if p.spot.shape[1] <= exits.hold:
+        raise ValueError(f"the paths cover {p.spot.shape[1] - 1} sessions, the exits {exits.hold}")
     for j in range(1, exits.hold + 1):
         t = np.maximum(dte - p.days[:, j], 0.0) / 365.0
         r = _price(p.spot[:, j], strike, t, iv[:, j], p.rate) / entry - 1
-        hit = np.zeros(n, dtype=bool)
-        if exits.stop is not None:
-            hit |= ~done & (r <= exits.stop)
-        if exits.target is not None:
-            hit |= ~done & (r >= exits.target)
-        if exits.ma5:
-            hit |= ~done & p.above5[:, j]
+        hit = ~done & exits.check(r, armed, p.above5[:, j])
         if j == exits.hold:
             hit |= ~done
         ret[hit], held[hit] = r[hit], j
         done |= hit
+        armed |= exits.arms(r)
     return ret - cost, held
 
 
@@ -492,19 +694,23 @@ def choose_exits(
 
 
 def modeled_study(
-    p: Paths, control: Paths, cut: pd.Timestamp, cost: float = 0.02
+    p: Paths,
+    control: Paths,
+    cut: pd.Timestamp,
+    cost: float = 0.02,
+    exits: Exits = SPEC_EXITS,
 ) -> dict[str, Any]:
     """Every expiry and delta: the exits chosen on the training signals, judged on the test, and
-    the spec's exits, after ``cost``; the control (every day, spec's exits) for the model's own
-    bias; and profit targets added to the spec's exits."""
+    the strategy's ``exits`` (``spec``), after ``cost``; the control (every day, the strategy's
+    exits) for the model's own bias; and other profit targets in place of the strategy's."""
     train = (pd.to_datetime(p.keys["session"]) < cut).to_numpy()
     ctrl_train = (pd.to_datetime(control.keys["session"]) < cut).to_numpy()
     grid: dict[str, Any] = {}
     for dte, delta in itertools.product(DTES, DELTAS):
         chosen = choose_exits(p, train, dte, delta)
         ret, held = simulate(p, dte, delta, chosen, cost)
-        spec, _ = simulate(p, dte, delta, SPEC_EXITS, cost)
-        ctrl, _ = simulate(control, dte, delta, SPEC_EXITS, cost)
+        spec, _ = simulate(p, dte, delta, exits, cost)
+        ctrl, _ = simulate(control, dte, delta, exits, cost)
         grid[f"{dte}d, delta {delta:.1f}"] = {
             "dte": dte,
             "delta": delta,
@@ -518,9 +724,9 @@ def modeled_study(
         }
     targets = {}
     for target in (None, 0.2, 0.3, 0.5):
-        exits = replace(SPEC_EXITS, target=target)
-        r, _ = simulate(p, 21, 0.7, exits, cost)
-        label = "no target (spec)" if target is None else f"target +{target:.0%}"
+        r, _ = simulate(p, 21, 0.7, replace(exits, target=target), cost)
+        label = "no target" if target is None else f"target +{target:.0%}"
+        label += " (the strategy's)" if target == exits.target else ""
         targets[label] = {"train": trade_stats(r[train]), "test": trade_stats(r[~train])}
     return {"cost": cost, "grid": grid, "targets": targets}
 
@@ -564,9 +770,10 @@ def real_prices(
 ) -> pd.DataFrame:
     """Calls bought at a daily bar's close (strike ``REAL_MONEYNESS`` of the underlying's close,
     ``REAL_DTE`` days out, ``REAL_MIN_VOLUME`` contracts traded) and sold by ``exits`` at later
-    closes, on every session the lake has a bar for; one row per underlying and session (the
-    median over its contracts) with the signal columns of ``ev``. A contract with no trade on
-    the session it would be sold is left out."""
+    closes (each exit, the floor too, judged on the close: one mark a session, as the playbook's
+    track record does), on every session the lake has a bar for; one row per underlying and
+    session (the median over its contracts) with the signal columns of ``ev``. A contract with
+    no trade on the session it would be sold is left out."""
     calls = contracts[contracts["right"] == "C"].drop_duplicates("contract")
     bars = option_bars.merge(
         calls[["contract", "underlying", "expiration", "strike"]], on="contract"
@@ -611,20 +818,16 @@ def real_prices(
         ahead = nxt.get((symbol, day)) or []
         if len(ahead) < exits.hold:
             continue
-        result, held = np.nan, 0
+        result, held, armed = np.nan, 0, False
         for j, d in enumerate(ahead, start=1):
             mark = closes.get((contract, d))
             if mark is None:
                 break
             r = mark / entry - 1
-            if (
-                (exits.stop is not None and r <= exits.stop)
-                or (exits.target is not None and r >= exits.target)
-                or (exits.ma5 and above.get((symbol, d), False))
-                or j == exits.hold
-            ):
+            if bool(exits.check(r, armed, bool(above.get((symbol, d), False)))) or j == exits.hold:
                 result, held = r, j
                 break
+            armed = armed or bool(exits.arms(r))
         if np.isfinite(result):
             rows.append((symbol, day, result, held, dte))
     trades = pd.DataFrame(rows, columns=["symbol", "session", "ret", "held", "dte"])
@@ -736,11 +939,13 @@ def late_study(
     exits: Exits = SPEC_EXITS,
     dte: int = 21,
     delta: float = 0.7,
+    timing: VixTiming = "prev",
 ) -> dict[str, Any]:
     """The rule worked out at 15:45 (``at_1545``) on each fund with 5-minute bars: how often it
     agrees with the close's signal, the underlying's moves from 15:45 to the later 15:45s, and
-    the modeled call bought and sold at 15:45 prices with the spec's exits (the exit's 5-day
-    average with the 15:45 price as its close), after each of ``COSTS``."""
+    the modeled call bought and sold at 15:45 prices with ``exits`` (the 5-day average, when
+    it's on, with the 15:45 price as its close), after each of ``COSTS``. The stress filter
+    reads the VIX by ``timing`` (``stress``)."""
     prices, above, rows = {}, {}, []
     for symbol, g in late.groupby("symbol"):
         ind = frames.get(str(symbol))
@@ -753,7 +958,7 @@ def late_study(
         frame = pd.DataFrame(prov, index=ind.index)
         frame["ma200_ok"] = frame["ma200"].notna() & ind["ma200"].notna()
         fired = dip(frame) & frame["ma200_ok"]
-        s = stress(vix, ind.index)
+        s = stress(vix, ind.index, timing)
         have = np.isfinite(p)
         prices[str(symbol)] = pd.Series(p, index=ind.index)
         above[str(symbol)] = pd.Series(p > frame["ma5"].to_numpy(), index=ind.index)
@@ -791,7 +996,7 @@ def late_study(
         ("every day (control)", pd.Series(True, index=flags.index)),
     ):
         keys = flags[m][["symbol", "session", "rsi2"]]
-        p = paths(keys, prices, above, vix, ratios, rate)
+        p = paths(keys, prices, above, vix, ratios, rate, max(HOLD, exits.hold))
         train = (pd.to_datetime(p.keys["session"]) < cut).to_numpy()
         moves = (p.spot[:, 1:] / p.spot[:, :1] - 1) if len(p) else np.zeros((0, HOLD))
         ret, held = simulate(p, dte, delta, exits)
@@ -817,8 +1022,8 @@ def late_study(
 
 
 def _moves(moves: np.ndarray[Any, np.dtype[np.float64]]) -> dict[str, Any]:
-    """The underlying's mean move 1 to ``HOLD`` sessions on, and the share up at the last."""
-    last = moves[:, HOLD - 1] if len(moves) else np.zeros(0)
+    """The underlying's mean move 1 to 3 sessions on (``HORIZONS``), and the share up at 3."""
+    last = moves[:, max(HORIZONS) - 1] if len(moves) else np.zeros(0)
     ok = np.isfinite(last)
     if not ok.any():
         return {"n": 0}
@@ -858,12 +1063,18 @@ def study(
     option_bars: pd.DataFrame | None = None,
     contracts: pd.DataFrame | None = None,
     intraday: pd.DataFrame | None = None,
+    config: Config | None = None,
 ) -> dict[str, Any]:
     """The whole study (see the module's docstring). ``frames``: ``daily`` per symbol (with
     ``raw_close`` for the real-price and 15:45 checks); ``funds``: the symbols that are funds
-    (the rest of the non-index names count as single stocks)."""
+    (the rest of the non-index names count as single stocks); ``config``: the exits and the VIX
+    timing (``load_config``; the approved defaults when not given). The real-price check is
+    reported under both VIX timings (``real_by_vix``) as well as the configured one (``real``)."""
+    config = config or Config()
+    exits, timing = config.exits, config.vix_timing
+    hold = max(HOLD, exits.hold)
     ratios = dict(ratios or {})
-    ev = events(frames, vix, earnings)
+    ev = events(frames, vix, earnings, timing)
     cut = cut_of(ev)
     names = set(ev["symbol"])
     sector = [s for s in names if s in set(funds) and s not in INDEX and s not in SKIP]
@@ -877,14 +1088,20 @@ def study(
             s for s in names if s not in set(funds) and s not in INDEX and s not in SKIP
         ],
     }
+    when = (
+        "the VIX at ~15:45 (in the study: its close)"
+        if timing == "live"
+        else "the previous VIX close"
+    )
     out: dict[str, Any] = {
         "symbols": len(names),
         "start": str(pd.Timestamp(ev["session"].min()).date()),
         "end": str(pd.Timestamp(ev["session"].max()).date()),
         "test_from": str(cut.date()),
+        "config": {"exits": exits.describe(), "vix_timing": timing},
         "rule": (
             f"above the 200-day; RSI(2) < {RSI_BELOW:g} with the 50-day above the 200-day, or a "
-            f"down day with IBS < {IBS_BELOW:g}; stressed: previous VIX close above its "
+            f"down day with IBS < {IBS_BELOW:g}; stressed: {when} above its "
             f"{VIX_DAYS}-day average or >= {VIX_HIGH:g}"
         ),
         "ratios": {k: ratios.get(k) for k in INDEX},
@@ -894,18 +1111,18 @@ def study(
     prices = {s: frames[s]["close"] for s in TIER1 if s in frames}
     above = {s: frames[s]["close"] > frames[s]["ma5"] for s in TIER1 if s in frames}
     signal = tier1[tier1["dip"] & tier1["stressed"]]
-    p = paths(signal, prices, above, vix, ratios, rate)
-    control = paths(tier1, prices, above, vix, ratios, rate)
-    modeled = modeled_study(p, control, cut)
+    p = paths(signal, prices, above, vix, ratios, rate, hold)
+    control = paths(tier1, prices, above, vix, ratios, rate, hold)
+    modeled = modeled_study(p, control, cut, exits=exits)
     train = (pd.to_datetime(p.keys["session"]) < cut).to_numpy()
-    no_filter = paths(tier1[tier1["dip"]], prices, above, vix, ratios, rate)
+    no_filter = paths(tier1[tier1["dip"]], prices, above, vix, ratios, rate, hold)
     nf_train = (pd.to_datetime(no_filter.keys["session"]) < cut).to_numpy()
-    spec_ret, spec_held = simulate(p, 21, 0.7, SPEC_EXITS)
-    nf_ret, _ = simulate(no_filter, 21, 0.7, SPEC_EXITS)
+    spec_ret, spec_held = simulate(p, 21, 0.7, exits)
+    nf_ret, _ = simulate(no_filter, 21, 0.7, exits)
     taken = as_traded(p.keys, spec_ret, spec_held)
     later = taken["session"] >= cut
     modeled["spec"] = {
-        "model": "21 days, delta 0.70; " + SPEC_EXITS.describe(),
+        "model": "21 days, delta 0.70; " + exits.describe(),
         "costs": {
             f"{c:.0%}": {
                 "train": trade_stats(spec_ret[train] - c),
@@ -924,20 +1141,29 @@ def study(
     }
     out["modeled"] = modeled
     if option_bars is not None and contracts is not None and len(option_bars):
-        obs = real_prices(option_bars, contracts, ev)
-        out["real"] = real_study(
-            obs,
-            {
-                "index (QQQ, SPY, IWM, DIA)": list(INDEX),
-                "every fund": list(INDEX) + sector,
-                "single stocks": groups["every single stock"],
-            },
-            cut,
-        )
+        obs = real_prices(option_bars, contracts, ev, exits)
+        real_groups = {
+            "index (QQQ, SPY, IWM, DIA)": list(INDEX),
+            "every fund": list(INDEX) + sector,
+            "single stocks": groups["every single stock"],
+        }
+        out["real"] = real_study(obs, real_groups, cut)
+        if len(obs):
+            out["real_by_vix"] = {}
+            for t in VIX_TIMINGS:
+                flags = stress(vix, pd.Index(obs["session"]), t)["stressed"].to_numpy(dtype=bool)
+                out["real_by_vix"][t] = real_study(obs.assign(stressed=flags), real_groups, cut)
     if intraday is not None and len(intraday):
         late = at_1545(intraday)
         out["at_1545"] = late_study(
-            late, {s: frames[s] for s in INDEX if s in frames}, vix, ratios, rate, cut
+            late,
+            {s: frames[s] for s in INDEX if s in frames},
+            vix,
+            ratios,
+            rate,
+            cut,
+            exits=exits,
+            timing=timing,
         )
     out["by_year"] = _by_year(p, spec_ret)
     return out

@@ -20,9 +20,11 @@ instead of showing the same strongest names every day.
 - ``breakdown``: a new 50-day closing low below the 200-day, the 50-day under the 200-day. Bets
   on the decline going on; out on a close above the 10-day average.
 - ``stress_dip`` (strategy 16): an index fund (QQQ, SPY, IWM, DIA) dips in an uptrend while the
-  VIX says the market is stressed. Evaluated 15 minutes before the close with the live price as
-  the provisional close, entered that session or not at all; a call 14-30 days out at about 0.70
-  delta, out on a close above the 5-day average, at a 40% loss or on the third session.
+  VIX says the market is stressed (by default the live VIX at about 15:45, the previous close
+  when that can't be had). Evaluated 15 minutes before the close with the live price as the
+  provisional close, entered that session or not at all; a call 14-30 days out at about 0.70
+  delta, out at +20%, at a 40% loss or on the fifth session (the defaults approved 2026-11-04;
+  ``config/stress_dip.toml`` changes them and can turn on a floor or the 5-day-average exit).
   ``stress_dip_research`` is the same rule on sector funds and mega caps (those only with the VIX
   at 25+ and no results near): ideas for research, tracked apart, not to trade.
   (``tp_strategies.library.stress_dip``; not calibrated by ``tp-recs calibrate``, whose events
@@ -62,15 +64,22 @@ class Exits:
     time_stop: int  # sessions after entry
     min_dte: int  # close (or roll) when this few days are left
     underlying: str | None = None
+    # debits only (strategy 16, off unless config/stress_dip.toml sets it): once the position has
+    # been up ``floor_trigger`` on a session's mark, close if a later mark is back to ``floor``
+    floor_trigger: float | None = None
+    floor: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "take_profit": self.take_profit,
             "stop_loss": self.stop_loss,
             "time_stop": self.time_stop,
             "min_dte": self.min_dte,
             "underlying": self.underlying,
         }
+        if self.floor_trigger is not None:
+            out |= {"floor_trigger": self.floor_trigger, "floor": self.floor}
+        return out
 
 
 @dataclass(frozen=True)
@@ -106,6 +115,12 @@ class Setup:
     rule: str  # the trigger in words
     stock: StockExits | None = None  # shares too (the upward setups)
 
+
+# Strategy 16's exits as approved on 2026-11-04 (+20% target, 40% stop, by the fifth session; no
+# floor, no stock-side exit). The playbook applies config/stress_dip.toml on top
+# (``tp_strategies.playbook.with_stress_config``), so these only stand when nothing is set.
+STRESS_MIN_DTE = 7  # days to expiry: out by then whatever the exits say
+STRESS_EXITS = Exits(0.2, -0.4, 5, STRESS_MIN_DTE, None)
 
 SETUPS: dict[str, Setup] = {
     s.name: s
@@ -227,10 +242,10 @@ SETUPS: dict[str, Setup] = {
             3,
             0,
             "long_call",
-            Exits(None, -0.4, 3, 7, "above_ma5"),
+            STRESS_EXITS,
             "above the 200-day and RSI(2) under 10 (the 50-day above the 200-day) or a down day "
-            "closing in the bottom fifth of its range, with the previous VIX close above its "
-            "10-day average or at least 20; worked out at 15:45, entered by 15:58",
+            "closing in the bottom fifth of its range, with the VIX above its 10-day average or "
+            "at least 20; worked out at 15:45, entered by 15:58",
         ),
         Setup(
             "stress_dip_research",
@@ -240,9 +255,9 @@ SETUPS: dict[str, Setup] = {
             3,
             0,
             "long_call",
-            Exits(None, -0.4, 3, 7, "above_ma5"),
-            "the stress-dip rule on a sector fund, or on a mega cap with the previous VIX close at "
-            "25+ and no results within 5 sessions; tracked for research, not to trade",
+            STRESS_EXITS,
+            "the stress-dip rule on a sector fund, or on a mega cap with the VIX at 25+ and no "
+            "results within 5 sessions; tracked for research, not to trade",
         ),
     )
 }
