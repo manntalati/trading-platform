@@ -36,6 +36,7 @@ from tp_core.volatility import iv_history, latest_chains
 from tp_strategies import playbook
 from tp_strategies import recommendations as recs
 from tp_strategies.budget import budget_from_settings
+from tp_strategies.library import stress_dip
 from tp_strategies.options_research import DISCLAIMER, bars_from_lake
 
 log = logging.getLogger(__name__)
@@ -62,6 +63,7 @@ def new_run(ctx: queries.Context, now: datetime) -> dict[str, Any]:
         now=now,
         default_rate=ctx.settings.risk_free_rate,
         budget=budget_from_settings(ctx.lake, ctx.settings),
+        stress=stress_dip.load_config(ctx.settings.stress_dip_file),
     )
     return recs.load_run(result.path)
 

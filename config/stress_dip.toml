@@ -1,0 +1,26 @@
+# Strategy 16, stress-dip calls (docs/strategies/16-stress-dip-calls.md). PAPER ONLY: the
+# real-price evidence does not support trading it with real money (see the spec's results).
+# Every key is optional; a missing one keeps the default shown. `false` turns an exit off.
+#
+# Exits, checked on the option's mark at the ~15:45 check each session after entry:
+# take_profit_pct    sell when the mark is up this much on the premium paid (0.20 = +20%)
+# stop_pct           sell when it is down this much (-0.40 = a 40% loss)
+# max_sessions       sell on this session after entry at the latest (1-10)
+# floor_trigger_pct  once the mark has been up this much ... (false: no floor)
+# floor_pct          ... sell if it falls back to this (0.10 = +10%)
+# use_sma5_exit      sell on the first close above the 5-day average (the first spec's exit)
+#
+# vix_timing         which VIX the stress filter reads: "live" (the VIX at ~15:45 on the signal
+#                    session, from Cboe's delayed quote; it falls back to "prev" when the quote
+#                    can't be had, and the idea says so) or "prev" (the previous session's close)
+#
+# Approved 2026-11-04: +20% target, -40% stop, 5 sessions, no floor, no SMA5 exit, live VIX.
+
+[stress_dip]
+take_profit_pct = 0.20
+stop_pct = -0.40
+max_sessions = 5
+floor_trigger_pct = false
+floor_pct = 0.10
+use_sma5_exit = false
+vix_timing = "live"

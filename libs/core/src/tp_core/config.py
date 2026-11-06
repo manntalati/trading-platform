@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     validation_file: Path = Field(
         default=Path("config/validation.toml"), validation_alias="TP_VALIDATION_FILE"
     )
+    # Strategy 16's exits and VIX timing (tp_strategies.library.stress_dip.load_config), plus
+    # your stress_dip.local.toml next to it.
+    stress_dip_file: Path = Field(
+        default=Path("config/stress_dip.toml"), validation_alias="TP_STRESS_DIP_FILE"
+    )
     # "alpaca": the Alpaca paper account (always the paper endpoint). "fake": simulated offline.
     paper_broker: Literal["alpaca", "fake"] = Field(
         default="alpaca", validation_alias="TP_PAPER_BROKER"

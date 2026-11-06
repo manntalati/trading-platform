@@ -23,6 +23,7 @@ from tp_core.portfolio import Classifier
 from tp_core.storage import Lake
 from tp_strategies import recommendations as recs
 from tp_strategies.budget import budget_from_settings
+from tp_strategies.library import stress_dip
 
 app = typer.Typer(
     add_completion=False,
@@ -54,6 +55,7 @@ def run() -> None:
         now=datetime.now(UTC),
         default_rate=settings.risk_free_rate,
         budget=budget_from_settings(lake, settings),
+        stress=stress_dip.load_config(settings.stress_dip_file),
     )
     typer.echo(result.summary())
 
@@ -185,6 +187,8 @@ def _plan_line(pick: dict[str, Any]) -> str:
         parts.append(f"take profit at {plan['take_profit']}")
     if plan.get("stop") is not None:
         parts.append(f"stop at {plan['stop']}")
+    if plan.get("floor") is not None:
+        parts.append(f"floor at {plan['floor']} once it reaches {plan.get('floor_trigger')}")
     stock = plan.get("stock") or {}
     if stock.get("text"):
         parts.append(f"or {stock['text']}")

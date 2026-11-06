@@ -227,6 +227,21 @@ def test_following_the_plan_closes_at_the_first_exit() -> None:
     assert (still["status"], still["value"]) == ("open", 2.3)
 
 
+def test_following_the_plan_honours_strategy_16s_floor_when_it_is_on() -> None:
+    call = [leg(CALL, "buy", 2.0, "2024-01-19", 100.0, "call")]
+    plan = {"take_profit": None, "stop": 1.2, "floor_trigger": 2.4, "floor": 2.2,
+            "sell_by": "2023-12-15", "out_by": "2023-12-29", "credit": False}  # fmt: skip
+    # up 25% on the second mark arms it; back to +5% on the third sells
+    floored = follow(call, plan, 2.0, {CALL: marks(2.1, 2.5, 2.1, 3.0)})
+    assert (floored["reason"], floored["exit"], floored["sessions"]) == ("floor", "2023-12-06", 3)
+    # never armed: a dip to +5% is just a mark
+    unarmed = follow(call, plan, 2.0, {CALL: marks(2.3, 2.1, 2.3)}, today=date(2023, 12, 6))
+    assert unarmed["status"] == "open"
+    off = follow(call, plan | {"floor_trigger": None, "floor": None},
+                 2.0, {CALL: marks(2.1, 2.5, 2.1)}, today=date(2023, 12, 6))  # fmt: skip
+    assert off["status"] == "open"
+
+
 def test_following_a_credit_plan_buys_it_back() -> None:
     put = [leg(PUT, "sell", 1.5, "2023-12-15", 90.0, "put")]
     plan = {"take_profit": 0.75, "stop": 4.5, "sell_by": None, "out_by": None, "credit": True}

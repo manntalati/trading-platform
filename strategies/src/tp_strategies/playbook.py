@@ -55,7 +55,7 @@ import json
 import logging
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -88,7 +88,11 @@ from tp_strategies.options_research import (
 )
 from tp_strategies.setups import (
     SETUPS,
+    STRESS_MIN_DTE,
+    STRESS_SETUPS,
+    UNDERLYING_EXITS,
     Active,
+    Exits,
     Setup,
     active_setups,
     indicators,
@@ -158,6 +162,26 @@ def calibrated_setups(calibration: Mapping[str, Any] | None) -> dict[str, Setup]
         )
         for k, s in SETUPS.items()
     }
+
+
+def stress_exits(config: sd.Config) -> Exits:
+    """Strategy 16's exits (``config/stress_dip.toml``) as the playbook's ``Exits``."""
+    x = config.exits
+    return Exits(
+        take_profit=x.target,
+        stop_loss=x.stop,
+        time_stop=x.hold,
+        min_dte=STRESS_MIN_DTE,
+        underlying="above_ma5" if x.ma5 else None,
+        floor_trigger=x.floor_trigger,
+        floor=x.floor if x.floor_trigger is not None else None,
+    )
+
+
+def with_stress_config(setups: Mapping[str, Setup], config: sd.Config | None) -> dict[str, Setup]:
+    """``setups`` with strategy 16's exits from ``config`` (the approved defaults when None)."""
+    exits = stress_exits(config or sd.Config())
+    return {k: replace(s, exits=exits) if k in STRESS_SETUPS else s for k, s in setups.items()}
 
 
 def setup_drift(setup: Setup, calibration: Mapping[str, Any] | None) -> tuple[float, str]:
@@ -506,6 +530,9 @@ def exit_plan(setup: Setup, view: dict[str, Any], name: Name, fired: date | None
         )
     if x.stop_loss is not None:
         plan["stop"] = round(entry * (1 - x.stop_loss) if credit else entry * (1 + x.stop_loss), 2)
+    if x.floor_trigger is not None and x.floor is not None and not credit:
+        plan["floor_trigger"] = round(entry * (1 + x.floor_trigger), 2)
+        plan["floor"] = round(entry * (1 + x.floor), 2)
     sell_by = session_after(name.ind.index, fired or name.today, x.time_stop)
     plan["sell_by"] = sell_by.isoformat() if sell_by else None
     expiry = date.fromisoformat(view["expiration"])
@@ -580,7 +607,7 @@ def ideas_for(
     ]
     live += [Active(setups[a.setup.name], a.fired, a.age, a.strength) for a in option_setups(name)]
     out = []
-    for act in stress_setups(name):
+    for act in stress_setups(name, setups):
         idea = _stress_idea(name, act, surface, calibration, budget, missed)
         out += [idea] if idea else []
     for act in live:
@@ -1193,11 +1220,21 @@ def late_window(now: datetime) -> bool:
 
 
 def late_frame(
-    bars: pd.DataFrame, bar: pd.Series, vix: pd.Series, today: date
+    bars: pd.DataFrame,
+    bar: pd.Series,
+    vix: pd.Series,
+    today: date,
+    *,
+    timing: sd.VixTiming = "live",
+    live: tuple[float, datetime] | None = None,
 ) -> pd.DataFrame | None:
     """The rule's inputs (``stress_dip.daily``) on the bars before ``today`` with today's bar so
-    far as the last row, and the stress columns from the VIX up to the previous session (a
-    previous close older than the previous session doesn't count as known: not stressed)."""
+    far as the last row, and the stress columns (``stress_dip.stress``). With ``timing="live"``
+    and the ``live`` VIX quote (value, when it traded) the filter reads that, against the
+    10-day average with it as the last close; without the quote, or with ``"prev"``, it reads
+    the previous close. ``vix_source`` says which ("live" or "prev"), ``vix_at`` when it was and
+    ``vix_fallback`` whether the live quote was wanted but missing. A VIX history whose last
+    close is older than the previous session doesn't count as known: not stressed."""
     hist = bars[[d.date() < today for d in pd.DatetimeIndex(bars.index)]]
     if len(hist) < 200:
         return None
@@ -1206,21 +1243,66 @@ def late_frame(
         index=pd.DatetimeIndex([pd.Timestamp(today)]),
     )
     ind = sd.daily(pd.concat([hist[["open", "high", "low", "close"]], row]))
-    st = sd.stress(vix, ind.index)
-    for column in ("vix_prev", "vix_avg", "vix_date", "stressed"):
+    known = vix.dropna()
+    known = known[[d.date() < today for d in pd.DatetimeIndex(known.index)]]
+    use_live = timing == "live" and live is not None
+    if use_live:
+        assert live is not None
+        quote = pd.Series([live[0]], index=pd.DatetimeIndex([pd.Timestamp(today)]))
+        st = sd.stress(pd.concat([known, quote]), ind.index, "live")
+    else:
+        st = sd.stress(known, ind.index, "prev")
+    for column in ("vix", "vix_prev", "vix_avg", "vix_date", "stressed"):
         ind[column] = st[column].to_numpy()
-    when = ind["vix_date"].iloc[-1]
-    if pd.isna(when) or pd.Timestamp(when).date() < previous_session(today):
+    last_close = pd.Timestamp(known.index.max()).date() if len(known) else None
+    if last_close is None or last_close < previous_session(today):
         ind.loc[ind.index[-1], "stressed"] = False
     ind["stressed"] = ind["stressed"].astype(bool)
+    ind["vix_source"] = "live" if use_live else "prev"
+    ind["vix_at"] = (
+        live[1].isoformat()
+        if use_live and live is not None
+        else (str(last_close) if last_close else None)
+    )
+    ind["vix_fallback"] = timing == "live" and not use_live
     ind["at"] = bar.get("at")
     return ind
 
 
-def stress_setups(name: Name) -> list[Active]:
+def vix_words(last: Mapping[str, Any] | pd.Series) -> str:
+    """Which VIX the stress filter read, in words (``late_frame``'s columns)."""
+    level = f"{last['vix']:.1f} against its 10-day average of {last['vix_avg']:.1f}"
+    if last.get("vix_source") == "live":
+        at = pd.Timestamp(last["vix_at"]).tz_convert(NEW_YORK).strftime("%H:%M")
+        return f"The live VIX (Cboe's delayed quote, {at}) {level}."
+    words = f"The previous VIX close ({last.get('vix_at')}) {level}"
+    if last.get("vix_fallback"):
+        return words + ": the live quote couldn't be had, so the previous close stood in."
+    return words + "."
+
+
+def stress_exit_words(x: Exits) -> str:
+    """Strategy 16's exits in a sentence."""
+    parts = []
+    if x.take_profit is not None:
+        parts.append(f"at +{x.take_profit:.0%} on the premium")
+    if x.stop_loss is not None:
+        parts.append(f"at a {-x.stop_loss:.0%} loss")
+    if x.floor_trigger is not None and x.floor is not None:
+        parts.append(f"back at +{x.floor:.0%} once it has been up {x.floor_trigger:.0%}")
+    if x.underlying:
+        parts.append(f"on {UNDERLYING_EXITS[x.underlying][1]}")
+    parts.append(f"on session {x.time_stop} after entry at the latest")
+    words = "Out " + ", ".join(parts[:-1]) + (", or " if len(parts) > 1 else "") + parts[-1]
+    if x.take_profit is None:
+        words += "; no profit target"
+    return words + "."
+
+
+def stress_setups(name: Name, setups: Mapping[str, Setup] = SETUPS) -> list[Active]:
     """Strategy 16 on today's bar so far: ``stress_dip`` on the index funds, and
     ``stress_dip_research`` on the tier 2 sector funds, and on the tier 2 mega caps only with
-    the previous VIX close at ``sd.TIER2_VIX``+ and no results near."""
+    the VIX the filter read at ``sd.TIER2_VIX``+ and no results near."""
     late = name.late
     if late is None or late.empty or late.index[-1].date() != name.today:
         return []
@@ -1228,13 +1310,13 @@ def stress_setups(name: Name) -> list[Active]:
     if not (bool(sd.dip(late).iloc[-1]) and bool(last["stressed"])):
         return []
     if name.symbol in sd.INDEX:
-        setup = SETUPS["stress_dip"]
+        setup = setups["stress_dip"]
     elif name.symbol in sd.TIER2_FUNDS:
-        setup = SETUPS["stress_dip_research"]
+        setup = setups["stress_dip_research"]
     elif name.symbol in sd.TIER2_STOCKS:
-        if not last["vix_prev"] >= sd.TIER2_VIX or _results_near(name):
+        if not last["vix"] >= sd.TIER2_VIX or _results_near(name):
             return []
-        setup = SETUPS["stress_dip_research"]
+        setup = setups["stress_dip_research"]
     else:
         return []
     strength = float(np.clip(1 - last["rsi2"] / 100, 0, 1)) if pd.notna(last["rsi2"]) else 0.5
@@ -1353,6 +1435,10 @@ def _stress_idea(
             "tier": 2 if research else 1,
             "rsi2": _f(last["rsi2"]),
             "ibs": _f(last["ibs"]),
+            "vix": _f(last["vix"]),
+            "vix_source": last["vix_source"],
+            "vix_at": last["vix_at"],
+            "vix_fallback": bool(last["vix_fallback"]),
             "vix_prev": _f(last["vix_prev"]),
             "vix_avg": _f(last["vix_avg"]),
             "backtest": {},
@@ -1364,7 +1450,7 @@ def _stress_idea(
         "pick": view,
         "alternative": None,
         "why": _stress_why(name, setup, view),
-        "risks": _stress_risks(view, budget, research),
+        "risks": _stress_risks(view, budget, research, setup),
     }
 
 
@@ -1380,21 +1466,23 @@ def _stress_why(name: Name, setup: Setup, view: Mapping[str, Any]) -> list[str]:
         f"{setup.title} (today, at {at}): {setup.rule}.",
         f"At {last['close']:,.2f} so far: RSI(2) {last['rsi2']:.0f}, IBS {last['ibs']:.2f} "
         f"({last['ret1']:+.1%} today{', a weak close' if weak else ''}), "
-        f"{last['close'] / last['ma200'] - 1:+.1%} vs the 200-day average. The previous VIX close "
-        f"{last['vix_prev']:.1f} against its 10-day average of {last['vix_avg']:.1f}.",
+        f"{last['close'] / last['ma200'] - 1:+.1%} vs the 200-day average. " + vix_words(last),
         f"The strategy's contract rule: {leg['dte']} days, delta {leg['delta']:.2f}, spread "
         f"{_pct(leg['spread_pct'])} of the mid, open interest "
         f"{leg['open_interest'] or 0:,.0f}.",
-        f"The options model, for information only (it values the call at 3 sessions with a "
-        f"market drift): expected {_pct(model['expected_return'], 0, signed=True)}, "
+        f"The options model, for information only (it values the call at {setup.horizon} "
+        f"sessions with a market drift): expected "
+        f"{_pct(model['expected_return'], 0, signed=True)}, "
         f"{_pct(model['prob_profit'], 0)} chance of a profit.",
         "Entry: " + view["entry"]["text"],
-        "Out on the first close above the 5-day average, at a 40% loss, or on the third session; "
-        "no profit target. The study and its caveats: docs/strategies/16-stress-dip-calls.md.",
+        stress_exit_words(setup.exits)
+        + " Paper only. The study and its caveats: docs/strategies/16-stress-dip-calls.md.",
     ]
 
 
-def _stress_risks(view: Mapping[str, Any], budget: Budget | None, research: bool) -> list[str]:
+def _stress_risks(
+    view: Mapping[str, Any], budget: Budget | None, research: bool, setup: Setup
+) -> list[str]:
     out = []
     if research:
         out.append(
@@ -1405,7 +1493,13 @@ def _stress_risks(view: Mapping[str, Any], budget: Budget | None, research: bool
         "Judged on the price 15 minutes before the close: the close can undo the signal (in the "
         "study about 1 in 6 signals at 15:45 weren't there at the close)."
     )
-    out.append("A gap can blow through the 40% stop: size for losing half the premium.")
+    stop = setup.exits.stop_loss
+    if stop is not None:
+        out.append(
+            f"A gap can blow through the {-stop:.0%} stop: size for losing half the premium."
+        )
+    else:
+        out.append("No stop: size for losing half the premium or more.")
     size = view.get("size")
     if budget is not None and size and size["over_guideline"]:
         out.append(
@@ -1446,6 +1540,7 @@ def build_lists(
     budget: Budget | None = None,
     ranks: ModelRank | None = None,
     news: Mapping[str, Mapping[str, Any]] | None = None,
+    stress: sd.Config | None = None,
 ) -> dict[str, Any]:
     """The playbook's ideas by list, best first (at most ``per_group`` per sector), fitted to
     ``budget`` when there is one, with the stock ideas (``ranks``: the ML ranker's latest) and
@@ -1453,7 +1548,7 @@ def build_lists(
     account can trade fits (``out_of_reach``); and the downward setups and bad news on stocks
     you hold."""
     news = news or {}
-    setups = calibrated_setups(calibration)
+    setups = with_stress_config(calibrated_setups(calibration), stress)
     found: dict[str, list[dict[str, Any]]] = {k: [] for k in LISTS}
     watch: list[dict[str, Any]] = []
     missed: list[dict[str, Any]] = []
@@ -1557,9 +1652,12 @@ def prepare(
     rules: Rules | None = None,
     late_bar: pd.Series | None = None,
     vix: pd.Series | None = None,
+    vix_timing: sd.VixTiming = "live",
+    vix_live: tuple[float, datetime] | None = None,
 ) -> Name:
     """Analyze one name (``options_research.analyze``) and work out what the setups read;
-    with today's bar so far (``late_bar``) and the VIX, what strategy 16 reads too."""
+    with today's bar so far (``late_bar``) and the VIX (its daily closes, and the live quote
+    when ``vix_timing`` is "live": ``late_frame``), what strategy 16 reads too."""
     closes = bars["close"]
     spot = chain_spot(chain) if chain is not None and not chain.empty else None
     spot = spot or float(closes.iloc[-1])
@@ -1590,7 +1688,14 @@ def prepare(
         iv_level=iv_level(iv_hist),
         earnings=earnings,
         late=(
-            late_frame(bars, late_bar, vix, now.astimezone(NEW_YORK).date())
+            late_frame(
+                bars,
+                late_bar,
+                vix,
+                now.astimezone(NEW_YORK).date(),
+                timing=vix_timing,
+                live=vix_live,
+            )
             if late_bar is not None and vix is not None
             else None
         ),
@@ -1609,9 +1714,13 @@ def scan(
     rules: Rules | None = None,
     calibration: Mapping[str, Any] | None = None,
     budget: Budget | None = None,
+    stress: sd.Config | None = None,
+    vix_fetch: sd.Fetch | None = None,
 ) -> dict[str, Any]:
     """Analyze ``symbols`` (those with daily bars) and list the playbook's ideas, fitted to
-    ``budget`` (the account's buying power; ``tp_strategies.budget``)."""
+    ``budget`` (the account's buying power; ``tp_strategies.budget``). ``stress``: strategy 16's
+    settings (``config/stress_dip.toml``; the approved defaults when None); in its window, with
+    the live timing, the VIX quote is fetched once (``stress_dip.live_vix``, by ``vix_fetch``)."""
     rules = rules or Rules()
     today = now.astimezone(NEW_YORK).date()
     wanted = [s for s in dict.fromkeys(symbols) if eligible(s, classifier)]
@@ -1629,6 +1738,12 @@ def scan(
     late = provisional_bars(lake, today) if late_window(now) else pd.DataFrame()
     macro = load_macro(lake) if len(late) else pd.DataFrame()
     vix = macro["VIXCLS"] if "VIXCLS" in macro.columns else None
+    stress = stress or sd.Config()
+    vix_live = (
+        sd.live_vix(now, vix_fetch)
+        if len(late) and vix is not None and stress.vix_timing == "live"
+        else None
+    )
     names: list[Name] = []
     errors: dict[str, str] = {}
     for symbol in wanted:
@@ -1650,6 +1765,8 @@ def scan(
                     rules=rules,
                     late_bar=late.loc[str(symbol)] if symbol in late.index else None,  # type: ignore[arg-type]
                     vix=vix,
+                    vix_timing=stress.vix_timing,
+                    vix_live=vix_live,
                 )
             )
         except Exception as exc:  # one odd chain must not take the whole scan down
@@ -1666,6 +1783,7 @@ def scan(
         budget=budget,
         ranks=ranked,
         news=news,
+        stress=stress,
     )
     with_chain = [n for n in names if n.analysis["picks"]]
     return {
