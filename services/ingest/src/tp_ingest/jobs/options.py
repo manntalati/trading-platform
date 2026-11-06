@@ -17,6 +17,7 @@ from typing import Any
 import pandas as pd
 
 from tp_core.calendar import NEW_YORK, is_session
+from tp_core.chains import infer_kind
 from tp_core.occ import parse_occ
 from tp_core.schemas import (
     RAW_OPTION_CHAIN_SCHEMA,
@@ -90,11 +91,16 @@ def run_snapshot(
     strike_window: tuple[float, float] | None = None,
     whole: Collection[str] = (),
     report: str = "options_snapshot",
+    kind: str | None = None,
+    store_underlyings: bool = True,
 ) -> OptionsJobResult:
     """Store each underlying's chain, and the underlyings' own snapshots (the last trade and the
-    session so far: today's provisional bar). ``strike_window`` (shares of the underlying's
-    price) keeps only the strikes in it, except for the ``whole`` underlyings (the ones you
-    hold) and any whose price isn't known. The summary goes to ``reports/<report>/``."""
+    session so far: today's provisional bar) unless ``store_underlyings`` is off. ``strike_window``
+    (shares of the underlying's price) keeps only the strikes in it, except for the ``whole``
+    underlyings (the ones you hold) and any whose price isn't known. Every row is labelled with
+    ``kind`` (``tp_core.schemas.SNAPSHOT_KINDS``; None: worked out from the clock). The summary
+    goes to ``reports/<report>/``."""
+    kind = kind or infer_kind(now)
     snapshot_date = now.astimezone(NEW_YORK).date()
     result = OptionsJobResult(run_id=new_run_id(now), snapshot_date=snapshot_date)
     if not is_session(snapshot_date):
@@ -108,7 +114,7 @@ def run_snapshot(
     except Exception:  # chains without the underlying's quote still beat no chains at all
         log.exception("underlying quotes failed; storing chains without them")
         spots = pd.DataFrame(columns=["price", "bid", "ask"])
-    if len(spots):
+    if len(spots) and store_underlyings:
         try:
             write_raw(
                 lake,
@@ -128,7 +134,7 @@ def run_snapshot(
             window = None if underlying in whole else strike_window
             strikes = _strike_range(spots, underlying, window)
             chain = _snapshot_one(
-                source, underlying, expiration_lte, spots, now, result.run_id, strikes
+                source, underlying, expiration_lte, spots, now, result.run_id, strikes, kind
             )
             snap.contracts = len(chain)
             snap.with_quote = int(chain["bid"].notna().sum())
@@ -179,6 +185,7 @@ def _snapshot_one(
     now: datetime,
     run_id: str,
     strikes: StrikeRange | None = None,
+    kind: str | None = None,
 ) -> pd.DataFrame:
     quotes = source.option_chain(underlying, expiration_lte=expiration_lte, strikes=strikes)
     contracts = source.option_contracts(underlying, expiration_lte=expiration_lte, strikes=strikes)
@@ -200,5 +207,6 @@ def _snapshot_one(
     chain["ingested_at"] = pd.Timestamp(now)
     chain["feed"] = source.options_feed
     chain["run_id"] = run_id
+    chain["snapshot_kind"] = kind or infer_kind(now)
     chain = chain.sort_values(["expiration", "strike", "right"]).reset_index(drop=True)
     return conform(chain, RAW_OPTION_CHAIN_SCHEMA)

@@ -179,6 +179,7 @@ class Universes:
     watchlist: tuple[str, ...] = ()
     research: tuple[str, ...] = ()  # names the options research scans (beyond the options list)
     late: tuple[str, ...] = ()  # snapshotted again 15 minutes before the close (strategy 16)
+    morning: tuple[str, ...] = ()  # snapshotted at ~09:45 too (strategy 16's index funds)
 
 
 def load_universes(path: Path, *, local: bool = True) -> Universes:
@@ -201,6 +202,7 @@ def load_universes(path: Path, *, local: bool = True) -> Universes:
     if len(set(underlyings)) != len(underlyings):
         raise ValueError(f"duplicate symbols in [options] of {path}")
     late = [s for s in options.get("late", []) if s in underlyings]
+    morning = [s for s in options.get("morning", []) if s in underlyings]
     watchlist = list(raw.get("dashboard", {}).get("watchlist", []))
     research: list[str] = []
     mine = path.with_name(f"{path.stem}.local.toml")
@@ -229,4 +231,5 @@ def load_universes(path: Path, *, local: bool = True) -> Universes:
         watchlist=tuple(dict.fromkeys(watchlist)),
         research=tuple(research),
         late=tuple(dict.fromkeys(late)),
+        morning=tuple(dict.fromkeys(morning)),
     )

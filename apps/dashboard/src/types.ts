@@ -1150,6 +1150,23 @@ export interface MarketRegime {
     summary: string;
   } | null;
   history: { date: string; trend: string | null; volatility: string | null; breadth: string | null; rates?: string | null; curve?: string | null }[];
+  /** Research data (libs/core/src/tp_core/gamma.py): unvalidated, and no idea or filter reads it. */
+  dealer_gamma?: { validated: false; note: string; latest: DealerGamma[] };
+}
+
+export interface DealerGamma {
+  underlying: string;
+  date: string;
+  snapshot_at: string;
+  snapshot_kind: string | null;
+  sign: "positive" | "negative";
+  gex_bn: number; // $bn of delta hedging per 1% move; calls +, puts − (an assumption)
+  spot: Num;
+  flip: Num; // the spot where the total crosses zero (searched ±10% around the spot)
+  call_oi_strike: Num;
+  put_oi_strike: Num;
+  call_oi_strike_week?: Num;
+  put_oi_strike_week?: Num;
 }
 
 // /api/positions/risk (libs/core/src/tp_core/portfolio_risk.py)

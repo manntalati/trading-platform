@@ -16,12 +16,15 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Annotated, NoReturn, cast
 
+import pandas as pd
 import typer
 
 from tp_core.config import MissingCredentialsError, Settings, load_universes
+from tp_core.gamma import gamma_history
 from tp_core.portfolio import held_symbols
 from tp_core.storage import Lake
 from tp_core.validate import ValidationReport
+from tp_core.volatility import iv_history
 from tp_ingest.jobs import bars as bars_jobs
 from tp_ingest.jobs import fundamentals as fundamentals_jobs
 from tp_ingest.jobs import intraday as intraday_jobs
@@ -47,6 +50,16 @@ app.add_typer(macro_app, name="macro")
 class SourceName(StrEnum):
     alpaca = "alpaca"
     fake = "fake"
+
+
+class SnapshotKind(StrEnum):
+    """Which of the day's snapshots this is (``tp_core.schemas.SNAPSHOT_KINDS``)."""
+
+    before_open = "before_open"
+    morning = "morning"
+    midday = "midday"
+    close = "close"
+    after_close = "after_close"
 
 
 SourceOpt = Annotated[
@@ -188,9 +201,17 @@ def options_snapshot(
     max_dte: Annotated[
         int | None, typer.Option(min=0, help="Skip expirations further out than this.")
     ] = None,
+    kind: Annotated[
+        SnapshotKind | None,
+        typer.Option(
+            help="Label the snapshot (the scheduler says midday or close). "
+            "Default: worked out from the clock."
+        ),
+    ] = None,
     source: SourceOpt = SourceName.alpaca,
 ) -> None:
-    """Store today's full chain (quotes, IV, greeks, open interest) for each underlying."""
+    """Store today's full chain (quotes, IV, greeks, open interest) for each underlying, then
+    bring the derived daily tables (implied volatility and skew, dealer gamma) up to date."""
     settings = Settings()
     try:
         universes = load_universes(settings.universes_file)
@@ -209,12 +230,68 @@ def options_snapshot(
         max_dte=universes.options_max_dte if max_dte is None else max_dte,
         strike_window=universes.options_strike_window,
         whole=set(held),
+        kind=kind.value if kind else None,
+    )
+    typer.echo(result.summary())
+    for failure in result.failures:
+        typer.echo(f"  FAILED {failure.underlying}: {failure.error}")
+    if not result.skipped:
+        try:  # the chains are stored either way; the derived tables catch up on the next run
+            _derive(Lake(settings.data_root))
+        except Exception:
+            log.exception("updating the derived option tables failed")
+    if not result.ok:
+        raise typer.Exit(code=1)
+
+
+@options_app.command("morning")
+def options_morning(source: SourceOpt = SourceName.alpaca) -> None:
+    """A snapshot at about 09:45 of the [options] morning names' chains (SPY, QQQ, IWM), so a
+    contract's 15:45 quote can be matched with the next morning's. Research data: the rows are
+    labelled ``morning``, the underlyings' own snapshots (today's bar so far) aren't stored, and
+    it's reported under reports/options_morning/, so nothing that reads the day's bar or its
+    closing snapshot sees it."""
+    settings = Settings()
+    try:
+        universes = load_universes(settings.universes_file)
+    except (OSError, ValueError) as exc:
+        _config_error(exc)
+    if not universes.morning:
+        typer.echo("no [options] morning names in config/universes.toml")
+        raise typer.Exit(code=2)
+    result = options_jobs.run_snapshot(
+        Lake(settings.data_root),
+        make_source(source, settings),
+        list(universes.morning),
+        now=now_utc(),
+        max_dte=universes.options_max_dte,
+        strike_window=universes.options_strike_window,
+        report="options_morning",
+        kind="morning",
+        store_underlyings=False,
     )
     typer.echo(result.summary())
     for failure in result.failures:
         typer.echo(f"  FAILED {failure.underlying}: {failure.error}")
     if not result.ok:
         raise typer.Exit(code=1)
+
+
+@options_app.command("derive")
+def options_derive() -> None:
+    """Bring the tables derived from the stored snapshots up to date (and backfill them from the
+    first snapshot): 30-day implied volatility with the skew and the call-minus-put spread
+    (clean/option_iv_daily), and dealer gamma (clean/dealer_gamma_daily, unvalidated)."""
+    settings = Settings()
+    iv, gex = _derive(Lake(settings.data_root))
+    typer.echo(
+        f"implied volatility: {len(iv)} rows, {iv['underlying'].nunique()} underlyings; "
+        f"dealer gamma: {len(gex)} rows, {gex['underlying'].nunique()} underlyings"
+    )
+
+
+def _derive(lake: Lake) -> tuple[pd.DataFrame, pd.DataFrame]:
+    return iv_history(lake), gamma_history(lake)
 
 
 @options_app.command("late")
@@ -239,6 +316,7 @@ def options_late(source: SourceOpt = SourceName.alpaca) -> None:
         max_dte=universes.options_max_dte,
         strike_window=universes.options_strike_window,
         report="options_late",
+        kind="late",
     )
     typer.echo(result.summary())
     for failure in result.failures:

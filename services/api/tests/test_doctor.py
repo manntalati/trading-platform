@@ -58,6 +58,9 @@ def test_data_on_the_demo_lake(lake_root: Path) -> None:  # noqa: F811
     assert checks["Data/VIX and Treasury yields"].fix == "tp-data macro backfill"
     assert checks["Data/Fundamentals (SEC)"].status == "todo"
     assert checks["Data/Intraday bars"].status == "optional"
+    # research data: optional until the scheduler has taken a morning snapshot
+    assert checks["Data/Morning chains (09:45)"].status == "optional"
+    assert checks["Data/Dealer gamma (unvalidated)"].fix == "tp-data options derive"
 
 
 def test_schedules_from_systemd_or_cron(tmp_path: Path) -> None:

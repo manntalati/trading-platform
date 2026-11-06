@@ -76,6 +76,12 @@ def test_market_regime(client: TestClient) -> None:
     assert set(body["history"][-1]) == {"date", "trend", "volatility", "breadth", "rates", "curve"}
     assert now["rates"] is None  # no FRED data in this lake
     assert now["volatility_source"] == "realized"
+    gamma = body["dealer_gamma"]  # research data, marked as such
+    assert gamma["validated"] is False
+    assert "Unvalidated" in gamma["note"]
+    spy = {g["underlying"]: g for g in gamma["latest"]}["SPY"]
+    assert spy["sign"] in ("positive", "negative")
+    assert spy["gex_bn"] is not None
     assert client.get("/api/market/regime").json() == body  # cached
 
 

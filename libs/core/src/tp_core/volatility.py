@@ -3,7 +3,28 @@ much the stock actually moves, and events the option market is pricing in.
 
 Everything here reads the daily chain snapshots (``tp-data options snapshot``). The history of
 30-day implied volatility per underlying is derived from them once and kept in
-``clean/option_iv_daily`` (rebuilt incrementally: each new snapshot adds a row).
+``clean/option_iv_daily`` (rebuilt incrementally: each new snapshot adds a row), with two
+research columns that nothing acts on yet (Xing-Zhang-Zhao skew, Cremers-Weinbaum spread):
+
+- **Skew**: ``put25_iv30`` and ``call25_iv30``, the implied volatility of the 25-delta put and the
+  25-delta call 30 days out (per expiration, interpolated in delta between the listed strikes
+  either side, using the vendor's deltas; then to 30 days as for ``iv30``), and
+  ``skew25 = put25_iv30 - call25_iv30`` (the risk-reversal form, in volatility points as a
+  decimal). Xing, Zhang and Zhao used an out-of-the-money put minus the at-the-money call:
+  that's ``put25_iv30 - iv30`` from the same row.
+- **Call-minus-put IV** (``cp_spread``, Cremers and Weinbaum's volatility spread): the call's
+  implied volatility minus the put's at the same strike and expiration, averaged over the pairs
+  with strikes within 10% of the spot and 10 to 60 days to expiry, weighted by the pair's average
+  open interest (equal weights when none is known); ``cp_pairs`` is how many pairs. American
+  puts' early-exercise value and dividends push it below zero on their own, so read it against
+  the underlying's own history, not against zero.
+
+Both research columns come from the day's **last snapshot taken during the session**
+(``research_at``), not from its last snapshot overall like ``iv30``. In a snapshot taken after the
+close the option quotes are 16:00's but the vendor works out implied volatility from the
+underlying's after-hours price, and that alone moves calls against puts: QQQ on 2026-10-14 read
++9.5 points call-minus-put at 20:45 and -0.3 at 11:01 (put-call parity on its quotes implied
+QQQ at 729.9 with the stock at 727.8). Null on a day without an in-session snapshot.
 """
 
 from __future__ import annotations
@@ -17,6 +38,7 @@ import pandas as pd
 import pyarrow as pa
 
 from tp_core import greeks as bs
+from tp_core.calendar import is_session, session_close, session_open
 from tp_core.schemas import RAW_OPTION_CHAIN_SCHEMA, RAW_OPTION_CHAIN_SNAPSHOTS
 from tp_core.storage import Lake, parquet_files, read_parquet_dir, write_parquet
 
@@ -28,8 +50,17 @@ IV_HISTORY_SCHEMA = pa.schema(
         ("iv30", pa.float64()),  # at-the-money implied volatility 30 calendar days out
         ("spot", pa.float64()),
         ("runs", pa.int32()),  # snapshot files the day had when this row was worked out
+        ("put25_iv30", pa.float64()),  # the 25-delta put's implied volatility 30 days out
+        ("call25_iv30", pa.float64()),  # the 25-delta call's
+        ("skew25", pa.float64()),  # put25_iv30 - call25_iv30
+        ("cp_spread", pa.float64()),  # call minus put IV at matched strikes near the money
+        ("cp_pairs", pa.int32()),
+        ("research_at", pa.timestamp("ns", tz="UTC")),  # the in-session snapshot of the 4 above
     ]
 )
+SKEW_DELTA = 0.25
+CP_MONEYNESS = 0.10  # strikes within this share of the spot
+CP_DTE = (10, 60)  # days to expiry of the pairs in cp_spread
 MIN_RANK_DAYS = 20  # fewer days of history than this and a rank means little
 EVENT_JUMP = 1.15  # an expiry's ATM IV this far above both neighbours: an event inside it
 
@@ -160,11 +191,80 @@ def _iso(value: object) -> str:
     return value.isoformat() if isinstance(value, date | datetime) else str(value)
 
 
+# -- skew and call-versus-put implied volatility ------------------------------------------------
+
+
+def delta_term(chain: pd.DataFrame, right: str, delta: float = SKEW_DELTA) -> pd.DataFrame:
+    """Per expiration (2 days out or more), the implied volatility at ``delta`` (as a size: 0.25
+    is the 25-delta call or put), interpolated between the strikes either side of it in the
+    vendor's delta. Expirations whose strikes don't reach that delta are left out."""
+    columns = ["expiration", "dte", "iv"]
+    rows = []
+    side = chain[(chain["right"] == right) & (chain["dte"] >= 2)]
+    for expiration, g in side.groupby("expiration"):
+        d = pd.to_numeric(g["delta"], errors="coerce").abs()
+        iv = pd.to_numeric(g["implied_volatility"], errors="coerce")
+        ok = d.notna() & iv.notna() & (iv > 0) & (d > 0) & (d < 1)
+        if ok.sum() < 2:
+            continue
+        pts = pd.DataFrame({"d": d[ok], "iv": iv[ok]}).groupby("d")["iv"].mean().sort_index()
+        if not pts.index[0] <= delta <= pts.index[-1]:
+            continue
+        value = float(np.interp(delta, pts.index.to_numpy(), pts.to_numpy()))
+        rows.append({"expiration": expiration, "dte": int(g["dte"].iloc[0]), "iv": value})
+    return pd.DataFrame(rows, columns=columns).sort_values("dte").reset_index(drop=True)
+
+
+def skew(chain: pd.DataFrame, days: float = 30.0) -> dict[str, float | None]:
+    """``put25_iv30``, ``call25_iv30`` and ``skew25`` (put minus call) ``days`` out."""
+    put = iv_at(delta_term(chain, "P"), days)
+    call = iv_at(delta_term(chain, "C"), days)
+    return {
+        "put25_iv30": put,
+        "call25_iv30": call,
+        "skew25": put - call if put is not None and call is not None else None,
+    }
+
+
+def call_put_spread(chain: pd.DataFrame, spot: float | None = None) -> dict[str, Any]:
+    """``cp_spread``: call minus put implied volatility at the same strike and expiration, near
+    the money and around a month out, weighted by open interest; ``cp_pairs``: how many pairs."""
+    spot = spot or chain_spot(chain)
+    if not spot:
+        return {"cp_spread": None, "cp_pairs": 0}
+    near = chain[
+        ((chain["strike"] / spot - 1).abs() <= CP_MONEYNESS + 1e-9)
+        & chain["dte"].between(*CP_DTE)
+        & (pd.to_numeric(chain["implied_volatility"], errors="coerce") > 0)
+    ]
+    keys = ["expiration", "strike"]
+    calls = near[near["right"] == "C"].drop_duplicates(keys).set_index(keys)
+    puts = near[near["right"] == "P"].drop_duplicates(keys).set_index(keys)
+    both = calls.join(puts, how="inner", lsuffix="_c", rsuffix="_p")
+    if both.empty:
+        return {"cp_spread": None, "cp_pairs": 0}
+    spread = (both["implied_volatility_c"] - both["implied_volatility_p"]).astype(float)
+    weight = both[["open_interest_c", "open_interest_p"]].astype(float).mean(axis=1).fillna(0.0)
+    value = (
+        float((spread * weight).sum() / weight.sum()) if weight.sum() > 0 else float(spread.mean())
+    )
+    return {"cp_spread": value, "cp_pairs": len(both)}
+
+
+def in_session(chain: pd.DataFrame, day: date) -> pd.DataFrame:
+    """The rows of ``chain`` snapshotted while ``day``'s session was open."""
+    if not is_session(day):
+        return chain.iloc[0:0]
+    taken = pd.to_datetime(chain["snapshot_at"], utc=True)
+    return chain[(taken >= session_open(day)) & (taken <= session_close(day))]
+
+
 # -- history and rank -----------------------------------------------------------------------------
 
 
 def iv_history(lake: Lake) -> pd.DataFrame:
-    """30-day ATM implied volatility per underlying per snapshot day.
+    """30-day ATM implied volatility per underlying per snapshot day, with the skew and the
+    call-minus-put spread (see the module's docstring).
 
     Derived from the raw snapshots and cached in the clean zone; days not in the cache yet are
     worked out and added on the way (so the first call after many snapshots takes a while). A day
@@ -175,7 +275,7 @@ def iv_history(lake: Lake) -> pd.DataFrame:
     cached = pd.DataFrame(columns=columns)
     if path.exists():
         found = read_parquet_dir(path.parent)
-        if set(columns) <= set(found.columns):  # an older cache without ``runs`` is rebuilt
+        if set(columns) <= set(found.columns):  # an older cache missing a column is rebuilt
             cached = found[columns]
     have = {
         (d, u): int(n)
@@ -191,6 +291,8 @@ def iv_history(lake: Lake) -> pd.DataFrame:
         chain = read_parquet_dir(directory, RAW_OPTION_CHAIN_SCHEMA)
         if chain.empty:
             continue
+        session = in_session(chain, day)
+        research = session[session["snapshot_at"] == session["snapshot_at"].max()]
         chain = chain[chain["snapshot_at"] == chain["snapshot_at"].max()]
         spot = chain_spot(chain)
         rows.append(
@@ -200,6 +302,9 @@ def iv_history(lake: Lake) -> pd.DataFrame:
                 "iv30": iv_at(atm_term(chain, spot)) if spot else None,
                 "spot": spot,
                 "runs": runs,
+                **skew(research),
+                **call_put_spread(research),
+                "research_at": research["snapshot_at"].max() if len(research) else None,
             }
         )
     if not rows:

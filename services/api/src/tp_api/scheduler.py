@@ -6,6 +6,7 @@ windows on the exchange calendar, in New York time, on trading days:
 
     macro            07:30 to 20:00             VIX and Treasury yields
     broker           every hour, 07:30 to 22:30  Fidelity through SnapTrade (once linked)
+    options-morning  09:45 to 10:15             SPY/QQQ/IWM chains in the morning (research)
     options-midday   12:30 to 30 min before the close   option chains during the day
     options-close    15 minutes before the close  the plan's daily snapshot
     options-late     15 minutes before the close  today's bar so far and the strategy 16 names'
@@ -126,6 +127,13 @@ def _macro(day: date) -> list[tuple[datetime, datetime]]:
 def _broker(day: date) -> list[tuple[datetime, datetime]]:
     first = ny(day, 7, 30)
     return [(first + timedelta(hours=k), first + timedelta(hours=k + 1)) for k in range(15)]
+
+
+def _options_morning(day: date) -> list[tuple[datetime, datetime]]:
+    """15 to 45 minutes after the open: the strategy 16 names' chains once the opening quotes
+    have settled, to match against the 15:45 ones. Later than that it isn't the open."""
+    start = session_open(day) + timedelta(minutes=15)
+    return [(start, start + timedelta(minutes=30))]
 
 
 def _options_midday(day: date) -> list[tuple[datetime, datetime]]:
@@ -280,7 +288,7 @@ JOBS: tuple[Job, ...] = (
         "options-midday",
         "Option chains (midday)",
         "trading days from 12:30",
-        ("tp-data", "options", "snapshot"),
+        ("tp-data", "options", "snapshot", "--kind", "midday"),
         written_since(REPORTS / "options_snapshot", "*.json"),
         _options_midday,
         needs=_needs_alpaca,
@@ -289,7 +297,7 @@ JOBS: tuple[Job, ...] = (
         "options-close",
         "Option chains (close)",
         "15 minutes before the close",
-        ("tp-data", "options", "snapshot"),
+        ("tp-data", "options", "snapshot", "--kind", "close"),
         written_since(REPORTS / "options_snapshot", "*.json"),
         _options_close,
         needs=_needs_alpaca,
@@ -380,6 +388,16 @@ JOBS: tuple[Job, ...] = (
         needs=_needs_alpaca,
         timeout=600.0,
         then_recs=True,
+    ),
+    Job(
+        "options-morning",
+        "Morning chains (SPY, QQQ, IWM)",
+        "15 minutes after the open",
+        ("tp-data", "options", "morning"),
+        written_since(REPORTS / "options_morning", "*.json"),
+        _options_morning,
+        needs=_needs_alpaca,
+        timeout=600.0,
     ),
 )
 RECS_COMMAND = ("tp-recs", "run")

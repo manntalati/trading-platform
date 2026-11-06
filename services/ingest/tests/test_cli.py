@@ -87,6 +87,38 @@ def test_options_snapshot_with_fake_source(env: Path, monkeypatch: pytest.Monkey
     assert stored == ["underlying=QQQ", "underlying=SPY"]
 
 
+def test_snapshot_kinds_the_morning_snapshot_and_the_derived_tables(
+    env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tp_core.chains import load_chain_snapshots
+    from tp_core.storage import Lake
+
+    (env / "universes.toml").write_text(
+        '[bars]\netfs = ["SPY"]\n[options]\nunderlyings = ["SPY", "QQQ", "AAPL"]\n'
+        'max_dte = 30\nmorning = ["SPY", "QQQ", "NOPE"]\n'
+    )
+    monkeypatch.setattr(cli, "now_utc", lambda: datetime(2024, 7, 12, 13, 45, tzinfo=UTC))
+    result = runner.invoke(cli.app, ["options", "morning", "--source", "fake"])
+    assert result.exit_code == 0, result.output
+    assert "2/2 underlyings stored" in result.output  # NOPE isn't in the options universe
+    lake = Lake(env / "lake")
+    assert list(lake.reports_dir("options_morning").glob("*.json"))
+    assert not list(lake.reports_dir("options_snapshot").glob("*.json"))
+    assert not lake.raw_dir("alpaca/stock_snapshots").exists()  # today's bar isn't touched
+
+    monkeypatch.setattr(cli, "now_utc", lambda: datetime(2024, 7, 12, 19, 46, tzinfo=UTC))
+    result = runner.invoke(cli.app, ["options", "snapshot", "--source", "fake", "--kind", "close"])
+    assert result.exit_code == 0, result.output
+    chains = load_chain_snapshots(lake, "SPY")
+    assert set(chains["snapshot_kind"]) == {"morning", "close"}
+    # the snapshot brings the derived tables up to date
+    assert (lake.clean_dir("dealer_gamma_daily") / "part.parquet").exists()
+    assert (lake.clean_dir("option_iv_daily") / "part.parquet").exists()
+    result = runner.invoke(cli.app, ["options", "derive"])
+    assert result.exit_code == 0, result.output
+    assert "dealer gamma: 3 rows, 3 underlyings" in result.output
+
+
 def test_options_snapshot_failure_exit_1(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cli, "now_utc", lambda: datetime(2024, 7, 12, 19, 45, tzinfo=UTC))
 

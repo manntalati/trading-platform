@@ -74,6 +74,11 @@ late = [
     "XLF", "XLK", "SMH", "XLE", "XLV", "GLD",
     "NVDA", "AAPL", "AMZN", "MSFT", "GOOGL", "META", "AVGO", "AMD", "TSLA", "JPM",
 ]
+# Snapshotted at about 09:45 too (`tp-data options morning`, on the scheduler): strategy 16's index
+# funds, so a contract's 15:45 quote can be matched with the next morning's (overnight option
+# decay, and entering at 15:45 against the next open). Research data only. Each must be in
+# underlyings above.
+morning = ["SPY", "QQQ", "IWM"]
 
 [dashboard]
 # Always streamed live on the dashboard, alongside your market-priced holdings. Alpaca's free

@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { useApi } from "../api";
 import { money, nyTime, pct, signedMoney, timeAgo } from "../format";
 import type {
+  DealerGamma,
   JobsStatus,
   MarketRegime,
   PaperStatus,
@@ -163,6 +164,16 @@ export function AccountPanel(p: PanelProps) {
   );
 }
 
+/** "negative, −$15.4bn": the sign of the estimated dealer gamma and its size. */
+export function dealerGammaLine(g: DealerGamma): string {
+  return `${g.sign}, ${g.gex_bn < 0 ? "−" : "+"}$${Math.abs(g.gex_bn).toFixed(1)}bn`;
+}
+
+function dealerGammaTitle(g: DealerGamma, note: string | undefined): string {
+  const flip = g.flip != null ? `flip level ${g.flip.toFixed(0)}` : "no flip level within 10% of the spot";
+  return `${note ?? "Unvalidated."} $bn of dealer hedging per 1% move, ${flip}, from the ${g.date} snapshot.`;
+}
+
 export function MarketPanel(p: PanelProps) {
   const regime = useApi<MarketRegime>("/api/market/regime", 600_000);
   const status = useApi<Status>(p.open ? "/api/status" : null, 60_000);
@@ -204,6 +215,13 @@ export function MarketPanel(p: PanelProps) {
           {c.rates && <RailRow label="Rates" value={c.rates} />}
         </>
       )}
+      {regime.data?.dealer_gamma?.latest.map((g) => (
+        <RailRow
+          key={g.underlying}
+          label={`${g.underlying} dealer gamma (unvalidated)`}
+          value={<span title={dealerGammaTitle(g, regime.data?.dealer_gamma?.note)}>{dealerGammaLine(g)}</span>}
+        />
+      ))}
       {!c && <RailRow label="No market data yet" value="tp-data bars backfill" />}
     </RailPanel>
   );
