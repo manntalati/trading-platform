@@ -130,6 +130,22 @@ class IbsReversion(Strategy):
         cash = [self.cash_symbol] if self.cash_symbol else []
         return list(dict.fromkeys([*self.universe, *cash]))
 
+    def shadow_hold(
+        self, symbol: str, high: float, low: float, close: float, session: date
+    ) -> tuple[float, bool] | None:
+        """For replaying a buy the risk checks blocked (``tp_paper.shadow``): ``symbol``'s IBS
+        at the close of ``session`` and whether the rule holds it through the next session.
+        None for a symbol the rule doesn't trade on a signal (the cash symbol)."""
+        if symbol not in self.universe:
+            return None
+        bar = {"high": high, "low": low, "close": close}
+        series = {k: pd.Series({symbol: v}, dtype=float) for k, v in bar.items()}
+        (signal,) = ibs_signals(
+            series["high"], series["low"], series["close"], [symbol],
+            entry=self.entry, tom_next=self.tom and in_tom_window(next_session(session)),
+        )  # fmt: skip
+        return signal.ibs, signal.hold
+
     def on_bar(self, ctx: Context) -> None:
         universe = list(dict.fromkeys(self.universe))
         bar = {f: ctx.history(f, lookback=1).iloc[-1] for f in ("high", "low", "close")}

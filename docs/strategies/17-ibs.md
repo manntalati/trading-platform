@@ -10,7 +10,9 @@
   (`tp-backtest run ibs`)
 - Research: Rex's study (`data/reports/research/proven-strategies/FINDINGS-proven-strategies.md`,
   local only), 2016-01 → 2026-11
-- Stage: 1 (backtest). Paper only once the user picks the sleeve size.
+- Stage: 2 (paper). Sleeve approved by the user on 2026-11-15: $10k (`config/paper.toml`,
+  taken $5k each from rsi2 and xs-momentum), entry 0.2, no turn-of-month leg, its own 20%
+  drawdown limit (`config/risk.toml`).
 
 ## Economic rationale
 
@@ -104,8 +106,13 @@ source reports. The default stays at the published 0.2.
   *whole paper account* is down 2% on the day. A big down day for QQQ is when this strategy most
   wants to buy and when the other long-only sleeves pull the account down, so some of the best
   entries will be rejected in paper. The backtest measures that limit against the sleeve alone
-  (which sits in BIL before an entry), so it doesn't show these misses. Watch the rejected
-  orders.
+  (which sits in BIL before an entry), so it doesn't show these misses. The user chose to log
+  these rather than exempt the sleeve: every blocked buy stays in the store, and
+  `tp-paper blocked --check daily_loss` replays each one as a shadow trade (in at the next
+  open, out when the rule would have sold, 2 bp per fill) with the P&L it missed. If the misses
+  add up to a real share of the edge, revisit the exemption.
+- **Drawdown limit**: the account default (10%) would switch the sleeve off inside an ordinary
+  bad stretch like 2022's, so `config/risk.toml` gives `ibs` 20%. Hitting it means "broken".
 - **The edge is published and well known**, and Rex's study shows it already thin on SPY.
 
 ## Promotion notes

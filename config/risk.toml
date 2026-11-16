@@ -28,3 +28,8 @@ default = 0.10
 # see how an aggressive daily strategy behaves. It holds 3x funds, which routinely fall 30%+ in
 # an ordinary correction, so 10% would switch it off within weeks; 50% is "this is broken".
 "leveraged-momentum" = 0.50
+# Strategy 17 (IBS on QQQ, docs/strategies/17-ibs.md), approved by the user on 2026-11-15. It buys
+# after weak closes and holds through sell-offs, so its ordinary bad stretches are deep: the
+# engine's backtest max drawdown is -13.6%, and the study's worst stretch (2022-03 -> 07) was -13%
+# to -15%. 10% would switch it off in a normal bad patch; 20% is "this is broken".
+"ibs" = 0.20
