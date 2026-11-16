@@ -29,8 +29,9 @@ capital = 18000
 approval = "auto"
 params = {}
 
+# 18000 -> 13000 on 2026-11-15 to make room for strategy 17 (IBS): the weakest live sleeve so far.
 [strategies.xs-momentum]
-capital = 18000
+capital = 13000
 approval = "auto"
 params = {}
 
@@ -39,8 +40,10 @@ capital = 18000
 approval = "auto"
 params = {}
 
+# 18000 -> 13000 on 2026-11-15 to make room for strategy 17 (IBS), the same kind of short-term
+# index mean reversion.
 [strategies.rsi2]
-capital = 18000
+capital = 13000
 approval = "auto"
 params = {}
 
@@ -51,10 +54,11 @@ capital = 10000
 approval = "auto"
 params = {}
 
-# Strategy 17: IBS mean reversion on QQQ (docs/strategies/17-ibs.md). Not trading yet: the user
-# picks its capital. The sleeves above already add up to the $100k paper account, so make room
-# (shrink one or more of them) before uncommenting. About 39 trades a year; idle cash sits in BIL.
-# [strategies.ibs]
-# capital = 0  # the user's choice
-# approval = "auto"
-# params = {}  # e.g. { tom = true } for the turn-of-month leg
+# Strategy 17: IBS mean reversion on QQQ (docs/strategies/17-ibs.md). Sleeve approved by the user
+# on 2026-11-15: $10k, taken $5k each from rsi2 and xs-momentum. Entry 0.2, no turn-of-month leg.
+# About 39 trades a year; idle cash sits in BIL. Its own 20% drawdown limit (config/risk.toml).
+# Buys the 2% daily-loss limit blocks are logged with shadow trades: `tp-paper blocked`.
+[strategies.ibs]
+capital = 10000
+approval = "auto"
+params = {}

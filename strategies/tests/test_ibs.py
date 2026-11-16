@@ -147,3 +147,22 @@ def test_registered_and_built_from_strings() -> None:
     assert s == IbsReversion(universe=("QQQ", "SPY", "DIA"), cash_symbol=None, tom=True)
     assert IbsReversion().symbols() == ["QQQ", "BIL"]
     assert IbsReversion(cash_symbol=None).symbols() == ["QQQ"]
+
+
+def test_shadow_hold_replays_the_rule_for_its_universe_only() -> None:
+    rule = IbsReversion()
+    day = date(2024, 7, 10)
+    value, hold = rule.shadow_hold("QQQ", 110.0, 100.0, 101.0, day) or (math.nan, False)
+    assert value == pytest.approx(0.1)
+    assert hold
+    assert rule.shadow_hold("QQQ", 110.0, 100.0, 105.0, day) == (pytest.approx(0.5), False)
+    assert rule.shadow_hold("BIL", 91.0, 91.0, 91.0, day) is None  # the cash fund
+    flat = rule.shadow_hold("QQQ", 100.0, 100.0, 100.0, day)
+    assert flat is not None
+    assert math.isnan(flat[0])
+    assert not flat[1]
+    month_end = date(2024, 7, 30)  # the next session (07-31) is the month's last
+    assert IbsReversion(tom=True).shadow_hold("QQQ", 110.0, 100.0, 105.0, month_end) == (
+        pytest.approx(0.5),
+        True,
+    )

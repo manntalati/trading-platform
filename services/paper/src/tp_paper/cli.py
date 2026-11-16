@@ -5,6 +5,7 @@
     tp-paper proposals                    what is waiting for you
     tp-paper approve ID... | --all        approve (optionally --quantity fewer shares)
     tp-paper reject ID... --note "..."
+    tp-paper blocked [--check daily_loss] buys the risk checks blocked, and what they'd have made
     tp-paper submit                       before 9:28am ET: market-on-open orders
     tp-paper sync                         after the open: fills and reconciliation
     tp-paper kill --reason "..."          block new orders and cancel open ones
@@ -165,6 +166,67 @@ def _print_proposals(rows: list[Any]) -> None:
         )
         if p.status == "blocked" or p.note:
             typer.echo(f"{'':18}{p.note}")
+
+
+@app.command()
+def blocked(
+    strategy: Annotated[str | None, typer.Option(help="Only this strategy.")] = None,
+    check: Annotated[
+        list[str] | None,
+        typer.Option(help="Only buys this check blocked (repeatable), e.g. daily_loss."),
+    ] = None,
+    as_json: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Buys the risk checks blocked, with shadow trades: in at the next open, out when the
+    strategy's rule would have sold (IBS), 2 bp per fill."""
+    report = jobs.blocked(_paper(), _now(), strategy=strategy, checks=check)
+    if as_json:
+        out = {
+            "through": report.through,
+            "summary": [s.to_dict() for s in report.summary],
+            "entries": [e.to_dict() for e in report.entries],
+        }
+        typer.echo(json.dumps(out, indent=2, default=str))
+        return
+    if not report.entries:
+        typer.echo("no blocked buys")
+        return
+    typer.echo(
+        f"shadow trades through {report.through or '—'}: in at the next open, out at the open "
+        "the strategy would have sold, 2 bp per fill. Averages and totals: closed trades only.\n"
+    )
+    typer.echo(
+        f"{'strategy':16}{'symbol':8}{'blocked':>8}{'trades':>8}{'open':>6}"
+        f"{'avg return':>12}{'missed P&L':>13}"
+    )
+    for s in report.summary:
+        avg = "—" if s.avg_return is None else f"{s.avg_return:+.2%}"
+        missed = "—" if s.missed_pnl is None else f"{s.missed_pnl:+,.2f}"
+        note = f"  ({s.without_rule} with no shadow rule)" if s.without_rule else ""
+        typer.echo(
+            f"{s.strategy:16}{s.symbol:8}{s.blocked:>8}{s.trades:>8}{s.open:>6}"
+            f"{avg:>12}{missed:>13}{note}"
+        )
+    typer.echo("")
+    for e in report.entries:
+        signal = "" if e.signal is None else f", signal {e.signal:.2f}"
+        typer.echo(
+            f"{e.session} {e.strategy} buy {e.quantity:g} {e.symbol} ~{e.notional:,.0f}{signal}"
+        )
+        for failed, detail in e.blocked_by.items():
+            typer.echo(f"{'':11}blocked by {failed}: {detail}")
+        if e.status in ("closed", "open"):
+            end = "out" if e.status == "closed" else "still held, marked"
+            typer.echo(
+                f"{'':11}shadow: in {e.entry_session} @ {e.entry_price:.2f}, {end} "
+                f"{e.exit_session} @ {e.exit_price:.2f} ({e.sessions_held} session(s)): "
+                f"{e.shadow_return:+.2%}, {e.missed_pnl:+,.2f}"
+                + (" (the sleeve bought it then)" if e.ended_by_fill else "")
+            )
+        else:
+            typer.echo(f"{'':11}shadow: {e.status}")
+        if e.folded:
+            typer.echo(f"{'':11}also blocked while the shadow held: {len(e.folded)} more")
 
 
 @app.command()
