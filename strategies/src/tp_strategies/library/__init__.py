@@ -14,6 +14,7 @@ from typing import Any
 
 from tp_strategies.library.dual_momentum import DualMomentum
 from tp_strategies.library.factors import FactorPortfolio
+from tp_strategies.library.ibs import IbsReversion
 from tp_strategies.library.leveraged_momentum import LeveragedMomentum
 from tp_strategies.library.ma_timing import MaTiming
 from tp_strategies.library.ml_rank import MlRank
@@ -39,6 +40,7 @@ STRATEGIES: tuple[type[Strategy], ...] = (
     Rsi2Meta,
     MlRank,
     RuleTiming,
+    IbsReversion,
 )
 REGISTRY: dict[str, type[Strategy]] = {cls.name: cls for cls in STRATEGIES}
 

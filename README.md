@@ -152,6 +152,7 @@ portfolio, ranked by a model instead of by 12-1 momentum.
 | 13 | Cross-sectional ranking model, top large caps (machine learning) | [13-ml-rank.md](docs/strategies/13-ml-rank.md) |
 | 14 | Timing by a rule bred by the grammar search | [14-rule-timing.md](docs/strategies/14-rule-timing.md) |
 | 15 | The first 5-minute candle against the 12 EMA, and which tickers to day trade it on (research) | [15-open-ema.md](docs/strategies/15-open-ema.md) |
+| 17 | IBS mean reversion on QQQ (Pagonidis): hold one session after a close near the day's low | [17-ibs.md](docs/strategies/17-ibs.md) |
 
 ## Machine learning
 
