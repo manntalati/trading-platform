@@ -50,3 +50,11 @@ params = {}
 capital = 10000
 approval = "auto"
 params = {}
+
+# Strategy 17: IBS mean reversion on QQQ (docs/strategies/17-ibs.md). Not trading yet: the user
+# picks its capital. The sleeves above already add up to the $100k paper account, so make room
+# (shrink one or more of them) before uncommenting. About 39 trades a year; idle cash sits in BIL.
+# [strategies.ibs]
+# capital = 0  # the user's choice
+# approval = "auto"
+# params = {}  # e.g. { tom = true } for the turn-of-month leg
