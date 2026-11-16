@@ -38,6 +38,8 @@ from tp_paper.ledger import (
     sleeve_returns,
     time_weighted_return,
 )
+from tp_paper.shadow import BlockedEntry, BlockedSummary, HoldRule, blocked_buys, shadow_entries
+from tp_paper.shadow import summarize as summarize_blocked
 from tp_paper.store import (
     OPEN_AT_BROKER,
     FillRecord,
@@ -393,6 +395,16 @@ def propose(paper: Paper, now: datetime, *, force: bool = False) -> ProposeRepor
                 signed = d.intent.signed_quantity
                 positions[d.intent.symbol] = positions.get(d.intent.symbol, 0.0) + signed
                 cash -= signed * d.intent.reference_price
+        for r in rows:
+            if r.status == "blocked" and r.side == "buy":
+                failed = "; ".join(
+                    f"{c['check']}: {c['detail']}" for c in r.checks if not c["passed"]
+                )
+                store.log(
+                    "blocked",
+                    f"{name}: buy {r.quantity:g} {r.symbol} (~{r.notional:,.0f}) blocked "
+                    f"({failed}); `tp-paper blocked` shows what it would have made",
+                )
         report.proposed[name] = sum(r.status != "blocked" for r in rows)
         report.blocked[name] = sum(r.status == "blocked" for r in rows)
     store.log("propose", _propose_summary(report))
@@ -454,6 +466,45 @@ def _proposal(decision: RiskDecision, approval: str, seq: int) -> Proposal:
         decided_at=created if status == "approved" else None,
         decided_by="auto" if status == "approved" else None,
     )
+
+
+# -- blocked buys -------------------------------------------------------------------------------
+
+
+@dataclass
+class BlockedReport:
+    entries: list[BlockedEntry]
+    summary: list[BlockedSummary]
+    through: str | None  # the last session with bars: shadow trades are replayed to here
+
+
+def blocked(
+    paper: Paper,
+    now: datetime,
+    *,
+    strategy: str | None = None,
+    checks: Sequence[str] | None = None,
+) -> BlockedReport:
+    """Buys the risk checks blocked, each with its shadow trade (``tp_paper.shadow``): what it
+    would have made had it gone through. ``checks``: only buys one of these checks blocked
+    (e.g. ``daily_loss``)."""
+    store = paper.store
+    rows = blocked_buys(store.proposals(strategy=strategy), checks)
+    rules: dict[str, HoldRule] = {
+        s.name: s.strategy for s in paper.book.sleeves if isinstance(s.strategy, HoldRule)
+    }
+    data: PaperData | None = None
+    replayable = [p for p in rows if p.strategy in rules]
+    if replayable:
+        start = min(date.fromisoformat(p.session) for p in replayable) - timedelta(days=10)
+        symbols = sorted({p.symbol for p in replayable})
+        present = sorted(set(symbols) - set(missing_symbols(paper.lake, symbols)))
+        if present:
+            bars = load_bars(paper.lake, present, start=start, end=last_completed_session(now))
+            data = PaperData(bars) if not bars.empty else None
+    entries = shadow_entries(rows, data, rules, store.fills(strategy))
+    through = data.last_session.isoformat() if data is not None else None
+    return BlockedReport(entries, summarize_blocked(entries), through)
 
 
 # -- decide -----------------------------------------------------------------------------------
