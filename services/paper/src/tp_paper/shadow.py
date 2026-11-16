@@ -7,7 +7,7 @@ be replayed from the lake's bars:
 
 - in at the open of the session after the signal (the fill the order would have had);
 - held while the rule would have held it, and out at the open after the first close where it
-  wouldn't (for IBS: the next open, later if IBS closed below the entry again);
+  wouldn't (for IBS: the next open, later if IBS closed below the 0.2 threshold again);
 - each fill pays ``SHADOW_COST_BPS``, and the return uses adjusted opens (dividends included).
 
 Two things keep the missed P&L from being counted twice. A later blocked buy of the same symbol
