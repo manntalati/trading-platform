@@ -78,6 +78,11 @@ export function IdeaCard({ idea }: { idea: ResearchIdea }) {
         ))}
         <VolTag vol={idea.vol} />
       </div>
+      {idea.held_back && (
+        <p className="held-back small" role="note">
+          <strong>Held back, not a recommendation:</strong> {idea.held_back.text}
+        </p>
+      )}
       {pick ? <PlaySummary pick={pick} /> : shares ? <SharesSummary pick={shares} /> : <p className="muted small">No contract picked.</p>}
       <ul className="why">
         {idea.why.map((w) => (
@@ -436,6 +441,29 @@ export function BudgetLine({ budget }: { budget: Budget | null | undefined }) {
       ) : null}
       .{" "}
     </>
+  );
+}
+
+/** Setups that fired whose trade didn't show a gain in testing: not recommended, each with why. */
+export function HeldBackList({ items }: { items: ResearchIdea[] }) {
+  if (!items.length) return null;
+  return (
+    <details className="card held-back-list">
+      <summary>
+        <strong>Held back ({items.length})</strong>{" "}
+        <span className="muted small">
+          setups that fired, not listed because their trade didn't show a gain in testing. Tracked apart, to check the rule.
+        </span>
+      </summary>
+      <ul>
+        {items.map((i) => (
+          <li key={`${i.list ?? i.kind}-${i.symbol}-${i.play?.name ?? ""}`}>
+            <a href={`#/research/lookup/${encodeURIComponent(i.symbol)}`}>{i.symbol}</a> <InstrumentBadge pick={i.pick} />{" "}
+            <span className="muted">{i.play?.title ?? ""}</span>: {i.held_back?.text}
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }
 

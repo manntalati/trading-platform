@@ -107,6 +107,14 @@ def show(
         if dropped:
             typer.echo(f"    no longer listed: {', '.join(dropped)}")
         typer.echo("")
+    back = [i for i in latest["research"].get("held_back") or [] if only in (None, i["list"])]
+    if back:
+        typer.echo(f"Held back: their trade didn't show a gain in testing ({len(back)})")
+        for i in back:
+            title = (i.get("play") or {}).get("title") or ""
+            typer.echo(f"    {i['symbol']:<6} {recs.LIST_NAMES[i['list']]}, {title}: "
+                       f"{i['held_back']['text']}")  # fmt: skip
+        typer.echo("")
     missed = latest["research"].get("out_of_reach") or []
     if missed and only is None:
         typer.echo(f"Out of reach ({len(missed)})")

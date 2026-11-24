@@ -66,10 +66,13 @@ def test_research_ranks_ideas_with_contracts(client: tuple[TestClient, Any]) -> 
     body = c.get("/api/research").json()
     assert body["scanned"] >= 10
     assert body["with_chains"] >= 5
-    assert "TLT" not in {
-        i["symbol"] for k in ("swing", "leaps", "bearish", "income", "volatility") for i in body[k]
-    }
-    ideas = [*body["swing"], *body["leaps"], *body["bearish"]]
+    lists = ("swing", "leaps", "bearish", "income", "volatility", "stocks")
+    # No calibration here: no trade has been tested, so none is listed; each is held back, why
+    assert not any(body[k] for k in lists)
+    back = body["held_back"]
+    assert {i["held_back"]["code"] for i in back} == {"untested"}
+    assert "TLT" not in {i["symbol"] for i in back if i["list"] != "stocks"}
+    ideas = [i for i in back if i["list"] in ("swing", "leaps", "bearish")]
     assert ideas, "the fake market should produce some ideas"
     for idea in ideas:
         assert idea["why"]
@@ -80,7 +83,7 @@ def test_research_ranks_ideas_with_contracts(client: tuple[TestClient, Any]) -> 
     assert budget["account"] == "Individual …1234"
     for idea in priced:
         assert idea["pick"]["size"]["capital"] <= budget["buying_power"]
-    for idea in body["stocks"]:  # shares: a stop under the price, sized the same way
+    for idea in [i for i in back if i["list"] == "stocks"]:  # shares: a stop, sized the same way
         pick = idea["pick"]
         assert pick["exit"]["stop"] < pick["entry"]["limit"]
         assert pick["size"]["shares"] >= 1
@@ -88,7 +91,7 @@ def test_research_ranks_ideas_with_contracts(client: tuple[TestClient, Any]) -> 
     assert "holding_alerts" in body
     assert body["news"]["headlines"] > 0
     assert body["news_scoring"] is False  # keyword scores: no Claude scoring in the tests
-    for idea in [*ideas, *body["stocks"]]:  # every idea carries its name's recent headlines
+    for idea in back:  # every idea carries its name's recent headlines
         assert idea["news"]["latest"][0]["scored_by"] == "keywords"
     assert body["iv_history_days"] == 1
     assert "Not investment advice" in body["disclaimer"]
@@ -108,13 +111,16 @@ def test_ideas_are_stored_runs_with_a_track_record(client: tuple[TestClient, Any
     assert again["run"]["run_id"] != run["run_id"]
     assert again["run"]["previous_run"] is None  # both runs were made the same day
     record = c.get("/api/research/track-record").json()
-    listed = {(r["list"], r["symbol"]) for r in record["recommendations"]}
-    lists = ("swing", "leaps", "bearish", "income", "volatility", "stocks")
-    ideas = {(k, i["symbol"]) for k in lists for i in body[k]}
-    assert listed == ideas  # the same ideas twice are one recommendation each
-    assert all(r["runs"] == 2 for r in record["recommendations"])
-    assert {s["list"] for s in record["summary"]} <= set(lists)
-    shares = [r for r in record["recommendations"] if r["list"] == "stocks"]
+    assert record["recommendations"] == []  # nothing listed: nothing tested
+    assert record["total"] == 0
+    back = record["held_back"]  # but the held-back ideas are followed, apart
+    tracked = {(r["list"], r["symbol"]) for r in back["ideas"]}
+    ideas = {(i["list"], i["symbol"]) for i in body["held_back"]}
+    assert tracked == ideas  # the same ideas twice are one each
+    assert all(r["runs"] == 2 and r["held_back"] == "untested" for r in back["ideas"])
+    assert [g["reason"] for g in back["by_reason"]] == ["untested"]
+    shares = [r for r in back["ideas"] if r["list"] == "stocks"]
+    assert shares
     assert all(r["structure"] == "shares" for r in shares)
 
 

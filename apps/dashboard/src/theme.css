@@ -1547,3 +1547,19 @@ details.fills summary {
   color: var(--accent);
   border-color: currentColor;
 }
+
+/* An idea held back: its trade didn't show a gain in testing */
+.held-back {
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border-left: 3px solid var(--warning);
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+}
+.held-back-list ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+.held-back-list li {
+  margin: 4px 0;
+}

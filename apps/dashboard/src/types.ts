@@ -944,6 +944,13 @@ export interface ResearchIdea {
   held?: string | null;
   group?: string;
   new?: boolean; // not on the same list in the previous session's last run
+  held_back?: HeldBack | null; // why it isn't listed: its trade didn't show a gain in testing
+}
+
+// tp_strategies.playbook.held_back
+export interface HeldBack {
+  code: "lost" | "no_better" | "untested" | "priced" | "research";
+  text: string;
 }
 
 export interface WatchItem {
@@ -991,6 +998,7 @@ export interface Research {
   watch?: WatchItem[];
   budget?: Budget | null;
   out_of_reach?: OutOfReach[];
+  held_back?: ResearchIdea[]; // ideas whose trade didn't show a gain in testing (runs stored before lack it)
   calibration?: { generated_at: string; start?: string; end?: string; names?: number; model?: string } | null;
   live_setups?: Record<string, number>;
   errors?: Record<string, string>; // symbols the scan skipped, with why
@@ -1260,6 +1268,7 @@ export interface FollowedPlan {
 export interface TrackedRecommendation {
   list: IdeaList;
   symbol: string;
+  held_back?: HeldBack["code"] | null;
   setup?: string | null;
   structure: string;
   recommended_at: string;
@@ -1351,6 +1360,24 @@ export interface TrackRecord {
     plan_win_rate: Num;
     plan_median: Num;
   }[];
+  held_back?: {
+    total: number;
+    ideas: TrackedRecommendation[];
+    summary: TrackSummary[];
+    by_reason: HeldBackGroup[];
+  };
+}
+
+export interface HeldBackGroup {
+  reason: HeldBack["code"];
+  name: string;
+  recommendations: number;
+  marked: number;
+  profitable: Num;
+  median_result: Num;
+  plan_closed: number;
+  plan_win_rate: Num;
+  plan_median: Num;
 }
 
 // /api/jobs (services/api/src/tp_api/scheduler.py)

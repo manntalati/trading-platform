@@ -15,7 +15,9 @@ be treating them as certain.
    the money it freed; `uv run tp-journal pending` shows what's already recorded.
 2. `uv run tp-recs show` (add `--only swing` and similar if the user asked about one list). Start
    with the ideas starred ★ (new since the previous session), then anything listed under
-   "On what you hold".
+   "On what you hold". Ideas under "Held back" are not recommendations: their trade didn't show
+   a gain in testing. Don't present them as ideas to take; if the user asks about one, give the
+   reason the platform states.
 3. For each idea the user cares about (or the top two or three new ones), run
    `uv run tp-journal check SYMBOL` (add `--list NAME` if the ticker is on more than one list).
    Report the ✗ blocks plainly, with the reason the tool gives, then the ! warnings.
