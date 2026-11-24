@@ -114,12 +114,13 @@ class Context:
         bars = load_bars(self.lake, symbols) if symbols else load_bars(self.lake)
         return close_matrix(bars) if not bars.empty else pd.DataFrame()
 
-    def last_closes(self, symbols: list[str]) -> dict[str, float]:
-        """Latest raw close of each symbol that has bars."""
+    def last_closes(self, symbols: list[str], before: date | None = None) -> dict[str, float]:
+        """Latest raw close of each symbol that has bars (before the day ``before``, if given)."""
         present = [s for s in dict.fromkeys(symbols) if s not in missing_symbols(self.lake, [s])]
         if not present:
             return {}
-        bars = load_bars(self.lake, present)
+        end = before - timedelta(days=1) if before is not None else None
+        bars = load_bars(self.lake, present, end=end)
         last = bars.sort_values("session").groupby("symbol")["close"].last()
         return {str(k): float(v) for k, v in last.items()}
 

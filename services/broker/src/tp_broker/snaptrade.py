@@ -6,6 +6,9 @@ identifies the user, so no user id/secret has to be stored.
 
 Data freshness: on SnapTrade's daily plans positions are cached and refreshed once a day, which
 is fine here: quantities rarely change intraday, and live values come from the quote stream.
+On its real-time plan balances and positions are live, and so is an account's total value, but
+only from the connection's own accounts list: the all-accounts list is a once-a-day copy whatever
+the plan, so the total is taken from the former (see ``SnapTradeSource.live_totals``).
 Transactions arrive the next day. A *disabled* connection (Fidelity password changed, session
 expired) keeps serving the last data SnapTrade got, so nothing new arrives until it is
 reconnected (``tp-broker link --reconnect``); every snapshot records whether it is.
@@ -85,6 +88,10 @@ class SnapTradeApi(Protocol):
 
     def list_connections(self) -> list[dict[str, Any]]: ...
 
+    def connection_accounts(self, authorization_id: str) -> list[dict[str, Any]]:
+        """One connection's accounts, their total value live on the real-time plan."""
+        ...
+
     def connection_portal_url(self, broker: str | None, reconnect: str | None = None) -> str: ...
 
     def refresh_connection(self, authorization_id: str) -> None:
@@ -146,6 +153,11 @@ class SdkSnapTradeApi:
     def list_connections(self) -> list[dict[str, Any]]:
         return list(self._plain(self._client.connections.list_brokerage_authorizations().body))
 
+    def connection_accounts(self, authorization_id: str) -> list[dict[str, Any]]:
+        connections = self._client.connections
+        body = connections.list_brokerage_authorization_accounts(authorization_id=authorization_id)
+        return list(self._plain(body.body))
+
     def connection_portal_url(self, broker: str | None, reconnect: str | None = None) -> str:
         kwargs: dict[str, Any] = {"connection_type": "read"}
         if broker:
@@ -186,27 +198,48 @@ class SnapTradeSource:
                 out[str(account["id"])] = link
         return out
 
+    def live_totals(self, accounts: list[dict[str, Any]]) -> dict[str, float]:
+        """Each account's total value from its connection's accounts list, which SnapTrade asks
+        the brokerage for on every call on its real-time plan (the all-accounts list's total is
+        a once-a-day copy, a day behind the live positions). Accounts whose connection can't be
+        asked are left out: they keep the daily figure."""
+        out: dict[str, float] = {}
+        links = {str(a.get("brokerage_authorization") or "") for a in accounts} - {""}
+        for link in sorted(links):
+            try:
+                rows = self.api.connection_accounts(link)
+            except Exception as exc:  # the daily total is still there
+                log.warning("couldn't read the live account totals (%s): %s", link, exc)
+                continue
+            for a in rows:
+                total = _num(((a.get("balance") or {}).get("total") or {}).get("amount"))
+                if total is not None and a.get("id") is not None:
+                    out[str(a["id"])] = total
+        return out
+
     def snapshot(self) -> BrokerSnapshot:
         accounts: list[dict[str, Any]] = []
         holdings: list[dict[str, Any]] = []
         connections = self.connections()
-        for account in self.api.list_accounts():
+        listed = self.api.list_accounts()
+        live = self.live_totals(listed)
+        for account in listed:
             account_id = str(account["id"])
             balances = self.api.account_balances(account_id)
             body = self.api.account_positions(account_id)
             # The live API returns "positions"; older SDK type stubs call it "results".
             positions = body.get("positions") or body.get("results") or []
-            row = _account_row(account, balances)
+            row = _account_row(account, balances, live.get(account_id))
             connection = connections.get(str(account.get("brokerage_authorization")))
             row["connection_disabled"] = (
                 bool(connection.get("disabled")) if connection is not None else None
             )
-            accounts.append(row)
             # Cash-equivalent positions (the money-market sweep) are already inside the cash
             # balance; keeping them as holdings would count that money twice.
-            holdings.extend(
-                _holding_row(account_id, p) for p in positions if not p.get("cash_equivalent")
-            )
+            held = [_holding_row(account_id, p) for p in positions if not p.get("cash_equivalent")]
+            row["total_value"] = _exact_total(row["total_value"], row["cash"], held)
+            accounts.append(row)
+            holdings.extend(held)
         return BrokerSnapshot(
             accounts=pd.DataFrame(accounts, columns=list(ACCOUNT_COLUMNS)),
             holdings=pd.DataFrame(holdings, columns=list(HOLDING_COLUMNS)),
@@ -294,11 +327,14 @@ def _num(value: Any) -> float | None:
         return None
 
 
-def _account_row(account: Mapping[str, Any], balances: list[dict[str, Any]]) -> dict[str, Any]:
+def _account_row(
+    account: Mapping[str, Any], balances: list[dict[str, Any]], live_total: float | None = None
+) -> dict[str, Any]:
     usd = [b for b in balances if (b.get("currency") or {}).get("code", "USD") == "USD"]
     cash = sum(_num(b.get("cash")) or 0.0 for b in usd) if usd else None
     power = [_num(b.get("buying_power")) for b in usd]
-    total = ((account.get("balance") or {}).get("total") or {}).get("amount")
+    daily = _num(((account.get("balance") or {}).get("total") or {}).get("amount"))
+    total = live_total if live_total is not None else daily
     return {
         "account_id": str(account["id"]),
         "account_name": account.get("name"),
@@ -308,7 +344,7 @@ def _account_row(account: Mapping[str, Any], balances: list[dict[str, Any]]) -> 
         ),
         "institution": account.get("institution_name"),
         "cash": cash,
-        "total_value": _num(total),
+        "total_value": total,
         "currency": "USD",
         "holdings_as_of": _holdings_as_of(account),
         "transactions_as_of": _transactions_as_of(account),
@@ -316,6 +352,20 @@ def _account_row(account: Mapping[str, Any], balances: list[dict[str, Any]]) -> 
             sum(p for p in power if p is not None) if any(p is not None for p in power) else None
         ),
     }
+
+
+def _exact_total(
+    total: float | None, cash: float | None, holdings: list[dict[str, Any]]
+) -> float | None:
+    """SnapTrade rounds the total to the dollar; when the cash and the holdings add up to it
+    within that, their exact sum is the account's value (so the cash derived from it, total less
+    holdings, is the broker's to the cent). Otherwise the total stands: the cash balance alone
+    is off while a trade settles."""
+    values = [h["market_value"] for h in holdings]
+    if total is None or cash is None or any(v is None for v in values):
+        return total
+    exact = cash + sum(values)
+    return exact if abs(exact - total) < 1.0 else total
 
 
 def _holdings_as_of(account: Mapping[str, Any]) -> pd.Timestamp | None:

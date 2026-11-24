@@ -18,7 +18,7 @@ import random
 import threading
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any, Protocol
 
 log = logging.getLogger(__name__)
@@ -146,7 +146,8 @@ def _parse_time(value: Any) -> datetime:
 class Position:
     symbol: str
     quantity: float
-    prev_close: float  # last close in the lake: the reference for today's P&L
+    mark: float  # the price the account's value was taken at: the broker's, at the sync
+    prev_close: float | None = None  # the last close before today: the reference for today's P&L
 
 
 class LiveHub:
@@ -167,6 +168,8 @@ class LiveHub:
         self.prev_close = dict(prev_close)
         self.positions = positions
         self.static_value = static_value  # cash + holdings without a live price
+        self.closes_day: date | None = None  # the day prev_close is the close before
+        self.closes_at: datetime | None = None  # when they were read from the lake
         self.interval = interval
         self.latest: dict[str, Tick] = {}
         self._dirty: set[str] = set()
@@ -182,6 +185,16 @@ class LiveHub:
         self.static_value = static_value
         self.portfolio_as_of = as_of
         self._dirty |= {p.symbol for p in positions}  # push the new total on the next tick
+
+    def set_closes(self, closes: Mapping[str, float], day: date, at: datetime) -> None:
+        """The reference closes for ``day``: each symbol's last close before it, for the day's
+        change and P&L."""
+        self.prev_close.update(closes)
+        self.closes_day = day
+        self.closes_at = at
+        for p in self.positions:
+            p.prev_close = self.prev_close.get(p.symbol)
+        self._dirty |= set(self.symbols) | {p.symbol for p in self.positions}
 
     # -- lifecycle --------------------------------------------------------------------------------
 
@@ -257,13 +270,17 @@ class LiveHub:
         }
 
     def portfolio_value(self) -> dict[str, Any]:
+        """The account's value now: the broker's value at the sync, with each streamed holding
+        moved from the price it was valued at then to its live price. Today's P&L is each
+        holding's move from yesterday's close."""
         value = self.static_value
         day_pnl = 0.0
         for p in self.positions:
             tick = self.latest.get(p.symbol)
-            price = tick.price if tick else p.prev_close
+            price = tick.price if tick else p.mark
             value += p.quantity * price
-            day_pnl += p.quantity * (price - p.prev_close)
+            if p.prev_close is not None:
+                day_pnl += p.quantity * (price - p.prev_close)
         base = value - day_pnl
         return {
             "value": value,
