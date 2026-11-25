@@ -30,7 +30,7 @@ import {
 } from "../types";
 import { RecordedTrades } from "../components/fills";
 import Ideas from "./Ideas";
-import { BudgetLine, HoldingAlerts, IdeaCard, ModelRankLine, NewsList, OutOfReachList, PlayLine, WatchList } from "./Playbook";
+import { BudgetLine, HeldBackList, HoldingAlerts, IdeaCard, ModelRankLine, NewsList, OutOfReachList, PlayLine, WatchList } from "./Playbook";
 import { PriceHistory } from "./Market";
 import { OptionPricing } from "./Options";
 import { AskPanel, Scenarios } from "./Positions";
@@ -110,6 +110,7 @@ function OptionsIdeas() {
   if (!r) return <ErrorBanner error={data.error} />;
   const info = KINDS.find((k) => k.key === kind)!;
   const ideas = r[kind] ?? []; // runs stored before a list existed lack it
+  const heldBack = (r.held_back ?? []).filter((i) => (i.list ?? i.kind) === kind);
   const dropped = r.run?.dropped?.[kind] ?? [];
   async function update() {
     setUpdating(true);
@@ -177,9 +178,14 @@ function OptionsIdeas() {
         </div>
       ) : (
         <Card>
-          <Empty>No {info.label.toLowerCase()} setups right now: none of the rules has fired on a name with a liquid contract.</Empty>
+          <Empty>
+            {heldBack.length
+              ? `No ${info.label.toLowerCase()} ideas to take right now: ${heldBack.length} fired, held back below because their trade didn't show a gain in testing.`
+              : `No ${info.label.toLowerCase()} setups right now: none of the rules has fired on a name with a liquid contract.`}
+          </Empty>
         </Card>
       )}
+      <HeldBackList items={heldBack} />
       {kind === "leaps" && <WatchList items={r.watch ?? []} />}
       {kind === "stocks" && <HoldingAlerts items={r.holding_alerts ?? []} />}
       {kind === "stocks" && (
@@ -434,8 +440,48 @@ function TrackRecordView() {
         </Card>
       )}
       {t.by_news && t.by_news.length > 0 && <ByNewsCard rows={t.by_news} />}
+      {t.held_back && t.held_back.total > 0 && <HeldBackCard h={t.held_back} />}
       {calibration.data && <BacktestCard c={calibration.data} />}
     </div>
+  );
+}
+
+/** Ideas held back because their trade didn't show a gain in testing, followed like the rest: if
+ * they do as well as what was listed, the rule is keeping good ideas off the lists. */
+export function HeldBackCard({ h }: { h: NonNullable<TrackRecord["held_back"]> }) {
+  return (
+    <Card title="Held back, followed anyway" hint={<span className="muted small">{h.total} ideas not listed: their trade didn't show a gain in testing</span>}>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Why</th>
+              <th className="num">Ideas</th>
+              <th className="num" title="positions worth more than they cost (premium: some of it kept)">Profitable</th>
+              <th className="num">Median position</th>
+              <th className="num" title="following each idea's exit plan: closed ones that made money">Plan: won</th>
+              <th className="num">Plan: median</th>
+            </tr>
+          </thead>
+          <tbody>
+            {h.by_reason.map((g) => (
+              <tr key={g.reason}>
+                <td>{g.name}</td>
+                <td className="num mono">{g.recommendations}</td>
+                <td className="num mono">
+                  {pct(g.profitable, 0)} <span className="muted">of {g.marked}</span>
+                </td>
+                <td className="num mono">{pct(g.median_result, 0, true)}</td>
+                <td className="num mono">
+                  {pct(g.plan_win_rate, 0)} <span className="muted">of {g.plan_closed}</span>
+                </td>
+                <td className="num mono">{pct(g.plan_median, 0, true)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
   );
 }
 

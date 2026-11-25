@@ -395,3 +395,38 @@ def test_the_record_by_how_the_news_stood(lake: Lake) -> None:
     row = next(r for r in record["recommendations"] if r["list"] == "bearish")
     assert row["news"] == {"sentiment": 0.5, "headlines": 4}
     assert row["news_group"] == "against"
+
+
+def test_held_back_ideas_are_followed_apart(lake: Lake) -> None:
+    closes = close_matrix(load_bars(lake))
+    start = closes.index[-30].date()
+    at = datetime.combine(start, datetime.min.time(), tzinfo=UTC) + timedelta(hours=15)
+    pick = leg(CALL, "buy", 2.0, "2024-01-19", 100.0, "call")
+    swing = [idea("XYZ", "swing", pick) | {"play": {"name": "pullback"}}]
+    lost = {"code": "lost", "text": "lost in testing"}
+    back = [idea("ABC", "swing", pick) | {"list": "swing", "play": {"name": "breakout"},
+                                         "held_back": lost}]  # fmt: skip
+    first = run(at, start, swing=swing)
+    first["research"]["held_back"] = back
+    recs.store_run(lake, first, now=at)
+    log = recs.load_log(lake)
+    codes = log.set_index("symbol")["held_back"]
+    assert pd.isna(codes["XYZ"])
+    assert codes["ABC"] == "lost"
+    assert int(log.set_index("symbol").loc["ABC", "rank"]) == 0  # not ranked on a list
+
+    # the same name passing later (on the same setup) is a new, listed idea
+    later = at + timedelta(hours=2)
+    passed = [idea("ABC", "swing", pick) | {"play": {"name": "breakout"}}]
+    recs.store_run(lake, run(later, start, swing=passed), now=later)
+
+    record = recs.track_record(lake, closes.index[-1].date())
+    assert sorted(r["symbol"] for r in record["recommendations"]) == ["ABC", "XYZ"]
+    assert record["total"] == 2
+    assert all(r["held_back"] is None for r in record["recommendations"])
+    assert {s["list"]: s["recommendations"] for s in record["summary"]} == {"swing": 2}
+    held = record["held_back"]
+    assert held["total"] == 1
+    (row,) = held["ideas"]
+    assert (row["symbol"], row["held_back"], row["setup"]) == ("ABC", "lost", "breakout")
+    assert [(g["reason"], g["recommendations"]) for g in held["by_reason"]] == [("lost", 1)]

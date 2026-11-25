@@ -23,7 +23,10 @@ made. A stock idea is followed the same way on the daily bars: its stop and targ
 session's open, low and high, then its stock-side rule and time stop on the close. It is the
 record of rules applied to past data, not of trades anyone made. Each idea keeps the news
 sentiment it was listed with, so the record can say whether ideas the news agreed with did
-better than the ones it ran against (``by_news``).
+better than the ones it ran against (``by_news``). Ideas held back because their trade didn't
+show a gain in testing (``playbook.held_back``) are logged and followed too, apart: the record
+of what was listed counts only what was, and ``held_back`` says how the rest did, which is
+how to tell whether the gate is right.
 """
 
 from __future__ import annotations
@@ -92,6 +95,7 @@ LOG_SCHEMA = pa.schema(
         ("plan", pa.string()),  # JSON: the exit plan (targets per share, dates, stock rule)
         ("news", pa.float64()),  # the name's mean news sentiment when listed (tp_core.news)
         ("headlines", pa.int32()),  # how many headlines that was from
+        ("held_back", pa.string()),  # why it wasn't listed (``playbook.held_back``); null: listed
     ]
 )
 DIRECTION = {"bearish": -1, "income": 0, "volatility": 0}  # the rest: +1
@@ -428,33 +432,35 @@ def log_rows(run: Mapping[str, Any]) -> pd.DataFrame:
     rows = []
     research = run.get("research") or {}
     session = run.get("bars_session")
-    for k in LISTS:
-        for rank, idea in enumerate(research.get(k) or [], start=1):
-            found = legs(idea.get("pick"))
-            shares = (idea.get("pick") or {}).get("kind") == "shares"
-            entry = _float(idea["pick"]["entry"].get("limit")) if shares else _entry(found)
-            rows.append(
-                {
-                    "run_id": run["run_id"],
-                    "run_at": pd.Timestamp(run["as_of"]).tz_convert("UTC"),
-                    "bars_session": date.fromisoformat(session) if session else None,
-                    "list": k,
-                    "symbol": idea["symbol"],
-                    "rank": rank,
-                    "score": idea.get("score"),
-                    "spot": idea.get("spot"),
-                    "structure": _structure(idea.get("pick"), k),
-                    "legs": json.dumps(found),
-                    "entry": entry,
-                    "setup": (idea.get("play") or {}).get("name"),
-                    "plan": _plan(idea.get("pick")),
-                    "news": (idea.get("news") or {}).get("sentiment"),
-                    # 0: no headlines; null: listed before the news was kept
-                    "headlines": (idea.get("news") or {}).get(
-                        "headlines", 0 if "news" in idea else None
-                    ),
-                }
-            )
+    shown = [(k, rank, idea) for k in LISTS for rank, idea in enumerate(research.get(k) or [], 1)]
+    shown += [(str(i["list"]), 0, i) for i in research.get("held_back") or []]
+    for k, rank, idea in shown:
+        found = legs(idea.get("pick"))
+        shares = (idea.get("pick") or {}).get("kind") == "shares"
+        entry = _float(idea["pick"]["entry"].get("limit")) if shares else _entry(found)
+        rows.append(
+            {
+                "run_id": run["run_id"],
+                "run_at": pd.Timestamp(run["as_of"]).tz_convert("UTC"),
+                "bars_session": date.fromisoformat(session) if session else None,
+                "list": k,
+                "symbol": idea["symbol"],
+                "rank": rank,
+                "score": idea.get("score"),
+                "spot": idea.get("spot"),
+                "structure": _structure(idea.get("pick"), k),
+                "legs": json.dumps(found),
+                "entry": entry,
+                "setup": (idea.get("play") or {}).get("name"),
+                "plan": _plan(idea.get("pick")),
+                "news": (idea.get("news") or {}).get("sentiment"),
+                # 0: no headlines; null: listed before the news was kept
+                "headlines": (idea.get("news") or {}).get(
+                    "headlines", 0 if "news" in idea else None
+                ),
+                "held_back": (idea.get("held_back") or {}).get("code"),
+            }
+        )
     return pd.DataFrame(rows, columns=[f.name for f in LOG_SCHEMA])
 
 
@@ -512,7 +518,9 @@ def recommended(log_df: pd.DataFrame) -> pd.DataFrame:
         return log_df.assign(**{k: pd.Series(dtype=t) for k, t in extra.items()})
     df = log_df.sort_values("run_at").reset_index(drop=True)
     df["_setup"] = df["setup"].fillna("")
-    keys = ["list", "symbol", "_setup"]
+    # listed and held back are different ideas: one that starts testing well is new when listed
+    df["_held"] = df["held_back"].notna() if "held_back" in df else False
+    keys = ["list", "symbol", "_setup", "_held"]
     gap = df.groupby(keys)["run_at"].diff()
     df["_episode"] = (gap.isna() | (gap > EPISODE_GAP)).groupby([df[k] for k in keys]).cumsum()
     keys.append("_episode")
@@ -521,7 +529,7 @@ def recommended(log_df: pd.DataFrame) -> pd.DataFrame:
     first["last_seen"] = grouped["run_at"].max()
     first["runs"] = grouped["run_id"].nunique()
     first["contracts"] = grouped["legs"].nunique()
-    out = first.reset_index().drop(columns=["_setup", "_episode"])
+    out = first.reset_index().drop(columns=["_setup", "_held", "_episode"])
     return out.sort_values("run_at", ascending=False).reset_index(drop=True)
 
 
@@ -595,6 +603,7 @@ def track_record(lake: Lake, today: date, *, limit: int = 200) -> dict[str, Any]
                 if pd.notna(r.get("headlines"))
                 else None
             ),
+            "held_back": r["held_back"] if isinstance(r.get("held_back"), str) else None,
         }
         sign = -1.0 if r["list"] == "bearish" else 1.0
         row |= _moves(closes, sessions, str(r["symbol"]), start, sign)
@@ -638,13 +647,21 @@ def track_record(lake: Lake, today: date, *, limit: int = 200) -> dict[str, Any]
         row["state"] = "closed" if closed else "open"
         row["news_group"] = news_group(row)
         rows.append(row)
+    listed = [r for r in rows if r["held_back"] is None]
+    back = [r for r in rows if r["held_back"] is not None]
     return {
         "as_of": today.isoformat(),
-        "total": len(rows),
-        "recommendations": rows[:limit],
-        "summary": _summary(rows),
-        "by_setup": _by_setup(rows),
-        "by_news": _by_news(rows),
+        "total": len(listed),
+        "recommendations": listed[:limit],
+        "summary": _summary(listed),
+        "by_setup": _by_setup(listed),
+        "by_news": _by_news(listed),
+        "held_back": {
+            "total": len(back),
+            "ideas": back[:limit],
+            "summary": _summary(back),
+            "by_reason": _by_reason(back),
+        },
     }
 
 
@@ -1000,6 +1017,37 @@ def _by_news(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "recommendations": len(mine),
                 "right_way_21d": (sum(1 for x in moved if x > 0) / len(moved)) if moved else None,
                 "median_move_21d": _median(moved),
+                **_plan_stats(mine),
+            }
+        )
+    return out
+
+
+HELD_BACK_REASONS = (
+    ("lost", "Lost money in testing"),
+    ("no_better", "No better than the average stock in testing"),
+    ("untested", "Too few tests to tell"),
+    ("priced", "Tested well, too dear that day"),
+    ("research", "Research only"),
+)
+
+
+def _by_reason(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The held-back ideas by why: did holding them back keep losers off the lists?"""
+    out = []
+    for key, name in HELD_BACK_REASONS:
+        mine = [r for r in rows if r.get("held_back") == key]
+        if not mine:
+            continue
+        marked = [r["result"] for r in mine if r.get("result") is not None]
+        out.append(
+            {
+                "reason": key,
+                "name": name,
+                "recommendations": len(mine),
+                "marked": len(marked),
+                "profitable": (sum(1 for x in marked if x > 0) / len(marked)) if marked else None,
+                "median_result": _median(marked),
                 **_plan_stats(mine),
             }
         )

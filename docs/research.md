@@ -130,6 +130,28 @@ Ideas only use contracts you can actually buy, from the latest brokerage sync
 A new sync (hourly on trading days, or **Refresh from Fidelity** on the Portfolio page) makes a
 new set of ideas, so they follow your cash.
 
+### Listed only if it gained in testing
+
+A setup firing isn't enough: an idea is listed only if the trade it suggests showed a gain in
+testing (`playbook.held_back`). The test is the calibration's (`tp-recs calibrate`): each setup's
+exits are fitted on the earlier 60% of its signals and judged on the later 40%, so the result is
+on signals the exits never saw.
+
+- **Options**: the setup's option trade with its exits made money on average after costs on at
+  least 20 of those later signals, and at real option prices too where there are 20 or more of
+  those; and at today's prices the model still expects a gain on the contract picked.
+- **Shares**: bought on the setup, they beat the average stock and made money for the risk to
+  the stop on at least 20 later signals.
+- **Stress-dip calls** are research only: on real option prices they lost after costs
+  ([strategy 16](strategies/16-stress-dip-calls.md)).
+
+Anything else is **held back**, listed under each list with why: lost money in testing, no
+better than the average stock, too few tests to tell (or not tested yet: before the first
+calibration nothing is listed), or tested well but too dear today. Look up still shows them,
+marked. Held-back ideas are followed in the track record too, apart from what was listed
+(**Held back, followed anyway**): if they do as well as the listed ones, the rule is keeping good
+ideas off the lists.
+
 ### Trades the sync doesn't show yet
 
 Between a trade and the sync that shows it (and on the days SnapTrade serves a cached copy), the
@@ -356,6 +378,8 @@ Each run is stored (`reports/recommendations/<run>.json` for 30 days, and one li
   no kinder than a real fill. For premium selling it's the share of the premium kept. Per list:
   how many ideas, how many are profitable, the median result, how often the stock went the right
   way, how often it beat the S&P 500.
+- **Held back** ideas (their trade didn't show a gain in testing) are tracked the same way but
+  counted apart, by why they were held back, so the record of what was listed is only that.
 - **Following the plan**: each idea's exit plan is followed through the daily chain snapshots, and
   the position closed at the first session its target, stop, stock-side rule, time stop or
   days-to-expiry limit was reached (or valued at expiry). That's what following the plans would

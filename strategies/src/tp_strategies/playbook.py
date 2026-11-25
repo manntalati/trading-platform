@@ -42,6 +42,13 @@ entry is a limit at the mid, raised to the mid plus a quarter of the spread 8 mi
 close (never above the ask), cancelled 2 minutes before: entered that session or not at all.
 Sector funds and mega caps (tier 2) are listed as research only.
 
+**Held back**: an idea is listed only if its trade showed a gain in testing (``held_back``):
+the setup's option trade with its exits made money on average after costs on the later signals it
+wasn't fitted on (``MIN_TESTED`` of them at least), and at real option prices too where there
+are enough of those; shares bought on it beat the average stock and made money for the risk to
+the stop; and at today's prices the model still expects a gain. Anything else (stress dips
+included, research only after the real-price check) is held back, with why, and tracked apart.
+
 **News**: every idea carries its name's last five sessions of headlines (``tp_core.news``) and
 their mean sentiment, Claude's scores where it scored them and keyword scores otherwise. News
 the idea's way adds to its score and news against it takes off, by up to ``NEWS_WEIGHT`` with
@@ -112,6 +119,8 @@ CHEAP_RATIO = 0.9
 MIN_OPEN_INTEREST = 50
 WATCH_SIZE = 8
 OUT_OF_REACH_SIZE = 10
+HELD_BACK_SIZE = 30
+MIN_TESTED = 20  # later signals a trade was tested on: fewer and a gain can't be told from luck
 CHASE_ATR = 0.5  # shares: pay up to this much of the ATR over the limit
 RANK_TILT = (
     0.4  # added to a stock idea's score at the top of the ML ranking, taken off at the bottom
@@ -714,7 +723,9 @@ def _idea(
             "horizon": setup.horizon,
             "drift": drift,
             "drift_source": source,
-            "backtest": {k: stats.get(k) for k in ("events", "underlying", "option") if k in stats},
+            "backtest": {
+                k: stats.get(k) for k in ("events", "underlying", "option", "real") if k in stats
+            },
         },
         "score": score,
         "spot": name.spot,
@@ -1100,6 +1111,88 @@ def _stock_risks(name: Name, act: Active, view: Mapping[str, Any]) -> list[str]:
             "the risk."
         )
     return out
+
+
+def held_back(idea: Mapping[str, Any]) -> dict[str, str] | None:
+    """Why ``idea`` isn't one to take (``code`` and ``text``), or None when its trade showed a
+    gain in testing. Judged on the later signals the exits weren't fitted on: an option trade
+    that lost money on average after costs there, or at real option prices; shares that did no
+    better than the average stock or lost for the risk taken; too few of them to tell; a setup
+    whose stock fell on average after it fired; or, tested well, a contract the model expects to
+    lose on at today's prices. The stress dips are research only: at real option prices they
+    lost after costs (strategy 16)."""
+    play, pick = idea.get("play") or {}, idea.get("pick") or {}
+    if idea.get("list") == "stress":
+        return {
+            "code": "research",
+            "text": "Research only: on real option prices these calls lost money after costs "
+            "(strategy 16).",
+        }
+    test = play.get("backtest") or {}
+    drift = _f(play.get("drift"))
+    direction = -1 if idea.get("list") == "bearish" else 1
+    if idea.get("list") == STOCKS:
+        n = int(test.get("trades") or 0)
+        if n < MIN_TESTED:
+            return _untested(n)
+        excess, mean_r = _f(test.get("excess")) or 0.0, _f(test.get("mean_r")) or 0.0
+        if excess <= 0 or mean_r <= 0:
+            return {
+                "code": "no_better",
+                "text": "In testing, shares bought on this setup did "
+                f"{_pct(excess, 1, signed=True)} against the average stock, {mean_r:+.2f} times "
+                f"the risk to the stop a trade, over the {n} later signals.",
+            }
+        if drift is not None and drift <= 0:
+            return _fell(play)
+        return None
+    option = test.get("option") or {}
+    n = int(option.get("trades") or 0)
+    if n < MIN_TESTED:
+        return _untested(n)
+    mean = _f(option.get("mean")) or 0.0
+    if mean <= 0:
+        return {
+            "code": "lost",
+            "text": f"In testing, this setup's option trade with its exits lost "
+            f"{_pct(-mean, 0)} a trade on average after costs over the {n} later signals.",
+        }
+    real = test.get("real") or {}
+    if int(real.get("trades") or 0) >= MIN_TESTED and (_f(real.get("mean")) or 0.0) <= 0:
+        return {
+            "code": "lost",
+            "text": f"At real option prices it lost {_pct(-(_f(real.get('mean')) or 0.0), 0)} a "
+            f"trade on average after costs ({int(real['trades'])} trades).",
+        }
+    if drift is not None and drift * direction < 0 and play.get("drift_source") == "backtest":
+        return _fell(play)
+    model = pick.get("model") or {}
+    if (_f(model.get("expected_return")) or 0.0) <= 0:
+        return {
+            "code": "priced",
+            "text": "It tested well, but at today's prices the model expects a loss: the "
+            "options cost more than the forecast move pays for.",
+        }
+    return None
+
+
+def _untested(n: int) -> dict[str, str]:
+    if not n:
+        return {"code": "untested", "text": "Not tested yet: tp-recs calibrate backtests it."}
+    return {
+        "code": "untested",
+        "text": f"Tested on only {n} later signal{'s' * (n != 1)} (under {MIN_TESTED}): too few "
+        "to tell a gain from luck.",
+    }
+
+
+def _fell(play: Mapping[str, Any]) -> dict[str, str]:
+    return {
+        "code": "lost",
+        "text": f"After this signal the stock went the wrong way on average in the backtest "
+        f"(a {_pct(play.get('drift'), 1, signed=True)} drift over {play.get('horizon')} "
+        "sessions).",
+    }
 
 
 def _stock_size_risks(view: Mapping[str, Any], budget: Budget) -> list[str]:
@@ -1550,6 +1643,7 @@ def build_lists(
     news = news or {}
     setups = with_stress_config(calibrated_setups(calibration), stress)
     found: dict[str, list[dict[str, Any]]] = {k: [] for k in LISTS}
+    back: list[dict[str, Any]] = []
     watch: list[dict[str, Any]] = []
     missed: list[dict[str, Any]] = []
     alerts: list[dict[str, Any]] = []
@@ -1561,6 +1655,11 @@ def build_lists(
             if held.get(name.symbol):
                 idea["held"] = held[name.symbol]
                 idea["risks"].append(f"Already held: {held[name.symbol]}.")
+            reason = held_back(idea)
+            if reason is not None:
+                idea["held_back"] = reason
+                back.append(idea)
+                continue
             found[idea["list"]].append(idea)
         if "shares" in held.get(name.symbol, ""):
             alerts += holding_alerts(name, setups, held[name.symbol], calibration)
@@ -1593,6 +1692,13 @@ def build_lists(
             out[k] = _one_a_day(list(unique.values()))
             continue
         out[k] = _capped(list(unique.values()), groups, per_group, per_list)
+    listed = {(k, i["symbol"]) for k in LISTS for i in out[k]}
+    kept: dict[tuple[str, str], dict[str, Any]] = {}  # one per name per list, if not listed
+    for idea in sorted(back, key=lambda i: -i["score"]):
+        key = (idea["list"], idea["symbol"])
+        if key not in listed:
+            kept.setdefault(key, idea)
+    out["held_back"] = list(kept.values())[:HELD_BACK_SIZE]
     leaps = {i["symbol"] for i in out["leaps"]}
     watch = [w for w in watch if w["symbol"] not in leaps]
     out["watch"] = sorted(watch, key=lambda w: -w["momentum"])[:WATCH_SIZE]
@@ -1835,6 +1941,11 @@ def for_symbol(
     ideas = ideas_for(name, calibration, setups, budget, missed)
     ideas += stock_ideas_for(name, calibration, setups, budget, missed, ranks)
     ideas = [with_news(i, news) for i in ideas]
+    for idea in ideas:
+        reason = held_back(idea)
+        if reason is not None:
+            idea["held_back"] = reason
+    ideas.sort(key=lambda i: "held_back" in i)  # the ones that tested well first
     ind = name.ind.iloc[-1]
     near: list[str] = []
     if pd.notna(ind["rsi2"]):

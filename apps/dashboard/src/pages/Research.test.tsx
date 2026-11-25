@@ -12,8 +12,8 @@ import type {
   TrackedRecommendation,
 } from "../types";
 import { fitLabel, skewLine } from "./Options";
-import { BudgetLine, HoldingAlerts, NewsList, OutOfReachList } from "./Playbook";
-import { BacktestCard, ByNewsCard, EarningsCard, IdeaCard, NewsBanner, PickLine, PickSummary, TrackedIdeas } from "./Research";
+import { BudgetLine, HeldBackList, HoldingAlerts, NewsList, OutOfReachList } from "./Playbook";
+import { BacktestCard, ByNewsCard, EarningsCard, HeldBackCard, IdeaCard, NewsBanner, PickLine, PickSummary, TrackedIdeas } from "./Research";
 
 const call: ContractPick = {
   contract: "XYZ260313C00100000",
@@ -124,6 +124,32 @@ describe("IdeaCard", () => {
     expect(screen.getByText(/Alternative:/)).toBeInTheDocument();
     expect(screen.getByText("2 contracts")).toBeInTheDocument();
     expect(screen.getByText("$820.00 · 1.6% at risk")).toBeInTheDocument();
+  });
+});
+
+describe("ideas held back", () => {
+  const lost = { code: "lost" as const, text: "In testing, this setup's option trade with its exits lost 8% a trade on average after costs over the 120 later signals." };
+
+  it("says on the idea why it isn't a recommendation", () => {
+    render(<IdeaCard idea={{ ...idea, held_back: lost }} />);
+    expect(screen.getByRole("note")).toHaveTextContent(`Held back, not a recommendation: ${lost.text}`);
+  });
+
+  it("lists them apart, each with why", () => {
+    render(<HeldBackList items={[{ ...idea, held_back: lost }]} />);
+    expect(screen.getByText("Held back (1)")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "XYZ" })).toHaveAttribute("href", "#/research/lookup/XYZ");
+    expect(screen.getByText(/lost 8% a trade on average/)).toBeInTheDocument();
+    const { container } = render(<HeldBackList items={[]} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("shows how the held-back ideas did, by why", () => {
+    const group = { reason: "lost" as const, name: "Lost money in testing", recommendations: 7, marked: 5, profitable: 0.2, median_result: -0.3, plan_closed: 4, plan_win_rate: 0.25, plan_median: -0.2 };
+    render(<HeldBackCard h={{ total: 7, ideas: [], summary: [], by_reason: [group] }} />);
+    expect(screen.getByText("Held back, followed anyway")).toBeInTheDocument();
+    expect(screen.getByText("Lost money in testing")).toBeInTheDocument();
+    expect(screen.getByText("−30%")).toBeInTheDocument(); // the median position
   });
 });
 

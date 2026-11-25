@@ -125,18 +125,78 @@ def test_a_calibration_sets_the_drift_and_the_exits() -> None:
     assert any("Backtest: fired 400 times" in w for w in tuned["why"])
 
 
+def gained(mean: float = 0.06, trades: int = 120, **stock: float) -> dict[str, Any]:
+    """A calibration in which the pullback's option trade (and, given, its shares) did ``mean``
+    a trade on its later signals."""
+    pullback: dict[str, Any] = {
+        "drift": 0.03, "events": 400,
+        "underlying": {"hit_rate": 0.6, "median": 0.01},
+        "option": {"trades": trades, "win_rate": 0.55, "median": 0.05, "mean": mean},
+    }  # fmt: skip
+    if stock:
+        pullback["stock"] = {"test": {"trades": trades, "win_rate": 0.55, "mean": 0.02,
+                                      "median": 0.01, "avg_sessions": 6, **stock}}  # fmt: skip
+    return {"setups": {"pullback": pullback}}
+
+
 def test_lists_take_one_idea_per_name_and_two_per_sector() -> None:
     names = [name(path(320, 0.002, seed=4, dip=0.03), iv=0.2, symbol=f"S0{i}") for i in range(4)]
     groups = {"S00": "Tech", "S01": "Tech", "S02": "Tech", "S03": "Energy"}
-    lists = build_lists(names, held={"S03": "40 shares"}, groups=groups, calibration=None)
+    lists = build_lists(names, held={"S03": "40 shares"}, groups=groups, calibration=gained())
     swing = lists["swing"]
     assert [i["group"] for i in swing].count("Tech") == 2
     assert len({i["symbol"] for i in swing}) == len(swing)
     held = next(i for i in swing if i["symbol"] == "S03")
     assert held["held"] == "40 shares"
     assert set(lists) == {*playbook.LISTS, "watch", "out_of_reach", "budget", "holding_alerts",
-                          "model_rank"}  # fmt: skip
+                          "model_rank", "held_back"}  # fmt: skip
     assert lists["budget"] is None  # no account given: nothing filtered
+
+
+def test_only_ideas_whose_trade_gained_in_testing_are_listed() -> None:
+    n = name(path(320, 0.002, seed=4, dip=0.03), iv=0.2)
+
+    def why(calibration: dict[str, Any] | None, lst: str = "swing") -> dict[str, str] | None:
+        lists = build_lists([n], held={}, groups={}, calibration=calibration)
+        listed = [i for i in lists[lst] if i["play"]["name"] == "pullback"]
+        back = [i for i in lists["held_back"]
+                if i["list"] == lst and i["play"]["name"] == "pullback"]  # fmt: skip
+        assert len(listed) + len(back) == 1
+        return back[0]["held_back"] if back else None
+
+    assert why(gained()) is None  # made money on the later signals: listed
+    assert why(None) == {"code": "untested",
+                         "text": "Not tested yet: tp-recs calibrate backtests it."}  # fmt: skip
+    assert why(gained(trades=12))["code"] == "untested"  # type: ignore[index]
+    lost = why(gained(mean=-0.08))
+    assert lost == {
+        "code": "lost",
+        "text": "In testing, this setup's option trade with its exits lost 8% a trade on average "
+        "after costs over the 120 later signals.",
+    }
+    real = gained()
+    real["setups"]["pullback"]["real"] = {"trades": 25, "mean": -0.05}
+    assert "At real option prices it lost 5%" in why(real)["text"]  # type: ignore[index]
+
+    # shares: judged on beating the average stock and the risk to the stop
+    assert why(gained(excess=0.01, mean_r=0.2), "stocks") is None
+    flat = why(gained(excess=-0.004, mean_r=0.1), "stocks")
+    assert flat is not None
+    assert flat["code"] == "no_better"
+    assert "did -0.4% against the average stock" in flat["text"]
+
+
+def test_a_well_tested_setup_on_an_overpriced_contract_is_held_back() -> None:
+    n = name(path(320, 0.002, seed=4, dip=0.03), iv=0.2)
+    idea = only(ideas_for(n, gained(), playbook.calibrated_setups(gained())), "pullback")
+    assert playbook.held_back(idea) is None
+    idea["pick"]["model"]["expected_return"] = -0.02
+    assert playbook.held_back(idea)["code"] == "priced"  # type: ignore[index]
+    stress = dict(idea, list="stress")
+    assert playbook.held_back(stress)["code"] == "research"  # type: ignore[index]
+    view = for_symbol(n, None)  # Look up still shows them, held back and last
+    assert view["ideas"]
+    assert all(i["held_back"]["code"] == "untested" for i in view["ideas"])
 
 
 def test_a_leader_above_its_50_day_is_one_to_watch() -> None:
