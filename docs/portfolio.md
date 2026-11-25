@@ -59,6 +59,14 @@ Fidelity data reaches the platform through SnapTrade, which keeps its own copy:
   needed: every sync reads live positions, so the button just syncs and says so.
 - The tabs say how current the data is: when positions were last pulled from Fidelity, the
   last day of transactions, and when the platform last synced.
+- **The account value** is Fidelity's total as of the sync, taken from the connection's own
+  accounts list: SnapTrade's list of all accounts carries a once-a-day copy of the total, whatever
+  the plan, which on the real-time plan lags the live positions by a day (and the cash, taken as
+  total less holdings, absorbed the gap). SnapTrade rounds the total to the dollar; when the cash
+  and the holdings add up to it within that, their exact sum is used. Between syncs the dashboard
+  moves each stock from the price Fidelity valued it at in that sync to its live price; today's
+  P&L counts from the last close before today, re-read as the day turns (a server left running
+  for days used to measure both from the day it started).
 - A pending trade has the quantity and, for a buy, the price paid (from the change in the
   position's cost). Its realized P&L comes with the real transaction the next day.
 

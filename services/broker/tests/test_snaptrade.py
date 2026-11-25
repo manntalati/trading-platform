@@ -48,9 +48,18 @@ class FakeApi:
             {"id": "auth-1", "disabled": False, "disabled_date": None,
              "brokerage": {"name": "Fidelity"}},
         ]  # fmt: skip
+        # The connection's own accounts list: the live total (the same as the daily one here).
+        self.live: list[dict[str, Any]] | Exception | None = None
 
     def list_accounts(self) -> list[dict[str, Any]]:
         return self.accounts
+
+    def connection_accounts(self, authorization_id: str) -> list[dict[str, Any]]:
+        self.calls.append(("connection accounts", authorization_id))
+        if isinstance(self.live, Exception):
+            raise self.live
+        listed = [a for a in self.accounts if a["brokerage_authorization"] == authorization_id]
+        return listed if self.live is None else self.live
 
     def list_connections(self) -> list[dict[str, Any]]:
         if isinstance(self.links, Exception):
@@ -133,6 +142,46 @@ def test_snapshot_maps_accounts_and_positions() -> None:
     # How fresh SnapTrade's cached copy is.
     assert account["holdings_as_of"] == pd.Timestamp("2026-10-06T20:19:15.909815Z")
     assert account["transactions_as_of"] == date(2026, 10, 5)
+
+
+def with_total(amount: float) -> dict[str, Any]:
+    return ACCOUNT | {"balance": {"total": {"amount": amount, "currency": "USD"}}}
+
+
+def test_the_account_value_is_the_live_one_not_the_daily_copy(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    api = FakeApi()
+    api.accounts = [with_total(5900.0)]  # the once-a-day copy, from before today's moves
+    api.live = [with_total(6010.0)]  # what the connection's list says now
+    account = SnapTradeSource(api).snapshot().accounts.iloc[0]
+    assert ("connection accounts", "auth-1") in api.calls  # asked once per connection
+    assert account["total_value"] == pytest.approx(6010.0)
+
+    api.live = RuntimeError("SnapTrade is down")
+    account = SnapTradeSource(api).snapshot().accounts.iloc[0]
+    assert account["total_value"] == pytest.approx(5900.0)  # the daily figure, still something
+    assert "live account totals" in caplog.text
+
+
+def test_a_total_rounded_to_the_dollar_is_made_exact() -> None:
+    class Cents(FakeApi):
+        def account_balances(self, account_id: str) -> list[dict[str, Any]]:
+            return [{"currency": {"code": "USD"}, "cash": 1000.37, "buying_power": 1000.37}]
+
+    snap = SnapTradeSource(Cents()).snapshot()  # SnapTrade says 6010; it adds up to 6010.37
+    assert snap.accounts["total_value"].iloc[0] == pytest.approx(6010.37)
+    # so the cash taken from it (total less holdings) is the broker's to the cent, not 1000.00
+    held = snap.holdings["market_value"].sum()
+    assert snap.accounts["total_value"].iloc[0] - held == pytest.approx(1000.37)
+
+    class Settling(FakeApi):
+        def account_balances(self, account_id: str) -> list[dict[str, Any]]:
+            # a purchase the cash balance still holds until it settles
+            return [{"currency": {"code": "USD"}, "cash": 1400.0, "buying_power": 1000.0}]
+
+    snap = SnapTradeSource(Settling()).snapshot()
+    assert snap.accounts["total_value"].iloc[0] == pytest.approx(6010.0)  # the broker's stands
 
 
 class RefreshingApi(FakeApi):

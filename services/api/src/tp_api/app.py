@@ -9,7 +9,7 @@ import secrets
 import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any
@@ -33,6 +33,7 @@ from tp_api.live import (
 )
 from tp_api.positions import AlpacaMarketData, MarketData
 from tp_api.scheduler import Scheduler, start_in_background
+from tp_core.calendar import NEW_YORK
 from tp_core.config import MissingCredentialsError, Settings
 from tp_core.portfolio import MARKET_KINDS, holdings_table, latest_snapshot
 
@@ -61,13 +62,9 @@ def build_hub(settings: Settings, mode: QuoteMode, interval: float = 1.0) -> Liv
     # Option underlyings too: their price shows how far each contract is from its strike.
     underlyings = table[table["kind"] == "option"]["underlying"].dropna()
     symbols = list(dict.fromkeys([*held["symbol"], *underlyings, *ctx.universes.watchlist]))
-    prices = ctx.prices(None)
-    last = prices.ffill().iloc[-1] if not prices.empty else None
-    prev_close: dict[str, float] = (
-        {str(s): float(v) for s, v in last.items() if s in symbols and v == v}
-        if last is not None
-        else {}
-    )
+    now = now_utc()
+    today = now.astimezone(NEW_YORK).date()
+    prev_close = ctx.last_closes(symbols, before=today)
     positions, static_value, as_of = hub_portfolio(ctx, prev_close)
     source: QuoteSource
     if mode is QuoteMode.fake:
@@ -84,6 +81,7 @@ def build_hub(settings: Settings, mode: QuoteMode, interval: float = 1.0) -> Liv
         interval=interval,
     )
     hub.portfolio_as_of = as_of
+    hub.closes_day, hub.closes_at = today, now
     return hub
 
 
@@ -101,32 +99,52 @@ def build_market_data(settings: Settings, mode: QuoteMode) -> MarketData | None:
 def hub_portfolio(
     ctx: queries.Context, prev_close: dict[str, float]
 ) -> tuple[list[Position], float, object]:
-    """Positions valued live (those with a reference close), the rest of the account's value
-    held at the broker's price, and which snapshot this is."""
+    """The holdings with a market price, to be valued live, and the rest of the account's value
+    (cash, options, anything unpriced), held as the broker had it; and which snapshot this is.
+
+    Each holding moves from the price the broker valued it at in that snapshot, not from a close
+    in the lake: those are different days whenever the bars or the server's start are older
+    than the sync, and the gap would be counted in the value (twice, for each day it lasted)."""
     snap = latest_snapshot(ctx.lake)
     if snap.empty:
         return [], 0.0, None
     table = holdings_table(snap, ctx.classifier)
-    held = table[table["kind"].isin(MARKET_KINDS)]
+    held = table[table["kind"].isin(MARKET_KINDS) & table["price"].notna()]
     positions = [
-        Position(str(r["symbol"]), float(r["quantity"]), prev_close[str(r["symbol"])])
+        Position(str(r["symbol"]), float(r["quantity"]), float(r["price"]),
+                 prev_close.get(str(r["symbol"])))
         for _, r in held.iterrows()
-        if str(r["symbol"]) in prev_close
-    ]
-    live_value = sum(p.quantity * p.prev_close for p in positions)
-    return positions, snap.total_value - live_value, snap.accounts["taken_at"].max()
+        if float(r["quantity"])
+    ]  # fmt: skip
+    marked = sum(p.quantity * p.mark for p in positions)
+    return positions, snap.total_value - marked, snap.accounts["taken_at"].max()
 
 
-def update_hub_portfolio(app: FastAPI) -> None:
-    """Re-read the positions if a sync stored a newer snapshot (from the dashboard or cron)."""
+CLOSES_TTL = timedelta(hours=1)  # re-read the reference closes this often (the bars may land late)
+
+
+def update_hub_portfolio(app: FastAPI, now: datetime | None = None) -> None:
+    """Re-read the positions if a sync stored a newer snapshot (from the dashboard or cron), and
+    the reference closes when the day turns (or the last read is an hour old): a server left
+    running for days otherwise measures "today" from the day it started."""
     hub: LiveHub | None = app.state.hub
     if hub is None:
         return
     ctx = queries.Context(app.state.settings)
+    now = now or now_utc()
+    today = now.astimezone(NEW_YORK).date()
+    if hub.closes_day != today or hub.closes_at is None or now - hub.closes_at >= CLOSES_TTL:
+        symbols = [*hub.symbols, *(p.symbol for p in hub.positions)]
+        hub.set_closes(ctx.last_closes(symbols, before=today), today, now)
     snap_at = latest_snapshot(ctx.lake).accounts["taken_at"].max()
     if hub.portfolio_as_of is not None and snap_at == hub.portfolio_as_of:
         return
     positions, static_value, as_of = hub_portfolio(ctx, hub.prev_close)
+    new = [p.symbol for p in positions if p.prev_close is None]
+    if new:  # bought since the closes were read: theirs too
+        hub.prev_close.update(ctx.last_closes(new, before=today))
+        for p in positions:
+            p.prev_close = hub.prev_close.get(p.symbol)
     hub.set_portfolio(positions, static_value, as_of)
 
 
